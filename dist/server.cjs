@@ -33,6 +33,15 @@ async function startServer() {
   const app = (0, import_express.default)();
   const PORT = Number(process.env.PORT) || 3e3;
   const HMR_PORT = Number(process.env.HMR_PORT) || 24679;
+  app.use((req, res, next) => {
+    res.header("Access-Control-Allow-Origin", "https://eslamsoud.github.io");
+    res.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    res.header("Access-Control-Allow-Headers", "Content-Type");
+    if (req.method === "OPTIONS") {
+      return res.sendStatus(200);
+    }
+    next();
+  });
   app.use(import_express.default.json());
   app.post("/api/gemini/chat", async (req, res) => {
     try {
@@ -116,8 +125,19 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     const distPath = import_path.default.join(process.cwd(), "dist");
-    app.use(import_express.default.static(distPath));
-    app.get("*", (req, res) => {
+    const staticOptions = {
+      setHeaders: (res, filePath) => {
+        if (filePath.endsWith(".js") || filePath.endsWith(".mjs")) {
+          res.setHeader("Content-Type", "application/javascript");
+        } else if (filePath.endsWith(".css")) {
+          res.setHeader("Content-Type", "text/css");
+        }
+      }
+    };
+    app.use(import_express.default.static(distPath, staticOptions));
+    app.use("/Sales", import_express.default.static(distPath, staticOptions));
+    app.get(["/Sales", "/Sales/*", "*"], (req, res, next) => {
+      if (req.path.startsWith("/api/")) return next();
       res.sendFile(import_path.default.join(distPath, "index.html"));
     });
   }

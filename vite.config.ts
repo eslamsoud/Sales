@@ -4,7 +4,7 @@ import path from 'path';
 import {defineConfig} from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
 
-const VITE_BASE = process.env.NODE_ENV === 'production' ? '/Sales/' : '/';
+const VITE_BASE = process.env.VITE_BASE || '/';
 
 export default defineConfig(() => {
   return {

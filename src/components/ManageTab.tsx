@@ -166,6 +166,10 @@ export default function ManageTab({
   const [isSearchingMarket, setIsSearchingMarket] = useState(false);
   const [marketSearchError, setMarketSearchError] = useState('');
 
+  // رابط Railway السحابي الخاص بك (يتم تفعيله فقط على الاستضافة وليس المحلي)
+  // هام: قم بتغيير الرابط أدناه بالرابط الحقيقي الذي سيعطيه لك Railway لاحقاً
+  const API_BASE_URL = window.location.hostname === 'localhost' ? '' : 'https://seals-production.up.railway.app';
+
   const handleMarketSearch = async (queryText: string) => {
     const finalQuery = queryText.trim();
     if (!finalQuery) return;
@@ -176,7 +180,7 @@ export default function ManageTab({
     setMarketSearchError('');
 
     try {
-      const response = await fetch('/api/gemini/market-research', {
+      const response = await fetch(`${API_BASE_URL}/api/gemini/market-research`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ query: finalQuery })
@@ -251,7 +255,7 @@ export default function ManageTab({
 العميل المستهدف ينتمي لفئة: ${aiChatCategory}.${customerContext}
 المطلوب: قم بتقديم نصائح للتعامل، اقترح رسائل ترويجية، وأجب عن استفسارات المندوب بناءً على المعطيات أعلاه وفئة العميل. اجعل إجابتك واضحة، مهنية، وموجهة لتحقيق ديل جيد. استخدم تنسيق Markdown للخط العريض والقوائم.`;
 
-      const response = await fetch('/api/gemini/chat', {
+      const response = await fetch(`${API_BASE_URL}/api/gemini/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

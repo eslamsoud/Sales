@@ -13,6 +13,17 @@ async function startServer() {
   const PORT = Number(process.env.PORT) || 3000;
   const HMR_PORT = Number(process.env.HMR_PORT) || 24679;
 
+  // إعداد CORS للسماح لواجهة جيت هاب بالاتصال بخادم Railway
+  app.use((req, res, next) => {
+    res.header("Access-Control-Allow-Origin", "https://eslamsoud.github.io");
+    res.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    res.header("Access-Control-Allow-Headers", "Content-Type");
+    if (req.method === "OPTIONS") {
+      return res.sendStatus(200);
+    }
+    next();
+  });
+
   app.use(express.json());
 
   // API route for Gemini chat
@@ -119,8 +130,24 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), "dist");
-    app.use(express.static(distPath));
-    app.get("*", (req, res) => {
+    
+    const staticOptions = {
+      setHeaders: (res: express.Response, filePath: string) => {
+        if (filePath.endsWith('.js') || filePath.endsWith('.mjs')) {
+          res.setHeader('Content-Type', 'application/javascript');
+        } else if (filePath.endsWith('.css')) {
+          res.setHeader('Content-Type', 'text/css');
+        }
+      }
+    };
+
+    // دعم المسار الأساسي ومسار /Sales معاً في نفس الوقت
+    app.use(express.static(distPath, staticOptions));
+    app.use("/Sales", express.static(distPath, staticOptions));
+
+    // توجيه كل طلبات الصفحات لملف React لتشغيله
+    app.get(["/Sales", "/Sales/*", "*"], (req, res, next) => {
+      if (req.path.startsWith('/api/')) return next();
       res.sendFile(path.join(distPath, "index.html"));
     });
   }
