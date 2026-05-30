@@ -1,0 +1,8 @@
+{
+  "name": "الأخوة المتحدون EAG",
+  "description": "نظام دقيق لإدارة المخزون، التحميل من المصنع، وتوزيع المبيعات للعملاء مع الفواتير والتقارير والمصروفات.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
