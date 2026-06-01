@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { UserAuth, Customer } from '../types';
-import { Shield, Phone, User, Key, CheckCircle, Info, LogOut, Fingerprint, Lock, Check } from 'lucide-react';
+import { Shield, Phone, User, Key, CheckCircle, Info, LogOut, Fingerprint, Lock, Check, Eye } from 'lucide-react';
 
 interface AuthGateProps {
   usersList: UserAuth[];
@@ -50,187 +50,162 @@ export default function AuthGate({ usersList, customersList = [], onUpdateUsers,
       return;
     }
 
-    const isSystemEmpty = usersList.length === 0;
-
     // Default owner phone for the system
     const ownerPhone = '01228466613';
     const correctOwnerPassword = localStorage.getItem('owner_passcode_sys') || '1987';
 
-    if (isSystemEmpty) {
-      // Security fix: If system is empty, do NOT let just ANY phone/password become the owner.
-      // Force them to use the owner's built-in initialization credentials.
-      if (trimmedPhone !== ownerPhone || password.trim() !== correctOwnerPassword) {
-        setErrorMsg('النظام جديد: يجب تسجيل الدخول برقم هاتف وباسورد المالك الأساسي لتهيئة النظام.');
+    // 1. Direct login & registration bypass for Owner
+    if (trimmedPhone === ownerPhone) {
+      if (password.trim() !== correctOwnerPassword) {
+        setErrorMsg('كلمة المرور غير صحيحة للمدير العام!');
         return;
       }
 
-      const newUser: UserAuth = {
-        phone: trimmedPhone,
+      const existingIndex = usersList.findIndex(u => u.phone === ownerPhone);
+      let updatedList = [...usersList];
+      const ownerUser: UserAuth = {
+        phone: ownerPhone,
         name: 'الأخوة المتحدون (المدير)',
         role: 'owner',
         status: 'active',
         permittedTabs: ['dashboard', 'factory', 'customers', 'invoice', 'prices', 'expenses', 'administrative', 'reports'],
-        password: password.trim(),
+        password: correctOwnerPassword,
         createdAt: new Date().toISOString()
       };
 
-      const updatedList = [...usersList, newUser];
+      if (existingIndex > -1) {
+        updatedList[existingIndex] = { 
+          ...updatedList[existingIndex], 
+          role: 'owner', 
+          status: 'active', 
+          password: correctOwnerPassword,
+          permittedTabs: ['dashboard', 'factory', 'customers', 'invoice', 'prices', 'expenses', 'administrative', 'reports'] 
+        };
+      } else {
+        updatedList.push(ownerUser);
+      }
+
       onUpdateUsers(updatedList);
       localStorage.setItem('users_permissions_sys', JSON.stringify(updatedList));
+      localStorage.setItem('authed_user_phone', ownerPhone);
 
-      localStorage.setItem('authed_user_phone', trimmedPhone);
-      setSuccessMsg('تم التحقق بنجاح! مرحباً بالمدير العام. تم إعداد النظام الأول.');
+      setSuccessMsg('تم التحقق بنجاح! مرحباً بالمدير العام.');
       setTimeout(() => {
-        onSuccess(newUser);
-      }, 1500);
-    } else {
-      // Login flow
-      if (trimmedPhone === ownerPhone) {
-        if (password.trim() !== correctOwnerPassword) {
-          setErrorMsg('كلمة المرور غير صحيحة للمدير العام!');
-          return;
-        }
+        onSuccess(ownerUser);
+      }, 1000);
+      return;
+    }
 
-        // Automatic registration or update of Owner 01228466613
-        const existingIndex = usersList.findIndex(u => u.phone === ownerPhone);
-        let updatedList = [...usersList];
-        const ownerUser: UserAuth = {
-          phone: ownerPhone,
-          name: 'الأخوة المتحدون (المدير)',
-          role: 'owner',
-          status: 'active',
-          permittedTabs: ['dashboard', 'factory', 'customers', 'invoice', 'prices', 'expenses', 'administrative', 'reports'],
-          password: correctOwnerPassword,
-          createdAt: new Date().toISOString()
-        };
+    // 2. Direct login & registration bypass for Deputy Manager
+    if (trimmedPhone === '01281391552') {
+      const existingIndex = usersList.findIndex(u => u.phone === '01281391552');
+      let updatedList = [...usersList];
+      
+      const deputyTabs = ['dashboard', 'factory', 'customers', 'invoice', 'prices', 'expenses', 'administrative', 'reports'];
+      const correctPassword = existingIndex > -1 ? (usersList[existingIndex].password || '1234') : '1234';
 
-        if (existingIndex > -1) {
-          updatedList[existingIndex] = { 
-            ...updatedList[existingIndex], 
-            role: 'owner', 
-            status: 'active', 
-            password: correctOwnerPassword,
-            permittedTabs: ['dashboard', 'factory', 'customers', 'invoice', 'prices', 'expenses', 'administrative', 'reports'] 
-          };
-        } else {
-          updatedList.push(ownerUser);
-        }
-
-        onUpdateUsers(updatedList);
-        localStorage.setItem('users_permissions_sys', JSON.stringify(updatedList));
-        localStorage.setItem('authed_user_phone', '01228466613');
-
-        setSuccessMsg('تم التحقق بنجاح! مرحباً بالمدير العام.');
-        setTimeout(() => {
-          onSuccess(ownerUser);
-        }, 1000);
+      if (password.trim() !== correctPassword) {
+        setErrorMsg('رمز المرور الشخصي (الرمز السري) غير صحيح لنائب المدير العام!');
         return;
       }
 
-      if (trimmedPhone === '01281391552') {
-         // Automatic registration or update of Deputy Manager 01281391552
-         const existingIndex = usersList.findIndex(u => u.phone === '01281391552');
-         let updatedList = [...usersList];
-         
-         // Allowed tabs for Deputy: everything INCLUDING 'administrative' for supervision/management
-         const deputyTabs = ['dashboard', 'factory', 'customers', 'invoice', 'prices', 'expenses', 'administrative', 'reports'];
-         const correctPassword = existingIndex > -1 ? (usersList[existingIndex].password || '1234') : '1234';
- 
-         if (password.trim() !== correctPassword) {
-           setErrorMsg('رمز المرور الشخصي (الرمز السري) غير صحيح لنائب المدير العام!');
-           return;
-         }
- 
-         const deputyUser: UserAuth = {
-           phone: '01281391552',
-           name: existingIndex > -1 ? usersList[existingIndex].name : 'الأستاذ/ نائب المدير العام والمشرف الجغرافي',
-           role: 'employee',
-           status: 'active',
-           permittedTabs: existingIndex > -1 ? usersList[existingIndex].permittedTabs : deputyTabs,
-           customRoleName: existingIndex > -1 ? (usersList[existingIndex].customRoleName || 'نائب المدير والاشراف 💼') : 'نائب المدير والاشراف 💼',
-           password: correctPassword,
-           createdAt: new Date().toISOString()
-         };
- 
-         if (existingIndex > -1) {
-           updatedList[existingIndex] = {
-             ...updatedList[existingIndex],
-             status: 'active',
-             permittedTabs: updatedList[existingIndex].permittedTabs
-           };
-         } else {
-           updatedList.push(deputyUser);
-         }
- 
-         onUpdateUsers(updatedList);
-         localStorage.setItem('users_permissions_sys', JSON.stringify(updatedList));
-         localStorage.setItem('authed_user_phone', '01281391552');
- 
-         setSuccessMsg('تم التحقق بنجاح! مرحباً بنائب المدير العام والمشرف.');
-         setTimeout(() => {
-           onSuccess(deputyUser);
-         }, 1000);
-         return;
-       }
+      const deputyUser: UserAuth = {
+        phone: '01281391552',
+        name: existingIndex > -1 ? usersList[existingIndex].name : 'الأستاذ/ نائب المدير العام والمشرف الجغرافي',
+        role: 'employee',
+        status: 'active',
+        permittedTabs: existingIndex > -1 ? usersList[existingIndex].permittedTabs : deputyTabs,
+        customRoleName: existingIndex > -1 ? (usersList[existingIndex].customRoleName || 'نائب المدير والاشراف 💼') : 'نائب المدير والاشراف 💼',
+        password: correctPassword,
+        createdAt: new Date().toISOString()
+      };
 
-      let found = usersList.find(u => u.phone === trimmedPhone);
-      let isAutoCreatedCustomer = false;
-      const isCustomerPhone = customersList.some(c => c.phone.trim() === trimmedPhone);
-
-      if (!found) {
-        // Check if phone matches a registered customer
-        const matchedCustomer = customersList.find(c => c.phone.trim() === trimmedPhone);
-        if (matchedCustomer) {
-          // Auto register this customer as a visitor user
-          const initialVisitor: UserAuth = {
-            phone: trimmedPhone,
-            name: matchedCustomer.name,
-            role: 'employee',
-            status: 'active',
-            permittedTabs: ['dashboard', 'prices'],
-            password: '1234',
-            customRoleName: 'عميل زائر للعرض 👀',
-            createdAt: new Date().toISOString()
-          };
-          
-          const updatedList = [...usersList, initialVisitor];
-          onUpdateUsers(updatedList);
-          localStorage.setItem('users_permissions_sys', JSON.stringify(updatedList));
-          
-          found = initialVisitor;
-          isAutoCreatedCustomer = true;
-        } else {
-          setErrorMsg('رقم الهاتف غير مسجل في النظام.');
-          return;
-        }
-      }
-
-      // Check delegate password (bypass entirely if the phone is listed in the customers database)
-      if (!isCustomerPhone) {
-        const enteredPass = password.trim();
-        const actualPass = found.password || '1234';
-        if (enteredPass !== actualPass) {
-          setErrorMsg('رمز المرور الشخصي (الرقم السري) غير صحيح لهذا الهاتف!');
-          return;
-        }
-      }
-
-      localStorage.setItem('authed_user_phone', trimmedPhone);
-      if (found.status === 'pending') {
-        setPendingUser(found);
-        setSuccessMsg('حسابك مسجل وبانتظار موافقة المدير العام حالياً.');
+      if (existingIndex > -1) {
+        updatedList[existingIndex] = {
+          ...updatedList[existingIndex],
+          status: 'active',
+          permittedTabs: updatedList[existingIndex].permittedTabs
+        };
       } else {
-        if (isCustomerPhone || isAutoCreatedCustomer) {
-          setSuccessMsg(`أهلاً بك يا فندم! بما أن رقم تليفونك مسجل كعميل لدينا، فقد تم الدخول فوراً وبأمان للعرض والأسعار دون الحاجة لكلمة مرور. ✓`);
-        } else {
-          setSuccessMsg(`أهلاً بك مجدداً، ${found.name}!`);
-        }
-        setTimeout(() => {
-          onSuccess(found);
-        }, 1200);
+        updatedList.push(deputyUser);
       }
+
+      onUpdateUsers(updatedList);
+      localStorage.setItem('users_permissions_sys', JSON.stringify(updatedList));
+      localStorage.setItem('authed_user_phone', '01281391552');
+
+      setSuccessMsg('تم التحقق بنجاح! مرحباً بنائب المدير العام والمشرف.');
+      setTimeout(() => {
+        onSuccess(deputyUser);
+      }, 1000);
+      return;
+    }
+
+    // 3. Prevent any other accounts from logging in if system has no users registered at all
+    const isSystemEmpty = usersList.length === 0;
+    if (isSystemEmpty) {
+      setErrorMsg('النظام جديد: يجب تسجيل الدخول برقم هاتف وباسورد المالك الأساسي لتهيئة النظام.');
+      return;
+    }
+
+    // 4. Normal login flow (Only registered accounts with passwords)
+    let found = usersList.find(u => u.phone === trimmedPhone);
+
+    if (!found) {
+      setErrorMsg('رقم الهاتف غير مسجل في النظام كحساب نشط أو موظف.');
+      return;
+    }
+
+    const enteredPass = password.trim();
+    const actualPass = found.password || '1234';
+    if (enteredPass !== actualPass) {
+      setErrorMsg('رمز المرور الشخصي (الرقم السري) غير صحيح لهذا الهاتف!');
+      return;
+    }
+
+    localStorage.setItem('authed_user_phone', trimmedPhone);
+    if (found.status === 'pending') {
+      setPendingUser(found);
+      setSuccessMsg('حسابك مسجل وبانتظار موافقة المدير العام حالياً.');
+    } else {
+      setSuccessMsg(`أهلاً بك مجدداً، ${found.name}!`);
+      setTimeout(() => {
+        onSuccess(found);
+      }, 1200);
     }
   };
+
+  // Helper method for one-click Guest Customer Login
+  const handleGuestLogin = () => {
+    setErrorMsg('');
+    setSuccessMsg('');
+
+    const guestUser: UserAuth = {
+      phone: 'guest_visitor',
+      name: 'عميل زائر',
+      role: 'employee',
+      status: 'active',
+      permittedTabs: ['dashboard', 'prices'],
+      customRoleName: 'عميل زائر للعرض 👀',
+      createdAt: new Date().toISOString()
+    };
+
+    // Save guest user state if not exists in local system
+    const existingIndex = usersList.findIndex(u => u.phone === 'guest_visitor');
+    let updatedList = [...usersList];
+    if (existingIndex === -1) {
+      updatedList.push(guestUser);
+      onUpdateUsers(updatedList);
+      localStorage.setItem('users_permissions_sys', JSON.stringify(updatedList));
+    }
+
+    localStorage.setItem('authed_user_phone', 'guest_visitor');
+    setSuccessMsg('تم الدخول كعميل زائر لمشاهدة الأسعار بنجاح. ✓');
+    setTimeout(() => {
+      onSuccess(guestUser);
+    }, 1000);
+  };
+
 
   const handleBiometricLogin = () => {
     setErrorMsg('');
@@ -324,7 +299,6 @@ export default function AuthGate({ usersList, customersList = [], onUpdateUsers,
   }
 
   const isSystemEmpty = usersList.length === 0;
-  const isCustomerPhone = customersList.some(c => c.phone.trim() === phone.trim());
 
   return (
     <div className="min-h-screen bg-[#F0F4F8] flex items-center justify-center p-4 text-right" dir="rtl" id="auth-gate-wrapper">
@@ -366,36 +340,38 @@ export default function AuthGate({ usersList, customersList = [], onUpdateUsers,
           </div>
 
           {/* Universal Password input */}
-          {phone.trim() !== '' && isCustomerPhone ? (
-            <div className="animate-fade-in text-center p-2.5 bg-emerald-50 border border-emerald-200 rounded-xl">
-              <span className="text-[10px] text-emerald-800 font-extrabold flex justify-center items-center gap-1">
-                🌟 رقم عميل معتمد (دخول مباشر بدون كود سري)
-              </span>
+          <div className="space-y-1 text-right animate-fade-in">
+            <label className="block text-[11px] font-bold text-slate-500">الباسورد:</label>
+            <div className="relative">
+              <Key className="absolute top-3 right-3 h-4 w-4 text-slate-400" />
+              <input
+                type="password"
+                required
+                placeholder="أدخل الباسورد"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="w-full bg-[#F7FAFC] border border-slate-200 rounded-2xl py-2.5 pr-10 pl-4 text-center font-bold tracking-widest text-[#1A365D] focus:outline-none focus:ring-2 focus:ring-[#1A365D] font-mono text-base"
+              />
             </div>
-          ) : (
-            <div className="space-y-1 text-right animate-fade-in">
-              <label className="block text-[11px] font-bold text-slate-500">الباسورد:</label>
-              <div className="relative">
-                <Key className="absolute top-3 right-3 h-4 w-4 text-slate-400" />
-                <input
-                  type="password"
-                  required
-                  placeholder="أدخل الباسورد"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  className="w-full bg-[#F7FAFC] border border-slate-200 rounded-2xl py-2.5 pr-10 pl-4 text-center font-bold tracking-widest text-[#1A365D] focus:outline-none focus:ring-2 focus:ring-[#1A365D] font-mono text-base"
-                />
-              </div>
-            </div>
-          )}
+          </div>
 
-          <div className="flex flex-col gap-2 mt-1">
+          <div className="flex flex-col gap-2.5 mt-1">
             <button
               type="submit"
               className="w-full bg-[#1A365D] hover:bg-slate-800 text-white py-3 rounded-2xl text-xs font-black transition-all shadow-md active:scale-98 flex items-center justify-center gap-2 cursor-pointer"
             >
               <Lock className="h-4 w-4 text-amber-200" />
               <span>تسجيل الدخول</span>
+            </button>
+
+            {/* Premium direct guest visitor button to browse prices */}
+            <button
+              type="button"
+              onClick={handleGuestLogin}
+              className="w-full bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white py-3 rounded-2xl text-xs font-black transition-all shadow-md active:scale-98 flex items-center justify-center gap-2 cursor-pointer mt-1 hover:shadow-lg hover:shadow-emerald-500/20"
+            >
+              <Eye className="h-4.5 w-4.5 text-emerald-100" />
+              <span>دخول كعميل زائر (استعراض الأسعار)</span>
             </button>
           </div>
         </form>

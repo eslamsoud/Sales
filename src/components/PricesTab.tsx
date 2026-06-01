@@ -289,7 +289,7 @@ export default function PricesTab({ products: rawProducts, onGoBack }: PricesTab
   const [chatMessages, setChatMessages] = useState<Array<{ sender: 'customer' | 'bot' | 'system'; text: string; time: string }>>([
     { sender: 'system', text: 'هنا يمكنك تجربة كيف يعمل الرد الآلي للعملاء عبر حسابك على الواتساب عند الاستفسار عن الأسعار.', time: 'البداية' },
     { sender: 'customer', text: 'يا غالي، ابعتلي أسعار زجاجات الزيت والسمن اليوم لو سمحت', time: 'منذ دقيقة' },
-    { sender: 'bot', text: `أهلاً وسهلاً بك يا شريك النجاح المحترم! 🌹 حياك الله.\n\nإليك بيان الأسعار الفوري المحدث لمنتجات وسمن وزيت سوفانا الفاخر اليوم:\n\n*📋 قائمة الأسعار الحالية*:\n• تجزئة زيت ممتاز: قطعه: 85.00 ج.م\n• تجزئة سمن ممتاز: قطعه: 110.00 ج.م\n\n📢 الأسعار متغيرة طبقاً للبورصة اليومية.\n✨ نسعد دائماً بخدمة محلكم لتسجيل طلبيتك الجديدة!`, time: 'منذ دقيقة' }
+    { sender: 'bot', text: `أهلاً وسهلاً بك يا شريك النجاح المحترم! 🌹 حياك الله.\n\nإليك بيان الأسعار الفوري المحدث لمنتجاتنا الفاخرة اليوم:\n\n*📋 قائمة الأسعار الحالية*:\n• تجزئة زيت ممتاز: قطعه: 85.00 ج.م\n• تجزئة سمن ممتاز: قطعه: 110.00 ج.م\n\n📢 الأسعار متغيرة طبقاً للبورصة اليومية.\n✨ نسعد دائماً بخدمة محلكم لتسجيل طلبيتك الجديدة!`, time: 'منذ دقيقة' }
   ]);
 
   const handleSimulateBotReply = (userText: string) => {
@@ -309,7 +309,7 @@ export default function PricesTab({ products: rawProducts, onGoBack }: PricesTab
       if (query.includes('سعر') || query.includes('أسعار') || query.includes('اسعار') || query.includes('بكام') || query.includes('بكم') || query.includes('كم') || query.includes('زيت') || query.includes('سمن') || query.includes('قائمه') || query.includes('قائمة')) {
         botText = `حياك الله يا غالي! 🌹 إليك بيان الأسعار والخصومات الرسمية المعتمدة لليوم:\n\n${priceListText}\n\n🛒 *لتسجيل طلبيتك للسيارة أو حجز شحنتك، تواصل مع المندوب فوراً!*`;
       } else if (query.includes('سلام') || query.includes('مرحب') || query.includes('اهل') || query.includes('أهل') || query.includes('مساء') || query.includes('صباح')) {
-        botText = `وعليكم السلام ورحمة الله وبركاته يا بطل! 👋\n\nأهلاً بك في نظام الرد الفوري الميداني لزيوت وسمن سوفانا الممتازة.\n\nطلب أسعار المنتجات؟ اكتب كلمة **(سعر)** أو **(أسعار)** وسأقوم بإرسال بيان الأسعار المعتمده والخصومات لك تلقائياً! 📲`;
+        botText = `وعليكم السلام ورحمة الله وبركاته يا بطل! 👋\n\nأهلاً بك في نظام الرد الفوري الميداني لمنتجاتنا الفاخرة الممتازة.\n\nطلب أسعار المنتجات؟ اكتب كلمة **(سعر)** أو **(أسعار)** وسأقوم بإرسال بيان الأسعار المعتمده والخصومات لك تلقائياً! 📲`;
       } else {
         botText = `يسعدنا دائماً تواصلكم معنا يا غالي! 🌟 نحن هنا لخدمتكم وتسهيل طلبياتكم.\n\nمن أجل الحصول التلقائي على قائمة الأسعار الحالية كاملة والتسهيلات، اكتب فقط كلمة **"أسعار"** أو **"سعر"** وسأرسلها لك في ثوانٍ معدودة! 🚚`;
       }
@@ -327,7 +327,7 @@ export default function PricesTab({ products: rawProducts, onGoBack }: PricesTab
     const weekdayName = today.toLocaleDateString('ar-EG', { weekday: 'long' });
     const formattedDatePart = `${today.getDate()} / ${today.getMonth() + 1} / ${today.getFullYear()}`;
     
-    let text = `*📋 قائمة الأسعار المعتمدة ومستويات الخصم* 🏭\n*مصنع سمن وزيت سوفانا الفاخر*\n📅 اليوم: ${weekdayName} (${formattedDatePart})\n\n`;
+    let text = `*📋 قائمة الأسعار المعتمدة ومستويات الخصم* 🏭\n*بيان أسعار مصنعنا الفاخر*\n📅 اليوم: ${weekdayName} (${formattedDatePart})\n\n`;
     
     productPriceDetails.forEach(prod => {
       const cleanProdLabel = prod.name.startsWith('زيت') ? prod.name : `زيت ${prod.name}`;
@@ -371,7 +371,7 @@ export default function PricesTab({ products: rawProducts, onGoBack }: PricesTab
     const formattedDatePart = `${today.getDate()} / ${today.getMonth() + 1} / ${today.getFullYear()}`;
     const cleanProdLabel = prod.name.startsWith('زيت') ? prod.name : `زيت ${prod.name}`;
     
-    let text = `*📋 بيان أسعار صنف: ${cleanProdLabel}* 🏭\n*مصنع سمن وزيت سوفانا الفاخر*\n📅 اليوم: ${weekdayName} (${formattedDatePart})\n\n`;
+    let text = `*📋 بيان أسعار صنف: ${cleanProdLabel}* 🏭\n*بيان أسعار مصنعنا الفاخر*\n📅 اليوم: ${weekdayName} (${formattedDatePart})\n\n`;
     
     prod.weights.forEach((w: any) => {
       text += `🔹 *سعة ${w.size}*:\n`;

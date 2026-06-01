@@ -1192,7 +1192,7 @@ export default function FactoryTab({
     ctx.font = 'bold 12px system-ui, sans-serif';
     ctx.fillText(`تاريخ استخراج التقرير: ${new Date().toLocaleDateString('ar-EG')} - ${new Date().toLocaleTimeString('ar-EG')}`, 45, 60);
     ctx.fillStyle = '#ffffff';
-    ctx.fillText('إدارة حركة مبيعات زيت وسمن سوفانا', 45, 90);
+    ctx.fillText('إدارة حركة مبيعات منتجاتنا الفاخرة', 45, 90);
 
     // Draw Column Headers
     let y = 180;
@@ -2053,7 +2053,7 @@ export default function FactoryTab({
                         // Sub titles
                         ctx.font = '500 12px system-ui, sans-serif';
                         ctx.fillStyle = '#94a3b8';
-                        ctx.fillText('الجهة المصدرة: شركة ومصانع سوفانا للزيوت المكررة والسمن الفاخر', canvas.width - 50, 105);
+                        ctx.fillText('الجهة المصدرة: شركة ومصانع الأخوة المتحدون للزيوت المكررة والسمن الفاخر', canvas.width - 50, 105);
                         
                         const totalDirectPayments = extraPayments.reduce((sum, p) => sum + p.amount, 0);
                         const appliedDebtSum = extraPayments.reduce((sum, p) => sum + (p.appliedToCarriedDebt || 0), 0);
@@ -2317,7 +2317,7 @@ export default function FactoryTab({
                         // Sub titles
                         ctx.font = '500 12px system-ui, sans-serif';
                         ctx.fillStyle = '#94a3b8';
-                        ctx.fillText('الجهة المصدرة: شركة ومصانع سوفانا للزيوت المكررة والسمن الفاخر', canvas.width - 50, 105);
+                        ctx.fillText('الجهة المصدرة: شركة ومصانع الأخوة المتحدون للزيوت المكررة والسمن الفاخر', canvas.width - 50, 105);
                         
                         const totalDirectPaymentsImg = extraPayments.reduce((sum, p) => sum + p.amount, 0);
                         const appliedDebtSumImg = extraPayments.reduce((sum, p) => sum + (p.appliedToCarriedDebt || 0), 0);

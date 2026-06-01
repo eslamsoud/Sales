@@ -58,8 +58,8 @@ export default function App() {
 
     if (!currentUser) return;
 
-    // Check if user is a customer with direct visitor access (no password)
-    const isCustomer = customers.some(c => c.phone.trim() === currentUser.phone.trim());
+    // Check if user is a guest visitor with direct access (no password)
+    const isCustomer = currentUser.phone === 'guest_visitor';
     if (isCustomer) {
       setIsLockedByTimeout(false);
       setLockPassword('');
@@ -496,7 +496,7 @@ export default function App() {
   }
 
   if (isLockedByTimeout) {
-    const isCustomer = customers.some(c => c.phone.trim() === currentUser.phone.trim());
+    const isCustomer = currentUser.phone === 'guest_visitor';
 
     return (
       <div className="min-h-screen bg-[#F0F4F8] flex items-center justify-center p-4 text-right" dir="rtl" id="timeout-lock-gate">
