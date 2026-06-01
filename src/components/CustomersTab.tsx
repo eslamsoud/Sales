@@ -6,6 +6,7 @@ import { confirmDialog } from '../utils/confirm';
 
 import React, { useState } from 'react';
 import { Customer, AppSettings } from '../types';
+import { showToast } from '../utils/toast';
 import { Users, Plus, MapPin, Search, Phone, ExternalLink, Trash2, ArrowRight, Compass, Check, Loader2, Star, MessageSquare, Send, Copy, Sparkles } from 'lucide-react';
 import SecurePhoneDisplay from './SecurePhoneDisplay';
 
@@ -593,7 +594,7 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
       setTimeout(() => {
         const localLeads = generateLocalLeadsForMaps(finalArea, storeType, batchSize);
         setMapsResults(localLeads);
-        alert(`بسبب تعطل مفتاح API، تم تفعيل نظام البحث الجغرافي الاحتياطي (الخرائط السريعة) بنجاح! 🚀\nتم استخراج وسحب ${batchSize} من المحلات والمواقع التجارية في "${finalArea}" بنجاح وجاهزة للتواصل فوراً.`);
+        showToast(`بسبب تعطل مفتاح API، تم تفعيل نظام البحث الجغرافي الاحتياطي (الخرائط السريعة) بنجاح! 🚀\nتم استخراج وسحب ${batchSize} من المحلات والمواقع التجارية في "${finalArea}" بنجاح وجاهزة للتواصل فوراً.`);
       }, 1000); // Small realistic delay for UI radar effect
     } finally {
       setIsSearchingMaps(false);

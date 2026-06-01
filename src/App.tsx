@@ -5,6 +5,8 @@
 
 import React, { useState, useEffect } from 'react';
 import { Product, Customer, Invoice, Expense, FactoryLoad, AppSettings, Trip, UserAuth } from './types';
+import { AnimatePresence, motion } from 'motion/react';
+import { showToast, toastEvent } from './utils/toast';
 import {
   getStoredData,
   setStoredData,
@@ -27,11 +29,21 @@ import ReportsTab from './components/ReportsTab';
 import InvoiceTab from './components/InvoiceTab';
 import AuthGate from './components/AuthGate';
 import AiChatAssistant from './components/AiChatAssistant';
-import { Lock, Fingerprint, Key, ShieldAlert, CheckCircle, RefreshCw, Save, LogOut, MessageCircle } from 'lucide-react';
+import { Lock, Fingerprint, Key, ShieldAlert, CheckCircle, RefreshCw, Save, LogOut, MessageCircle, Bell } from 'lucide-react';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<string>('dashboard');
   const [isChatOpen, setIsChatOpen] = useState<boolean>(false);
+  const [customToast, setCustomToast] = useState<{message: string, id: number} | null>(null);
+
+  useEffect(() => {
+    const handleShowToast = (e: any) => {
+      setCustomToast({ message: e.detail, id: Date.now() });
+      setTimeout(() => setCustomToast(null), 5000);
+    };
+    toastEvent.addEventListener('show-toast', handleShowToast);
+    return () => toastEvent.removeEventListener('show-toast', handleShowToast);
+  }, []);
 
   // Inactivity and Timeout states (5 min)
   const [isLockedByTimeout, setIsLockedByTimeout] = useState(false);
@@ -598,8 +610,10 @@ export default function App() {
   }
 
   function handleUpdateData() {
-    alert("جاري تحديث وإعادة تهيئة التطبيق لجلب البيانات وحل أي تعليق...");
-    window.location.reload();
+    showToast("جاري تحديث وإعادة تهيئة التطبيق لجلب البيانات وحل أي تعليق...");
+    setTimeout(() => {
+      window.location.reload();
+    }, 1500);
   }
 
   return (
@@ -795,6 +809,23 @@ export default function App() {
       </footer>
 
       <AiChatAssistant isOpen={isChatOpen} setIsOpen={setIsChatOpen} />
+
+      {/* Global Custom Toast / App Alerts */}
+      <AnimatePresence>
+        {customToast && (
+          <motion.div
+            key={customToast.id}
+            initial={{ opacity: 0, y: 50, scale: 0.9 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 20, scale: 0.9 }}
+            className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-[#1A365D] text-white px-6 py-4 rounded-2xl shadow-2xl z-[9999] max-w-sm w-[90%] text-center border border-slate-700 font-semibold flex items-center justify-center gap-3"
+            dir="rtl"
+          >
+            <Bell className="w-6 h-6 text-amber-400 shrink-0 animate-pulse" />
+            <span className="text-sm leading-relaxed whitespace-pre-line text-right w-full">{customToast.message}</span>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
