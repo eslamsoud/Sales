@@ -30,7 +30,8 @@ export default function PricesTab({ products: rawProducts, onGoBack }: PricesTab
   };
 
   const formatPriceWithCurrencyAndDecimal = (num: number, isFixedZero = false): string => {
-    const val = Number(num) || 0;
+    const val = Number(num);
+    if (isNaN(val)) return '0.00 ج.م';
     return formatNum(val) + ' ج.م';
   };
 
@@ -46,6 +47,13 @@ export default function PricesTab({ products: rawProducts, onGoBack }: PricesTab
       { bg: '#0284c7', text: '#FFFFFF', subBg: '#e0f2fe', subText: '#0000ff' }, // Ocean blue
     ];
     return list[index % list.length];
+  };
+
+  const getCurrentFormattedDate = () => {
+    const today = new Date();
+    const weekdayName = today.toLocaleDateString('ar-EG', { weekday: 'long' });
+    const formattedDatePart = `${today.getDate()} / ${today.getMonth() + 1} / ${today.getFullYear()}`;
+    return { weekdayName, formattedDatePart };
   };
 
   const generateCanvas = (prod: any): HTMLCanvasElement | null => {
@@ -83,9 +91,7 @@ export default function PricesTab({ products: rawProducts, onGoBack }: PricesTab
     ctx.fillText(formattedTitle, canvas.width / 2, 38);
 
     // Distinct color date line
-    const today = new Date();
-    const weekdayName = today.toLocaleDateString('ar-EG', { weekday: 'long' });
-    const formattedDatePart = `${today.getDate()} / ${today.getMonth() + 1} / ${today.getFullYear()}`;
+    const { weekdayName, formattedDatePart } = getCurrentFormattedDate();
     
     ctx.fillStyle = '#FBBF24'; // Beautiful standout gold yellow accent color
     ctx.font = 'bold 15px Cairo, system-ui, sans-serif';
@@ -323,9 +329,7 @@ export default function PricesTab({ products: rawProducts, onGoBack }: PricesTab
   };
 
   const buildAllPricesText = () => {
-    const today = new Date();
-    const weekdayName = today.toLocaleDateString('ar-EG', { weekday: 'long' });
-    const formattedDatePart = `${today.getDate()} / ${today.getMonth() + 1} / ${today.getFullYear()}`;
+    const { weekdayName, formattedDatePart } = getCurrentFormattedDate();
     
     let text = `*📋 قائمة الأسعار المعتمدة ومستويات الخصم* 🏭\n*بيان أسعار مصنعنا الفاخر*\n📅 اليوم: ${weekdayName} (${formattedDatePart})\n\n`;
     
@@ -366,9 +370,7 @@ export default function PricesTab({ products: rawProducts, onGoBack }: PricesTab
   };
 
   const buildProductPricesText = (prod: any) => {
-    const today = new Date();
-    const weekdayName = today.toLocaleDateString('ar-EG', { weekday: 'long' });
-    const formattedDatePart = `${today.getDate()} / ${today.getMonth() + 1} / ${today.getFullYear()}`;
+    const { weekdayName, formattedDatePart } = getCurrentFormattedDate();
     const cleanProdLabel = prod.name.startsWith('زيت') ? prod.name : `زيت ${prod.name}`;
     
     let text = `*📋 بيان أسعار صنف: ${cleanProdLabel}* 🏭\n*بيان أسعار مصنعنا الفاخر*\n📅 اليوم: ${weekdayName} (${formattedDatePart})\n\n`;
@@ -417,14 +419,17 @@ export default function PricesTab({ products: rawProducts, onGoBack }: PricesTab
       const weights = getProductWeightsFallback(p);
       const weightDetails = weights.map(w => {
         // Individual unit tier discounts
-        const u1 = w.retailPricePerUnit * (1 - 0.01);
-        const u125 = w.retailPricePerUnit * (1 - 0.0125);
-        const u15 = w.retailPricePerUnit * (1 - 0.015);
+        const retail = Number(w.retailPricePerUnit) || 0;
+        const carton = Number(w.cartonPriceFromFactory) || 0;
+
+        const u1 = retail * (1 - 0.01);
+        const u125 = retail * (1 - 0.0125);
+        const u15 = retail * (1 - 0.015);
 
         // Carton tier discounts
-        const c1 = w.cartonPriceFromFactory * (1 - 0.01);
-        const c125 = w.cartonPriceFromFactory * (1 - 0.0125);
-        const c15 = w.cartonPriceFromFactory * (1 - 0.015);
+        const c1 = carton * (1 - 0.01);
+        const c125 = carton * (1 - 0.0125);
+        const c15 = carton * (1 - 0.015);
 
         return {
           ...w,
@@ -466,7 +471,7 @@ export default function PricesTab({ products: rawProducts, onGoBack }: PricesTab
     const isCarton = calcUnitType === 'carton';
     const unitsPerCarton = selectedWeight.unitsPerCarton || 12;
 
-    const basePrice = isCarton ? selectedWeight.cartonPriceFromFactory : selectedWeight.retailPricePerUnit;
+    const basePrice = isCarton ? (selectedWeight.cartonPriceFromFactory || 0) : (selectedWeight.retailPricePerUnit || 0);
     const singleFinalPrice = basePrice * (1 - discount / 100);
     const totalPriceBeforeDiscount = basePrice * qty;
     const totalPriceAfterDiscount = singleFinalPrice * qty;
@@ -677,7 +682,8 @@ export default function PricesTab({ products: rawProducts, onGoBack }: PricesTab
         )}
 
         {/* Dynamic Sandbox Calculator */}
-        {activeSubTab === 'calc' && products.length > 0 && (
+        {activeSubTab === 'calc' && (
+          products.length > 0 ? (
           <div className="bg-[#FFFFFF] p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col gap-4 animate-fade-in text-right" dir="rtl">
             <h3 className="font-bold text-[#1A365D] text-base border-b border-slate-100 pb-2 flex items-center gap-1.5">
               <Calculator className="h-5 w-5 text-[#2B6CB0]" />
@@ -815,6 +821,12 @@ export default function PricesTab({ products: rawProducts, onGoBack }: PricesTab
               </div>
             )}
           </div>
+          ) : (
+            <div className="bg-[#FFFFFF] p-8 rounded-2xl border border-slate-200 text-center shadow-sm animate-fade-in">
+              <p className="text-gray-500 text-sm font-bold">لا توجد منتجات مسجلة بأسعار وأوزان صالحة لتشغيل الحاسبة.</p>
+              <p className="text-xs text-gray-400 mt-2">يرجى إضافة المنتجات وتحديد أسعارها من تبويب (المصنع) أولاً.</p>
+            </div>
+          )
         )}
 
         {/* Whatsapp Autoresponder Bot configured tab */}

@@ -50,7 +50,7 @@ export default function ReportsTab({
   }, [activeSubTab]);
 
   // Filter states
-  const [periodFilter, setPeriodFilter] = useState<'week' | 'month' | 'custom'>('month');
+  const [periodFilter, setPeriodFilter] = useState<'all' | 'week' | 'month' | 'custom'>('month');
   const [periodStartDate, setPeriodStartDate] = useState('');
   const [periodEndDate, setPeriodEndDate] = useState('');
 
@@ -107,8 +107,11 @@ export default function ReportsTab({
     const totalBeforeDisc = currentFilteredData.invoices.reduce((sum, inv) => sum + inv.totalBeforeDiscount, 0);
     const totalDiscounts = totalBeforeDisc - trueTotalSales;
 
-    // totalProfit is the Net Profit of invoices
-    const totalProfit = currentFilteredData.invoices.reduce((sum, inv) => sum + inv.items.reduce((isum, it) => isum + ((it.finalPrice - (it.factoryPrice || it.originalPrice * 0.9)) * it.quantity), 0), 0);
+    // totalProfit is the Net Profit of invoices (Total Sales After All Discounts - Total Cost)
+    const totalProfit = currentFilteredData.invoices.reduce((sum, inv) => {
+      const totalCost = inv.items.reduce((cost, it) => cost + ((it.factoryPrice || it.originalPrice * 0.9) * it.quantity), 0);
+      return sum + (inv.totalAfterDiscount - totalCost);
+    }, 0);
 
     const totalSpent = currentFilteredData.expenses.filter(e => e.type !== 'revenue').reduce((sum, exp) => sum + exp.amount, 0);
     const extraRevenues = currentFilteredData.expenses.filter(e => e.type === 'revenue').reduce((sum, exp) => sum + exp.amount, 0);
@@ -189,15 +192,17 @@ export default function ReportsTab({
 
   // Group invoices by month
   const monthlyBreakdown = React.useMemo(() => {
-    const months: Record<string, { sales: number; expenses: number; revs: number; count: number }> = {};
+    const months: Record<string, { sales: number; profitFromSales: number; expenses: number; revs: number; tripsProfit: number; count: number }> = {};
 
     invoices.forEach(inv => {
       const parts = inv.date.split('-');
       const monthYear = parts[0] + '-' + parts[1]; // YYYY-MM
       if (!months[monthYear]) {
-        months[monthYear] = { sales: 0, expenses: 0, revs: 0, count: 0 };
+        months[monthYear] = { sales: 0, profitFromSales: 0, expenses: 0, revs: 0, tripsProfit: 0, count: 0 };
       }
+      const totalCost = inv.items.reduce((cost, it) => cost + ((it.factoryPrice || it.originalPrice * 0.9) * it.quantity), 0);
       months[monthYear].sales += inv.totalAfterDiscount;
+      months[monthYear].profitFromSales += (inv.totalAfterDiscount - totalCost);
       months[monthYear].count += 1;
     });
 
@@ -205,12 +210,25 @@ export default function ReportsTab({
       const parts = exp.date.split('-');
       const monthYear = parts[0] + '-' + parts[1]; // YYYY-MM
       if (!months[monthYear]) {
-        months[monthYear] = { sales: 0, expenses: 0, revs: 0, count: 0 };
+        months[monthYear] = { sales: 0, profitFromSales: 0, expenses: 0, revs: 0, tripsProfit: 0, count: 0 };
       }
       if (exp.type === 'revenue') {
         months[monthYear].revs += exp.amount;
       } else {
         months[monthYear].expenses += exp.amount;
+      }
+    });
+
+    trips.forEach(trip => {
+      if (!trip.collected) return;
+      const tripDate = trip.date || new Date().toISOString();
+      const parts = tripDate.split('-');
+      if (parts.length >= 2) {
+        const monthYear = parts[0] + '-' + parts[1];
+        if (!months[monthYear]) {
+          months[monthYear] = { sales: 0, profitFromSales: 0, expenses: 0, revs: 0, tripsProfit: 0, count: 0 };
+        }
+        months[monthYear].tripsProfit += trip.price;
       }
     });
 
@@ -222,11 +240,11 @@ export default function ReportsTab({
         sales: d.sales,
         revs: d.revs,
         expenses: d.expenses,
-        profit: (d.sales + d.revs) - d.expenses,
+        profit: (d.profitFromSales + d.revs + d.tripsProfit) - d.expenses,
         count: d.count
       };
     }).sort((a, b) => b.dateStr.localeCompare(a.dateStr));
-  }, [invoices, expenses]);
+  }, [invoices, expenses, trips]);
 
   // Filter invoices for registry lookup
   const filteredInvoices = invoices.filter(inv => {
@@ -942,7 +960,8 @@ export default function ReportsTab({
           <div className="flex flex-col gap-4 animate-fade-in">
             {selectedInvoice && (() => {
               const customer = customers.find(c => c.id === selectedInvoice.customerId);
-              const invoiceProfit = selectedInvoice.items.reduce((sum, it) => sum + ((it.finalPrice - (it.factoryPrice || it.originalPrice * 0.9)) * it.quantity), 0);
+              const totalCost = selectedInvoice.items.reduce((cost, it) => cost + ((it.factoryPrice || it.originalPrice * 0.9) * it.quantity), 0);
+              const invoiceProfit = selectedInvoice.totalAfterDiscount - totalCost;
               const invoiceDate = new Date(selectedInvoice.date);
               
               return (
@@ -1005,7 +1024,8 @@ export default function ReportsTab({
                         const customer = customers.find(c => c.id === inv.customerId);
                         const discountValue = inv.totalBeforeDiscount - inv.totalAfterDiscount;
                         const discountPerc = inv.totalBeforeDiscount > 0 ? (discountValue / inv.totalBeforeDiscount) * 100 : 0;
-                        const profit = inv.items.reduce((sum, item) => sum + ((item.finalPrice - (item.factoryPrice || item.originalPrice * 0.9)) * item.quantity), 0);
+                        const totalCost = inv.items.reduce((cost, item) => cost + ((item.factoryPrice || item.originalPrice * 0.9) * item.quantity), 0);
+                        const profit = inv.totalAfterDiscount - totalCost;
                         return (
                           <tr key={inv.id} onClick={() => setSelectedInvoice(inv)} className="hover:bg-indigo-50 cursor-pointer transition-colors border-b border-slate-200">
                             <td className="p-2 font-bold text-[#1A365D]">#{inv.invoiceNumber}</td>

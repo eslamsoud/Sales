@@ -29,12 +29,23 @@ import ReportsTab from './components/ReportsTab';
 import InvoiceTab from './components/InvoiceTab';
 import AuthGate from './components/AuthGate';
 import AiChatAssistant from './components/AiChatAssistant';
-import { Lock, Fingerprint, Key, ShieldAlert, CheckCircle, RefreshCw, Save, LogOut, MessageCircle, Bell } from 'lucide-react';
+import { Lock, Fingerprint, Key, ShieldAlert, CheckCircle, RefreshCw, Save, LogOut, MessageCircle, Bell, Moon, Sun } from 'lucide-react';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<string>('dashboard');
   const [isChatOpen, setIsChatOpen] = useState<boolean>(false);
   const [customToast, setCustomToast] = useState<{message: string, id: number} | null>(null);
+  const [darkMode, setDarkMode] = useState(() => localStorage.getItem('darkMode') === 'true');
+
+  useEffect(() => {
+    if (darkMode) {
+      document.documentElement.classList.add('dark-theme');
+      localStorage.setItem('darkMode', 'true');
+    } else {
+      document.documentElement.classList.remove('dark-theme');
+      localStorage.setItem('darkMode', 'false');
+    }
+  }, [darkMode]);
 
   useEffect(() => {
     const handleShowToast = (e: any) => {
@@ -51,6 +62,7 @@ export default function App() {
   const [lockPassword, setLockPassword] = useState('');
   const [lockError, setLockError] = useState('');
   const [isHeaderSyncing, setIsHeaderSyncing] = useState(false);
+  const [pendingAutoSync, setPendingAutoSync] = useState(false);
 
   const handleUnlockWithPassword = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
@@ -175,6 +187,66 @@ export default function App() {
     };
   }, [currentUser, lastActivity]);
 
+  // --- REAL LIVE GPS TRACKING (تتبع حقيقي للمندوب) ---
+  useEffect(() => {
+    // لا نتتبع المدير العام، نتتبع المندوبين فقط
+    if (!currentUser || currentUser.role === 'owner' || currentUser.phone === 'guest_visitor') return;
+
+    let watchId: number;
+    const sendLiveLocation = async (pos: GeolocationPosition) => {
+      let batteryLevel = 'غير متوفر';
+      try {
+        const nav = navigator as any;
+        if (nav.getBattery) {
+          const battery = await nav.getBattery();
+          batteryLevel = Math.round(battery.level * 100) + '%';
+        }
+      } catch (e) {}
+
+      const speedKmH = pos.coords.speed ? Math.round(pos.coords.speed * 3.6) : 0;
+
+      const newPoint = {
+        lat: pos.coords.latitude,
+        lng: pos.coords.longitude,
+        speed: speedKmH,
+        battery: batteryLevel,
+        timestamp: new Date().toISOString()
+      };
+
+      // Load offline points from Black Box
+      let offlinePoints = [];
+      try { offlinePoints = JSON.parse(localStorage.getItem('offline_gps_route_sys') || '[]'); } catch(e) {}
+      offlinePoints.push(newPoint);
+      // Limit local storage to last 500 points to save space offline
+      if (offlinePoints.length > 500) offlinePoints = offlinePoints.slice(-500);
+
+      if (navigator.onLine) {
+        try {
+          await fetch('/api/tracking/update', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              phone: currentUser.phone,
+              points: offlinePoints // Send bulk points
+            })
+          });
+          // Clear black box if synced successfully
+          localStorage.setItem('offline_gps_route_sys', '[]');
+        } catch (e) {
+          localStorage.setItem('offline_gps_route_sys', JSON.stringify(offlinePoints));
+        }
+      } else {
+        // Just save locally if offline
+        localStorage.setItem('offline_gps_route_sys', JSON.stringify(offlinePoints));
+      }
+    };
+
+    if (navigator.geolocation) {
+       watchId = navigator.geolocation.watchPosition(sendLiveLocation, () => {}, { enableHighAccuracy: true, maximumAge: 10000, timeout: 5000 });
+    }
+    return () => { if (watchId) navigator.geolocation.clearWatch(watchId); };
+  }, [currentUser]);
+
   // Scroll to top when tab changes
   useEffect(() => {
     window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
@@ -264,52 +336,24 @@ export default function App() {
     setCustomers(customers.filter(c => c.id !== id));
   };
 
+  // مراقبة العمليات الجديدة لرفع نسخة سحابية صامتة في الخلفية
+  useEffect(() => {
+    if (pendingAutoSync) {
+      syncAllDataToGoogle(true).catch(e => console.error('Silent auto-sync failed:', e));
+      setPendingAutoSync(false);
+    }
+  }, [invoices, expenses, pendingAutoSync]);
+
   const handleAddInvoice = (newInvoice: Omit<Invoice, 'id'>) => {
     const id = `inv-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
     setInvoices(prev => [...prev, { ...newInvoice, id }]);
-
-    // Trigger optional Google Sheets inline sync if configured!
-    if (settings.googleSheetsUrl) {
-      const customerObj = customers.find(c => c.id === newInvoice.customerId);
-      const payload = {
-        type: 'الفواتير',
-        invoiceNumber: newInvoice.invoiceNumber,
-        customerName: customerObj ? customerObj.name : 'عميل غير محدد',
-        date: newInvoice.date,
-        total: newInvoice.totalAfterDiscount,
-        notes: newInvoice.notes || 'تلقائي من نظام السيارة'
-      };
-
-      fetch(settings.googleSheetsUrl, {
-        method: 'POST',
-        mode: 'no-cors',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      }).catch(err => console.error('Interactive Google Sheet inline sync failed:', err));
-    }
+    setPendingAutoSync(true); // تفعيل الحفظ التلقائي
   };
 
   const handleAddExpense = (newExpense: Omit<Expense, 'id'>) => {
     const id = `exp-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
     setExpenses(prev => [...prev, { ...newExpense, id }]);
-
-    // Trigger optional Google Sheets inline sync if configured!
-    if (settings.googleSheetsUrl) {
-      const payload = {
-        type: newExpense.type === 'revenue' ? 'إيراد إضافي' : 'المصروفات',
-        date: newExpense.date,
-        amount: newExpense.amount,
-        category: newExpense.category,
-        description: newExpense.description
-      };
-
-      fetch(settings.googleSheetsUrl, {
-        method: 'POST',
-        mode: 'no-cors',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      }).catch(err => console.error('Interactive Google Sheet expense inline sync failed:', err));
-    }
+    setPendingAutoSync(true); // تفعيل الحفظ التلقائي
   };
 
   const handleDeleteExpense = (id: string) => {
@@ -410,7 +454,17 @@ export default function App() {
           name: c.name,
           phone: c.phone,
           area: c.area
-        }))
+        })),
+        rawDatabase: {
+          products,
+          factoryLoads,
+          customers,
+          invoices,
+          expenses,
+          trips,
+          settings,
+          usersList
+        }
       };
 
       await fetch(settings.googleSheetsUrl, {
@@ -648,6 +702,14 @@ export default function App() {
           </button>
 
           <button
+            onClick={() => setDarkMode(!darkMode)}
+            title={darkMode ? "الوضع النهاري" : "الوضع الليلي"}
+            className="flex items-center justify-center p-2 rounded-xl transition-all cursor-pointer shadow-sm bg-white/10 hover:bg-white/20"
+          >
+            {darkMode ? <Sun className="h-4.5 w-4.5 shrink-0 text-amber-300" /> : <Moon className="h-4.5 w-4.5 shrink-0 text-slate-200" />}
+          </button>
+
+          <button
             onClick={handleUpdateData}
             title="تحديث وإعادة تشغيل في حالة التعليق"
             className="flex items-center gap-1 bg-white/10 hover:bg-white/20 active:scale-95 transition-all text-white px-2 py-1.5 rounded-xl text-[10.5px] font-black border border-white/5 cursor-pointer"
@@ -770,6 +832,16 @@ export default function App() {
             onUpdateSettings={setSettings}
             onResetDatabase={handleResetDatabase}
             onGoBack={() => setActiveTab('dashboard')}
+            onRestoreData={(cloudData) => {
+              if (cloudData.products) setProducts(cloudData.products);
+              if (cloudData.factoryLoads) setFactoryLoads(cloudData.factoryLoads);
+              if (cloudData.customers) setCustomers(cloudData.customers);
+              if (cloudData.invoices) setInvoices(cloudData.invoices);
+              if (cloudData.expenses) setExpenses(cloudData.expenses);
+              if (cloudData.trips) setTrips(cloudData.trips);
+              if (cloudData.settings) setSettings(cloudData.settings);
+              if (cloudData.usersList) handleUpdateUsersList(cloudData.usersList);
+            }}
           />
         )}
 

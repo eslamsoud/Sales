@@ -32,6 +32,144 @@ import {
   CheckCircle2
 } from 'lucide-react';
 
+const GOOGLE_APPS_SCRIPT_CODE = `function doPost(e) {
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var data = JSON.parse(e.postData.contents);
+    
+    if (data.type === 'تقرير_كامل') {
+      
+      // 1. الفواتير
+      var invoicesSheet = ss.getSheetByName('الفواتير');
+      if (!invoicesSheet) {
+        invoicesSheet = ss.insertSheet('الفواتير');
+        invoicesSheet.appendRow(['التاريخ', 'رقم الفاتورة', 'العميل', 'المنطقة', 'إجمالي الفاتورة', 'الملاحظات']);
+        invoicesSheet.getRange(1, 1, 1, invoicesSheet.getLastColumn()).setFontWeight("bold").setBackground("#e0e0e0");
+      }
+      if (data.invoices && data.invoices.length > 0) {
+        if (invoicesSheet.getLastRow() > 1) {
+          invoicesSheet.getRange(2, 1, invoicesSheet.getLastRow() - 1, invoicesSheet.getLastColumn()).clearContent();
+        }
+        var invoiceRows = data.invoices.map(function(inv) {
+          return [inv.date, inv.invNum, inv.customerName, inv.area, inv.total, inv.notes || ''];
+        });
+        invoicesSheet.getRange(2, 1, invoiceRows.length, invoiceRows[0].length).setValues(invoiceRows);
+      }
+      
+      // 2. الماليات
+      var expensesSheet = ss.getSheetByName('الماليات');
+      if (!expensesSheet) {
+        expensesSheet = ss.insertSheet('الماليات');
+        expensesSheet.appendRow(['التاريخ', 'الفئة', 'المبلغ', 'البيان']);
+        expensesSheet.getRange(1, 1, 1, expensesSheet.getLastColumn()).setFontWeight("bold").setBackground("#e0e0e0");
+      }
+      if (data.expenses && data.expenses.length > 0) {
+        if (expensesSheet.getLastRow() > 1) {
+          expensesSheet.getRange(2, 1, expensesSheet.getLastRow() - 1, expensesSheet.getLastColumn()).clearContent();
+        }
+        var expenseRows = data.expenses.map(function(exp) {
+          return [exp.date, exp.category, exp.amount, exp.description || ''];
+        });
+        expensesSheet.getRange(2, 1, expenseRows.length, expenseRows[0].length).setValues(expenseRows);
+      }
+
+      // 3. المشاوير
+      var tripsSheet = ss.getSheetByName('المشاوير');
+      if (!tripsSheet) {
+        tripsSheet = ss.insertSheet('المشاوير');
+        tripsSheet.appendRow(['التاريخ', 'البيان', 'الأجرة', 'الحالة']);
+        tripsSheet.getRange(1, 1, 1, tripsSheet.getLastColumn()).setFontWeight("bold").setBackground("#ffe599");
+      }
+      if (data.trips && data.trips.length > 0) {
+        if (tripsSheet.getLastRow() > 1) {
+          tripsSheet.getRange(2, 1, tripsSheet.getLastRow() - 1, tripsSheet.getLastColumn()).clearContent();
+        }
+        var tripRows = data.trips.map(function(t) {
+          return [t.date, t.description || '', t.price, t.status];
+        });
+        tripsSheet.getRange(2, 1, tripRows.length, tripRows[0].length).setValues(tripRows);
+      }
+
+      // 4. العملاء
+      var customersSheet = ss.getSheetByName('العملاء');
+      if (!customersSheet) {
+        customersSheet = ss.insertSheet('العملاء');
+        customersSheet.appendRow(['اسم العميل', 'رقم الهاتف', 'المنطقة']);
+        customersSheet.getRange(1, 1, 1, customersSheet.getLastColumn()).setFontWeight("bold").setBackground("#d9ead3");
+      }
+      if (data.customers && data.customers.length > 0) {
+        if (customersSheet.getLastRow() > 1) {
+          customersSheet.getRange(2, 1, customersSheet.getLastRow() - 1, customersSheet.getLastColumn()).clearContent();
+        }
+        var currRows = data.customers.map(function(c) {
+          return [c.name, c.phone, c.area];
+        });
+        customersSheet.getRange(2, 1, currRows.length, currRows[0].length).setValues(currRows);
+      }
+
+      // 5. المنتجات
+      var productsSheet = ss.getSheetByName('المنتجات');
+      if (!productsSheet) {
+        productsSheet = ss.insertSheet('المنتجات');
+        productsSheet.appendRow(['الصنف', 'السعر', 'الأوزان المتاحة']);
+        productsSheet.getRange(1, 1, 1, productsSheet.getLastColumn()).setFontWeight("bold").setBackground("#cfe2f3");
+      }
+      if (data.products && data.products.length > 0) {
+        if (productsSheet.getLastRow() > 1) {
+          productsSheet.getRange(2, 1, productsSheet.getLastRow() - 1, productsSheet.getLastColumn()).clearContent();
+        }
+        var pRows = data.products.map(function(p) {
+          return [p.name, p.price || 0, p.count || 0];
+        });
+        productsSheet.getRange(2, 1, pRows.length, pRows[0].length).setValues(pRows);
+      }
+      
+      // 6. الملخص
+      var summarySheet = ss.getSheetByName('الملخص');
+      if (!summarySheet) {
+        summarySheet = ss.insertSheet('الملخص');
+        summarySheet.appendRow(['تاريخ المزامنة', 'إجمالي المبيعات', 'المنصرف والمصروفات', 'صافي الأرباح']);
+        summarySheet.getRange(1, 1, 1, summarySheet.getLastColumn()).setFontWeight("bold").setBackground("#d9ead3");
+      }
+      if (data.metadata) {
+        if (summarySheet.getLastRow() > 1) {
+           summarySheet.getRange(2, 1, summarySheet.getLastRow() - 1, summarySheet.getLastColumn()).clearContent();
+        }
+        summarySheet.appendRow([data.metadata.syncedAt, data.metadata.totalSales, data.metadata.totalExpenses, data.metadata.netProfit]);
+      }
+      
+      // 7. حفظ نسخة الخام الكاملة (للاسترجاع)
+      if (data.rawDatabase) {
+        var dbSheet = ss.getSheetByName('قاعدة_البيانات_الخام');
+        if (!dbSheet) {
+          dbSheet = ss.insertSheet('قاعدة_البيانات_الخام');
+          dbSheet.hideSheet();
+        }
+        dbSheet.getRange('A1').setValue(JSON.stringify(data.rawDatabase));
+      }
+
+      return ContentService.createTextOutput(JSON.stringify({"status": "success"})).setMimeType(ContentService.MimeType.JSON);
+    }
+    return ContentService.createTextOutput(JSON.stringify({"status": "ignored"})).setMimeType(ContentService.MimeType.JSON);
+  } catch(error) {
+    return ContentService.createTextOutput(JSON.stringify({"error": error.toString()})).setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+function doGet(e) {
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var dbSheet = ss.getSheetByName('قاعدة_البيانات_الخام');
+    if (dbSheet) {
+      var rawData = dbSheet.getRange('A1').getValue();
+      return ContentService.createTextOutput(rawData).setMimeType(ContentService.MimeType.JSON);
+    }
+    return ContentService.createTextOutput(JSON.stringify({"error": "لا توجد نسخة احتياطية مسجلة"})).setMimeType(ContentService.MimeType.JSON);
+  } catch (error) {
+    return ContentService.createTextOutput(JSON.stringify({"error": error.toString()})).setMimeType(ContentService.MimeType.JSON);
+  }
+}`;
+
 interface ManageTabProps {
   products: Product[];
   customers: Customer[];
@@ -46,6 +184,7 @@ interface ManageTabProps {
   onUpdateSettings: (settings: AppSettings) => void;
   onResetDatabase: (demoMode: boolean) => void;
   onGoBack: () => void;
+  onRestoreData?: (data: any) => void;
 }
 
 export default function ManageTab({
@@ -61,7 +200,8 @@ export default function ManageTab({
   onEditProduct,
   onUpdateSettings,
   onResetDatabase,
-  onGoBack
+  onGoBack,
+  onRestoreData
 }: ManageTabProps) {
   // Helper for subtabs permissions
   const getSubTabsForTab = (tabId: string): Array<{ id: string; name: string }> => {
@@ -101,10 +241,177 @@ export default function ManageTab({
   };
 
   // Active sub-tab state inside Administration
-  const [subTab, setSubTab] = useState<'products' | 'ai_settings' | 'db_ops' | 'manager_main'>(
+  const [subTab, setSubTab] = useState<'products' | 'ai_settings' | 'manager_main'>(
     currentUser?.phone === '01228466613' ? 'manager_main' : 'products'
   );
-  const [managerSubTab, setManagerSubTab] = useState<'live_tracking' | 'user_permissions' | 'google_integration'>('user_permissions');
+  const [managerSubTab, setManagerSubTab] = useState<'live_tracking' | 'user_permissions' | 'google_integration' | 'db_ops'>('user_permissions');
+
+  // New variables for Wipe DB Password & Productivity tracking
+  const [wipeDbPassword, setWipeDbPassword] = useState('');
+
+  const DAYS_OF_WEEK = [
+    { id: 6, name: 'السبت' },
+    { id: 0, name: 'الأحد' },
+    { id: 1, name: 'الإثنين' },
+    { id: 2, name: 'الثلاثاء' },
+    { id: 3, name: 'الأربعاء' },
+    { id: 4, name: 'الخميس' },
+    { id: 5, name: 'الجمعة' }
+  ];
+  const [prodDayFilter, setProdDayFilter] = useState<number | 'all'>('all');
+
+  const prodFilteredInvoices = useMemo(() => {
+    if (prodDayFilter === 'all') return invoices;
+    return invoices.filter(inv => new Date(inv.date).getDay() === prodDayFilter);
+  }, [invoices, prodDayFilter]);
+
+  const handlePrintProductivityPDF = () => {
+    if (!prodFilteredInvoices || prodFilteredInvoices.length === 0) {
+      alert('لا توجد فواتير لطباعتها في هذا اليوم.');
+      return;
+    }
+    const iframe = document.createElement('iframe');
+    iframe.style.position = 'fixed';
+    iframe.style.top = '-1000px';
+    document.body.appendChild(iframe);
+    const doc = iframe.contentWindow?.document;
+    if (!doc) return;
+
+    const delegateName = usersList.find(u => u.phone === trackedUserPhone)?.name || trackedUserPhone || 'جميع المناديب';
+    const dayName = prodDayFilter === 'all' ? 'الكل (جدول مجمع بالأيام)' : DAYS_OF_WEEK.find(d => d.id === prodDayFilter)?.name;
+    let contentHtml = '';
+
+    if (prodDayFilter === 'all') {
+      const grouped = prodFilteredInvoices.reduce((acc: any, inv: any) => {
+        const dStr = new Date(inv.date).toLocaleDateString('ar-EG');
+        if (!acc[dStr]) acc[dStr] = { count: 0, total: 0, cash: 0, date: inv.date };
+        acc[dStr].count += 1;
+        acc[dStr].total += inv.totalAfterDiscount;
+        acc[dStr].cash += inv.paidAmount;
+        return acc;
+      }, {} as Record<string, { count: number, total: number, cash: number, date: string }>);
+      const sortedDays = Object.values(grouped).sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+      contentHtml = `
+        <table>
+          <tr><th>التاريخ واليوم</th><th>عدد الفواتير</th><th>إجمالي المبيعات</th><th>التحصيل النقدي</th></tr>
+          ${sortedDays.map((g: any) => {
+            const dayOfWeek = new Date(g.date).getDay();
+            const dayNameStr = DAYS_OF_WEEK.find(d => d.id === dayOfWeek)?.name || '';
+            return `<tr><td>${dayNameStr} - ${new Date(g.date).toLocaleDateString('ar-EG')}</td><td>${g.count}</td><td>${g.total.toFixed(2)} ج.م</td><td>${g.cash.toFixed(2)} ج.م</td></tr>`;
+          }).join('')}
+        </table>`;
+    } else {
+      contentHtml = `
+        <table>
+          <tr><th width="50">م</th><th>رقم الفاتورة</th><th>العميل</th><th>المنطقة</th><th>التوقيت</th><th>الإجمالي</th><th>الحالة</th></tr>
+          ${[...prodFilteredInvoices].reverse().map((inv: any, index: number) => {
+            const customer = customers.find(c => c.id === inv.customerId);
+            return `<tr><td>${index + 1}</td><td>#${inv.invoiceNumber}</td><td>${customer?.name || 'مجهول'}</td><td>${customer?.area || '-'}</td><td dir="ltr">${inv.date ? new Date(inv.date).toLocaleTimeString('ar-EG') : 'الآن'}</td><td>${inv.totalAfterDiscount.toFixed(2)} ج.م</td><td>${inv.paidAmount >= inv.totalAfterDiscount ? 'خالص' : inv.paidAmount > 0 ? 'جزئي' : 'آجل'}</td></tr>`;
+          }).join('')}
+        </table>`;
+    }
+
+    doc.open();
+    doc.write(`
+      <html dir="rtl" lang="ar"><head><style>
+        body { font-family: 'Cairo', system-ui, sans-serif; padding: 20px; color: #0f172a; }
+        .header { text-align: center; border-bottom: 2px solid #1e293b; padding-bottom: 10px; margin-bottom: 20px; }
+        table { width: 100%; border-collapse: collapse; font-size: 13px; text-align: center; margin-top: 20px; }
+        th, td { border: 1px solid #cbd5e1; padding: 8px; }
+        th { background: #f1f5f9; font-weight: bold; }
+      </style></head><body>
+        <div class="header"><h2>تقرير الإنتاجية والمبيعات الميدانية</h2><h3>المندوب: ${delegateName}</h3><p>الفترة المحددة: ${dayName}</p></div>
+        ${contentHtml}
+        <div style="text-align: center; margin-top: 30px; font-size: 11px; color: #64748b;">تم الاستخراج من نظام إدارة المبيعات الميدانية</div>
+      </body></html>
+    `);
+    doc.close();
+    setTimeout(() => { iframe.contentWindow?.focus(); iframe.contentWindow?.print(); setTimeout(() => document.body.removeChild(iframe), 500); }, 500);
+  };
+
+  const handleDownloadProductivityImage = () => {
+    if (!prodFilteredInvoices || prodFilteredInvoices.length === 0) {
+      alert('لا توجد فواتير لتنزيل صورتها في هذا اليوم.');
+      return;
+    }
+    const canvas = document.createElement('canvas');
+    canvas.width = 800;
+    const rowHeight = 45;
+    const isAll = prodDayFilter === 'all';
+    
+    let groupedDays: any[] = [];
+    if (isAll) {
+       const grouped = prodFilteredInvoices.reduce((acc: any, inv: any) => {
+         const dStr = new Date(inv.date).toLocaleDateString('ar-EG');
+         if (!acc[dStr]) acc[dStr] = { count: 0, total: 0, cash: 0, date: inv.date };
+         acc[dStr].count += 1;
+         acc[dStr].total += inv.totalAfterDiscount;
+         acc[dStr].cash += inv.paidAmount;
+         return acc;
+       }, {} as Record<string, { count: number, total: number, cash: number, date: string }>);
+       groupedDays = Object.values(grouped).sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime());
+    }
+
+    const rowsCount = isAll ? groupedDays.length : prodFilteredInvoices.length;
+    canvas.height = 200 + (rowsCount * rowHeight) + 100;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    ctx.fillStyle = '#f8fafc'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#ffffff'; ctx.fillRect(15, 15, canvas.width - 30, canvas.height - 30);
+    ctx.fillStyle = '#1e293b'; ctx.fillRect(15, 15, canvas.width - 30, 8);
+    ctx.fillStyle = '#0f172a'; ctx.fillRect(15, 23, canvas.width - 30, 100);
+
+    ctx.fillStyle = '#ffffff'; ctx.textAlign = 'right'; ctx.font = 'bold 24px system-ui, sans-serif';
+    ctx.fillText('تقرير الإنتاجية والمبيعات الميدانية', canvas.width - 45, 65);
+    
+    const delegateName = usersList.find(u => u.phone === trackedUserPhone)?.name || trackedUserPhone || 'جميع المناديب';
+    const dayName = isAll ? 'الكل (جدول مجمع بالأيام)' : DAYS_OF_WEEK.find(d => d.id === prodDayFilter)?.name;
+
+    ctx.font = '500 13px system-ui, sans-serif'; ctx.fillStyle = '#e0e7ff';
+    ctx.fillText(`المندوب: ${delegateName}  |  الفترة: ${dayName}`, canvas.width - 45, 95);
+    ctx.fillStyle = '#38bdf8'; ctx.textAlign = 'left'; ctx.font = 'bold 12px system-ui, sans-serif';
+    ctx.fillText(`تاريخ الاستخراج: ${new Date().toLocaleDateString('ar-EG')} - ${new Date().toLocaleTimeString('ar-EG')}`, 45, 65);
+
+    let y = 160;
+    ctx.fillStyle = '#1e293b'; ctx.fillRect(35, y - 25, canvas.width - 70, 40);
+    ctx.fillStyle = '#ffffff'; ctx.font = 'bold 13px system-ui, sans-serif';
+    
+    if (isAll) {
+       ctx.textAlign = 'right'; ctx.fillText('التاريخ واليوم', canvas.width - 55, y + 2);
+       ctx.textAlign = 'center'; ctx.fillText('عدد الفواتير', 400, y + 2); ctx.fillText('إجمالي المبيعات', 250, y + 2);
+       ctx.textAlign = 'left'; ctx.fillText('التحصيل النقدي', 55, y + 2); y += 25;
+       groupedDays.forEach((g: any, idx: number) => {
+          ctx.fillStyle = idx % 2 === 0 ? '#f8fafc' : '#ffffff'; ctx.fillRect(35, y - 5, canvas.width - 70, rowHeight);
+          ctx.strokeStyle = '#e2e8f0'; ctx.strokeRect(35, y - 5, canvas.width - 70, rowHeight);
+          const dayOfWeek = new Date(g.date).getDay();
+          const dayNameStr = DAYS_OF_WEEK.find(d => d.id === dayOfWeek)?.name || '';
+          ctx.fillStyle = '#0f172a'; ctx.font = 'bold 13px system-ui, sans-serif'; ctx.textAlign = 'right';
+          ctx.fillText(`${dayNameStr} - ${new Date(g.date).toLocaleDateString('ar-EG')}`, canvas.width - 55, y + 22);
+          ctx.textAlign = 'center'; ctx.fillText(g.count.toString(), 400, y + 22); ctx.fillText(`${g.total.toFixed(2)} ج.م`, 250, y + 22);
+          ctx.textAlign = 'left'; ctx.fillStyle = '#059669'; ctx.fillText(`${g.cash.toFixed(2)} ج.م`, 55, y + 22); y += rowHeight;
+       });
+    } else {
+       ctx.textAlign = 'right'; ctx.fillText('العميل والمنطقة', canvas.width - 80, y + 2);
+       ctx.textAlign = 'center'; ctx.fillText('رقم الفاتورة', 550, y + 2); ctx.fillText('التوقيت', 400, y + 2); ctx.fillText('الإجمالي', 250, y + 2);
+       ctx.textAlign = 'left'; ctx.fillText('الحالة', 55, y + 2); y += 25;
+       [...prodFilteredInvoices].reverse().forEach((inv: any, idx: number) => {
+          ctx.fillStyle = idx % 2 === 0 ? '#f8fafc' : '#ffffff'; ctx.fillRect(35, y - 5, canvas.width - 70, rowHeight);
+          ctx.strokeStyle = '#e2e8f0'; ctx.strokeRect(35, y - 5, canvas.width - 70, rowHeight);
+          const customer = customers.find(c => c.id === inv.customerId);
+          ctx.fillStyle = '#0f172a'; ctx.font = 'bold 12px system-ui, sans-serif'; ctx.textAlign = 'right';
+          ctx.fillText(`${idx + 1}.`, canvas.width - 45, y + 22); ctx.fillText(`${customer?.name || 'مجهول'} (${customer?.area || '-'})`, canvas.width - 80, y + 22);
+          ctx.textAlign = 'center'; ctx.fillText(`#${inv.invoiceNumber}`, 550, y + 22); ctx.fillText(inv.date ? new Date(inv.date).toLocaleTimeString('ar-EG') : 'الآن', 400, y + 22); ctx.fillText(`${inv.totalAfterDiscount.toFixed(2)} ج.م`, 250, y + 22);
+          ctx.textAlign = 'left'; const status = inv.paidAmount >= inv.totalAfterDiscount ? 'خالص' : inv.paidAmount > 0 ? 'جزئي' : 'آجل';
+          ctx.fillStyle = status === 'خالص' ? '#059669' : status === 'جزئي' ? '#d97706' : '#dc2626'; ctx.fillText(status, 55, y + 22); y += rowHeight;
+       });
+    }
+    y += 30; ctx.fillStyle = '#64748b'; ctx.font = 'italic 11px system-ui, sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText('تم التصدير من نظام إدارة المبيعات الميدانية • متابعة الإنتاجية', canvas.width / 2, y);
+    const link = document.createElement('a'); link.download = `انتاجية_مبيعات_${dayName}_${new Date().toISOString().substring(0,10)}.png`;
+    link.href = canvas.toDataURL('image/png'); link.click();
+  };
 
   // Lock and password states
   const [isManagerUnlocked, setIsManagerUnlocked] = useState(false);
@@ -149,6 +456,7 @@ export default function ManageTab({
   // Sync state
   const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'done' | 'fail'>('idle');
   const [syncMsg, setSyncMsg] = useState('');
+  const [isRestoring, setIsRestoring] = useState(false);
 
   // AI Status State
   const [geminiStatus, setGeminiStatus] = useState<{ status: 'loading' | 'healthy' | 'missing' | 'leaked' | 'error', message: string }>({
@@ -268,26 +576,83 @@ export default function ManageTab({
   }, [aiChatHistory, subTab]);
 
   // Simulated sequence of geographic points for delegate tracking
-  const trackingSimulationData = useMemo(() => [
-    { x: 30, y: 70, street: 'طريق المحلة الكبرى - مدخل كفر الشيخ', status: 'متحرك الآن بسرعة 60 كم/س ⚡', client: 'متجه إلى سوبر ماركت الأمل 🏪', battery: '92% 🔋', lastUpdate: 'الآن' },
-    { x: 45, y: 55, street: 'شارع الجلاء - أمام مسجد المتولي 🕌', status: 'متحرك الآن بسرعة 35 كم/س ⚡', client: 'متجه إلى سوبر ماركت الأمل 🏪', battery: '91% 🔋', lastUpdate: 'منذ دقيقة' },
-    { x: 60, y: 40, street: 'ميدان الشون - وسط المدينة 🏙️', status: 'متوقف مؤقتاً بالزحام 5 كم/س ⚠️', client: 'متجه إلى سوبر ماركت الأمل 🏪', battery: '91% 🔋', lastUpdate: 'منذ دقيقتين' },
-    { x: 75, y: 35, street: 'شارع السبع بنات - أمام سوبر ماركت الأمل 🏢', status: 'متوقف للتوريد وتنزيل الحمولة 0 كم/س 🛑', client: 'يورّد حالياً لبائع: سوبر ماركت الأمل 🏪', battery: '90% 🔋', lastUpdate: 'منذ 3 دقائق' },
-    { x: 85, y: 48, street: 'حي الجمهورية - بجوار محطة الوقود ⛽', status: 'متحرك الآن بسرعة 40 كم/س ⚡', client: 'متجه إلى بقالة التوحيد والنور 🏪', battery: '89% 🔋', lastUpdate: 'الآن' },
-    { x: 70, y: 75, street: 'شارع شكري القواتلي الرئيسي 🛣️', status: 'متحرك بسرعة 55 كم/س ⚡', client: 'متجه إلى عميل خارجي 🏭', battery: '88% 🔋', lastUpdate: 'الآن' },
-  ], []);
-
+  const [realTrackingData, setRealTrackingData] = useState<any>(null);
+  const trackingMapRef = useRef<any>(null);
+  const trackingMarkerRef = useRef<any>(null);
+  const trackingPolylineRef = useRef<any>(null); // To draw the route line
+  // Fetch tracking data periodically from server
   useEffect(() => {
     let timer: NodeJS.Timeout;
-    if (subTab === 'manager_main' && managerSubTab === 'live_tracking' && isLiveTracking) {
-      timer = setInterval(() => {
-        setSimulatedPathStep((prev) => (prev + 1) % trackingSimulationData.length);
-      }, 7000);
+    if (subTab === 'manager_main' && managerSubTab === 'live_tracking' && isLiveTracking && trackedUserPhone) {
+      const fetchTracking = async () => {
+        try {
+          const res = await fetch(`/api/tracking/${trackedUserPhone}`);
+          if (res.ok) {
+            const routeData = await res.json();
+            // data is now an array of points
+            if (routeData && Array.isArray(routeData) && routeData.length > 0) {
+              setRealTrackingData(routeData); // Store whole route
+            }
+          }
+        } catch (e) {}
+      };
+      fetchTracking();
+      timer = setInterval(fetchTracking, 4000);
     }
-    return () => {
-      if (timer) clearInterval(timer);
+    return () => { if (timer) clearInterval(timer); };
+  }, [subTab, managerSubTab, isLiveTracking, trackedUserPhone]);
+
+  // Initialize Leaflet Map for Real Tracking
+  useEffect(() => {
+    if (subTab !== 'manager_main' || managerSubTab !== 'live_tracking') return;
+    let isMounted = true;
+    const initMap = async () => {
+      if (!document.getElementById('leaflet-css-style-id')) {
+        const link = document.createElement('link'); link.id = 'leaflet-css-style-id'; link.rel = 'stylesheet'; link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'; document.head.appendChild(link);
+      }
+      if (!(window as any).L) {
+        await new Promise<void>((res, rej) => { const script = document.createElement('script'); script.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'; script.async = true; script.onload = () => res(); script.onerror = () => rej(); document.body.appendChild(script); });
+      }
+      if (!isMounted) return;
+      const L = (window as any).L; if (!L) return;
+      const container = document.getElementById('tracking-leaflet-map'); if (!container) return;
+      if (trackingMapRef.current) { trackingMapRef.current.remove(); trackingMapRef.current = null; }
+      const defLat = 30.0444; const defLng = 31.2357;
+      const map = L.map('tracking-leaflet-map', { center: [defLat, defLng], zoom: 12 });
+      trackingMapRef.current = map;
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '&copy; OpenStreetMap' }).addTo(map);
+      const DefaultIcon = L.icon({ iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png', shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png', iconSize: [25, 41], iconAnchor: [12, 41], popupAnchor: [1, -34], shadowSize: [41, 41] });
+      L.Marker.prototype.options.icon = DefaultIcon;
+      
+      // Initialize polyline for route path
+      const polyline = L.polyline([], {color: '#DD6B20', weight: 4, dashArray: '10, 10'}).addTo(map);
+      trackingPolylineRef.current = polyline;
+      
+      trackingMarkerRef.current = L.marker([defLat, defLng]).addTo(map);
     };
-  }, [subTab, managerSubTab, isLiveTracking, trackingSimulationData]);
+    initMap();
+    return () => { isMounted = false; if (trackingMapRef.current) { try { trackingMapRef.current.remove(); } catch(e) {} trackingMapRef.current = null; } };
+  }, [subTab, managerSubTab]);
+
+  // Move marker when real location changes
+  useEffect(() => {
+    if (realTrackingData && Array.isArray(realTrackingData) && realTrackingData.length > 0 && trackingMapRef.current && trackingMarkerRef.current && trackingPolylineRef.current) {
+      
+      // Extract latlng array for the polyline
+      const routeCoordinates = realTrackingData.map((pt: any) => [pt.lat, pt.lng]);
+      
+      // Update polyline path
+      trackingPolylineRef.current.setLatLngs(routeCoordinates);
+      
+      // Get latest point for the marker
+      const latestPoint = realTrackingData[realTrackingData.length - 1];
+      const latlng = [latestPoint.lat, latestPoint.lng];
+      trackingMarkerRef.current.setLatLng(latlng);
+      
+      // Make map view fit the whole route if it's long, or fly to latest point
+      trackingMapRef.current.fitBounds(trackingPolylineRef.current.getBounds(), { padding: [20, 20], maxZoom: 16 });
+    }
+  }, [realTrackingData]);
 
   const handleAskAI = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
@@ -412,7 +777,7 @@ export default function ManageTab({
 
         if (field === 'cartonPriceFromFactory') updatedWeight.cartonPriceFromFactory = numValue === '' ? 0 : numValue;
         if (field === 'unitsPerCarton') updatedWeight.unitsPerCarton = Math.max(1, parseInt(val) || 1);
-        if (field === 'addedValue') updatedWeight.addedValue = val === '' ? '' : (val.endsWith('.') ? val : parseFloat(val));
+        if (field === 'addedValue') updatedWeight.addedValue = (val === '' ? '' : (val.endsWith('.') ? val : parseFloat(val))) as any;
         
         // Calculate dynamically per user's directive:
         // السعر الاساسي للكرتونة = سعر الكرتونة بالمصنع + القيمة المضافة
@@ -467,15 +832,21 @@ export default function ManageTab({
     const totalSpent = (expenses || []).filter(e => e.type !== 'revenue').reduce((sum, exp) => sum + exp.amount, 0);
     const extraRevenues = (expenses || []).filter(e => e.type === 'revenue').reduce((sum, exp) => sum + exp.amount, 0);
     
-    // totalSales = product sales. extraRevenues = external commission, etc.
-    const netProfit = totalSales + extraRevenues - totalSpent;
+    const profitFromSales = invoices.reduce((sum, inv) => {
+      const totalCost = inv.items.reduce((cost, it) => cost + ((it.factoryPrice || it.originalPrice * 0.9) * it.quantity), 0);
+      return sum + (inv.totalAfterDiscount - totalCost);
+    }, 0);
+
+    const tripsProfit = (trips || []).filter(t => t.collected).reduce((sum, t) => sum + t.price, 0);
+
+    const netProfit = profitFromSales + extraRevenues + tripsProfit - totalSpent;
 
     return {
       totalSales,
       totalSpent,
       netProfit,
     };
-  }, [invoices, expenses]);
+  }, [invoices, expenses, trips]);
 
   const handleBulkSyncToGoogleSheets = async () => {
     if (!googleUrl) {
@@ -553,6 +924,48 @@ export default function ManageTab({
   };
 
 
+
+  const handleRestoreFromGoogleSheets = async () => {
+    if (!googleUrl) {
+      setSyncStatus('fail');
+      setSyncMsg('خطأ: لم يتم وضع رابط مزامنة جوجل.');
+      return;
+    }
+
+    const isConfirmed = await confirmDialog("هل أنت متأكد من استعادة البيانات من جوجل شيت؟ سيتم مسح البيانات الحالية (إن وجدت) واستبدالها بالنسخة السحابية.", false);
+    if (!isConfirmed) return;
+
+    setIsRestoring(true);
+    setSyncStatus('syncing');
+    setSyncMsg('جاري جلب البيانات من السحابة...');
+
+    try {
+      const response = await fetch(googleUrl, {
+        method: 'GET',
+      });
+      
+      const data = await response.json();
+      
+      if (data.error) {
+        throw new Error(data.error);
+      }
+      
+      if (onRestoreData && data.products) {
+        onRestoreData(data);
+        setSyncStatus('done');
+        setSyncMsg('تمت استعادة البيانات بنجاح!');
+        alert('تم استيراد جميع البيانات بنجاح! سيتم تحديث الشاشة الآن.');
+        setTimeout(() => window.location.reload(), 1500);
+      } else {
+        throw new Error('البيانات المسترجعة غير صالحة أو فارغة.');
+      }
+    } catch (err: any) {
+      setSyncStatus('fail');
+      setSyncMsg(`فشل الاسترجاع: ${err.message || err}`);
+    } finally {
+      setIsRestoring(false);
+    }
+  };
 
   // Customers Activity Classifier
   const customerAnalytics = useMemo(() => {
@@ -776,22 +1189,12 @@ export default function ManageTab({
             <span>الذكاء الاصطناعي</span>
           </button>
 
-          <button
-            type="button"
-            onClick={() => setSubTab('db_ops')}
-            className={`flex-1 flex flex-col sm:flex-row items-center justify-center gap-1 py-2 px-1.5 rounded-xl text-xs transition-all cursor-pointer select-none ${
-              subTab === 'db_ops' ? 'bg-[#FFFFFF] text-[#1A365D] border-b-2 border-b-[#DD6B20] shadow-sm rounded-none font-black' : 'text-[#9CA3AF] bg-transparent border-transparent' }`}
-          >
-            <Database className="h-4 w-4 shrink-0" />
-            <span>صيانة النظام</span>
-          </button>
-
           {currentUser?.phone === '01228466613' && (
             <button
               type="button"
               onClick={() => {
                 setSubTab('manager_main');
-                setManagerSubTab('add_user_or_visitor');
+                setManagerSubTab('user_permissions');
               }}
               className={`flex-1 flex flex-col sm:flex-row items-center justify-center gap-1 py-2 px-1.5 rounded-xl text-xs transition-all cursor-pointer select-none ${
                 subTab === 'manager_main' ? 'bg-[#FFFFFF] text-[#1A365D] border-b-2 border-b-[#DD6B20] shadow-sm rounded-none font-black' : 'text-[#9CA3AF] bg-transparent border-transparent' }`}
@@ -858,6 +1261,17 @@ export default function ManageTab({
                 className="w-full bg-[#DD6B20] hover:bg-[#C05621] text-white py-2.5 rounded-xl text-xs font-black transition shadow-sm active:scale-95 cursor-pointer"
               >
                 تأكيد الدخول الآمن للمالك
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setManagerSubTab('db_ops');
+                }}
+                className={`flex-1 min-w-[120px] py-1.5 px-0.5 rounded-xl text-xs font-black transition-all cursor-pointer select-none text-center ${
+                  managerSubTab === 'db_ops' ? 'bg-[#FFFFFF] text-[#1A365D] shadow-sm font-extrabold' : 'text-slate-500 bg-transparent'
+                }`}
+              >
+                ⚙️ صيانة النظام
               </button>
             </div>
           </div>
@@ -939,95 +1353,40 @@ export default function ManageTab({
                     {/* Tracking stats readout */}
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-center mt-1 pt-2 border-t border-dashed border-slate-200">
                       <div className="bg-white rounded-lg p-2 border border-slate-100 text-center">
-                        <span className="block text-[9px] text-gray-400 font-extrabold mb-0.5">مسح تتبع الهاتف:</span>
+                        <span className="block text-[9px] text-gray-400 font-extrabold mb-0.5">حالة البث المباشر:</span>
                         <span className="block text-[10px] text-emerald-700 font-black flex items-center gap-1 justify-center">
-                          <span className="h-1.5 w-1.5 bg-emerald-500 rounded-full animate-ping shrink-0" />
-                          بث حي نشط
+                          <span className={`h-1.5 w-1.5 rounded-full ${realTrackingData ? 'bg-emerald-500 animate-ping' : 'bg-rose-500'} shrink-0`} />
+                          {realTrackingData ? 'متصل وحي' : 'بانتظار الاتصال'}
                         </span>
                       </div>
                       <div className="bg-white rounded-lg p-2 border border-slate-100 text-center">
                         <span className="block text-[9px] text-gray-400 font-extrabold mb-0.5">البطارية والشبكة:</span>
                         <span className="block text-[10px] text-slate-700 font-mono font-black border-none bg-transparent">
-                          {trackingSimulationData[simulatedPathStep]?.battery || '90%'} | 5G
+                          {realTrackingData && realTrackingData.length > 0 ? realTrackingData[realTrackingData.length - 1].battery : '--'} | 5G
                         </span>
                       </div>
                       <div className="bg-white rounded-lg p-2 border border-slate-100 text-center">
-                        <span className="block text-[9px] text-gray-400 font-extrabold mb-0.5 font-bold">السرعة والحالة:</span>
+                        <span className="block text-[9px] text-gray-400 font-extrabold mb-0.5 font-bold">السرعة الحالية:</span>
                         <span className="block text-[10px] text-amber-700 font-black">
-                          {trackingSimulationData[simulatedPathStep]?.status?.split(' ')?.[2] || 'مستقر'} {trackingSimulationData[simulatedPathStep]?.status?.split(' ')?.[3] || 'متوقف'}
+                          {realTrackingData && realTrackingData.length > 0 ? realTrackingData[realTrackingData.length - 1].speed : '0'} كم/س
                         </span>
                       </div>
                       <div className="bg-[#1A365D]/5 rounded-lg p-2 border border-slate-200 text-center">
-                        <span className="block text-[9px] text-indigo-900 font-extrabold mb-0.5">آخر رصد للقمر:</span>
+                        <span className="block text-[9px] text-indigo-900 font-extrabold mb-0.5">آخر رصد وتحديث:</span>
                         <span className="block text-[10px] text-indigo-950 font-black">
-                          {trackingSimulationData[simulatedPathStep]?.lastUpdate || 'الآن'}
+                          {realTrackingData && realTrackingData.length > 0 ? new Date(realTrackingData[realTrackingData.length - 1].timestamp).toLocaleTimeString('ar-EG') : '--:--'}
                         </span>
                       </div>
                     </div>
 
                     <div className="bg-sky-50 text-sky-950 border border-sky-100 p-2.5 rounded-lg text-xs leading-relaxed font-bold">
-                      📍 <span className="text-[#2B6CB0]">المسار الحالي المرصود:</span> {trackingSimulationData[simulatedPathStep]?.street || 'طريق المحلة الكبرى الرئيسي'}
+                      📍 <span className="text-[#2B6CB0]">تتبع خط سير المندوب:</span> {realTrackingData && realTrackingData.length > 0 ? `تم رصد ${realTrackingData.length} نقطة تحرك مسجلة للمسار.` : 'جاري البحث عن المندوب...'}
                       <br />
-                      🎯 <span className="text-amber-800">حمل الزيوت الحالي:</span> {trackingSimulationData[simulatedPathStep]?.client || 'متوقف بالتوريد'}
+                      🎯 <span className="text-amber-800">الحالة الأخيرة:</span> {realTrackingData && realTrackingData.length > 0 && realTrackingData[realTrackingData.length - 1].speed > 0 ? 'يتحرك بالسيارة 🚚' : 'متوقف حالياً أو يفرغ حمولة 🛑'}
                     </div>
 
-                    {/* SVG Tactical Map Screen */}
-                    <div className="relative w-full h-44 bg-slate-900 rounded-xl overflow-hidden border border-slate-850 shadow-inner flex items-center justify-center">
-                      <div 
-                        className="absolute inset-0 opacity-15"
-                        style={{
-                          backgroundImage: 'radial-gradient(circle, #38bdf8 1.5px, transparent 1.5px), linear-gradient(to right, #ffffff08 1px, transparent 1px), linear-gradient(to bottom, #ffffff08 1px, transparent 1px)',
-                          backgroundSize: '24px 24px'
-                        }}
-                      />
-
-                      <svg className="absolute inset-0 w-full h-full opacity-35" preserveAspectRatio="none">
-                        <path d="M -10 50 L 500 130" stroke="#475569" strokeWidth="3" fill="none" />
-                        <path d="M 120 -10 L 250 250" stroke="#475569" strokeWidth="2.5" fill="none" />
-                        <path d="M 300 -10 L 150 250" stroke="#475569" strokeWidth="2" fill="none" strokeDasharray="3 3" />
-                        <path d="M 0 100 Q 150 15 350 160" stroke="#475569" strokeWidth="4" fill="none" />
-                        <path d="M 200 40 L 400 40" stroke="#334155" strokeWidth="2" fill="none" />
-                        <path d="M 50 160 L 350 160" stroke="#334155" strokeWidth="1.5" fill="none" />
-                        <circle cx="100" cy="80" r="15" stroke="#0ea5e9" strokeWidth="1" fill="none" strokeDasharray="2 2" />
-                        <circle cx="280" cy="120" r="22" stroke="#0eb5e9" strokeWidth="1" fill="none" strokeDasharray="2 2" />
-                        <circle cx="450" cy="110" r="18" stroke="#0eb5e9" strokeWidth="1" fill="none" strokeDasharray="2 2" />
-                      </svg>
-
-                      <div className="absolute top-[35px] left-[65px] bg-[#1e293b]/90 border border-sky-500/20 px-1 text-[8px] text-sky-400 font-mono rounded">حي الجمهورية</div>
-                      <div className="absolute bottom-[25px] right-[45px] bg-[#1e293b]/90 border border-emerald-500/20 px-1 text-[8px] text-emerald-400 font-mono rounded">كفر الشيخ</div>
-                      <div className="absolute top-[10px] right-[105px] bg-[#1e293b]/90 border border-amber-500/20 px-1 text-[8px] text-amber-400 font-mono rounded">شارع الجلاء</div>
-
-                      <div 
-                        className="absolute transition-all duration-[2000ms] ease-in-out"
-                        style={{
-                          left: `${trackingSimulationData[simulatedPathStep]?.x || 50}%`,
-                          top: `${trackingSimulationData[simulatedPathStep]?.y || 50}%`,
-                          transform: 'translate(-50%, -50%)'
-                        }}
-                      >
-                        <div className="absolute -inset-4 bg-[#f43f5e] rounded-full opacity-35 animate-ping" />
-                        <div className="absolute -inset-2 bg-[#f43f5e] rounded-full opacity-60 animate-pulse" />
-                        <div className="relative h-6 w-6 bg-rose-600 rounded-full border border-white flex items-center justify-center shadow-lg text-white font-extrabold text-[10px]">
-                          🚚
-                        </div>
-                      </div>
-
-                      <div className="absolute top-2 left-2 text-[9px] text-sky-400 font-mono opacity-80 select-none">GPS LOCK // 5G LINK</div>
-                      <div className="absolute bottom-2 left-2 text-[9px] text-[#f43f5e] font-mono opacity-80 select-none">EAG UNIT // ACTIVE</div>
-                      <div className="absolute top-2 right-2 text-[9px] text-emerald-400 font-mono opacity-80 select-none flex items-center gap-1">
-                        <span className="h-1.5 w-1.5 bg-emerald-400 rounded-full animate-ping" />
-                        ONLINE
-                      </div>
-
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setSimulatedPathStep((prev) => (prev + 1) % trackingSimulationData.length);
-                        }}
-                        className="absolute bottom-2 right-2 bg-slate-800/90 hover:bg-slate-700 hover:text-white border border-slate-700 text-slate-300 rounded p-1 px-1.5 text-[8px] font-bold cursor-pointer transition-colors"
-                      >
-                         تحديث المحاكاة 🔄
-                      </button>
+                    {/* Real Leaflet Tactical Map Screen */}
+                    <div className="relative w-full h-64 bg-[#E0E2E7] rounded-xl overflow-hidden border border-slate-300 shadow-inner z-0" id="tracking-leaflet-map">
                     </div>
                   </div>
                 </div>
@@ -1042,74 +1401,85 @@ export default function ManageTab({
                     إلى جانب تتبع الموقع الجغرافي، يمكنك هنا قياس مدى التزام وفاعلية المندوب في الشارع عبر مراقبة نبض المبيعات المباشرة وتوقيت الفواتير وحجم التحصيل النقدي خطوة بخطوة:
                   </p>
 
+                  <div className="flex flex-wrap gap-1.5 mt-1 mb-3">
+                    <span className="text-[10px] font-bold text-slate-500 w-full mb-0.5">اختر اليوم لعرض الإنتاجية:</span>
+                    <button onClick={() => setProdDayFilter('all')} className={`text-[10px] font-bold px-2.5 py-1 rounded-md transition-all cursor-pointer ${prodDayFilter === 'all' ? 'bg-indigo-600 text-white shadow-sm' : 'bg-slate-100 text-slate-600 border border-slate-200 hover:bg-slate-200'}`}>الكل (ملخص الأيام)</button>
+                    {DAYS_OF_WEEK.map((day: {id: number, name: string}) => (
+                      <button key={day.id} onClick={() => setProdDayFilter(day.id)} className={`text-[10px] font-bold px-2.5 py-1 rounded-md transition-all cursor-pointer ${prodDayFilter === day.id ? 'bg-[#DD6B20] text-white shadow-sm' : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-50'}`}>
+                        {day.name}
+                      </button>
+                    ))}
+                  </div>
+
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                     <div className="bg-emerald-50/50 p-3 rounded-xl border border-emerald-150 text-center">
-                      <span className="block text-[10px] text-slate-500 font-black mb-1">إجمالي الفواتير الصادرة اليوم</span>
+                      <span className="block text-[10px] text-slate-500 font-black mb-1">إجمالي الفواتير الصادرة</span>
                       <span className="text-xl font-extrabold text-emerald-700">
-                        {invoices.length} فواتير
+                        {prodFilteredInvoices.length} فواتير
                       </span>
                     </div>
                     <div className="bg-blue-50/50 p-3 rounded-xl border border-blue-150 text-center">
-                      <span className="block text-[10px] text-slate-500 font-black mb-1">إجمالي الإيراد الميداني اليوم</span>
+                      <span className="block text-[10px] text-slate-500 font-black mb-1">إجمالي الإيراد الميداني</span>
                       <span className="text-xl font-extrabold text-blue-700">
-                        {formatNum(invoices.reduce((sum, inv) => sum + inv.totalAfterDiscount, 0))} ج.م
+                        {formatNum(prodFilteredInvoices.reduce((sum, inv) => sum + inv.totalAfterDiscount, 0))} ج.م
                       </span>
                     </div>
                     <div className="bg-amber-50/50 p-3 rounded-xl border border-amber-150 text-center">
-                      <span className="block text-[10px] text-slate-500 font-black mb-1">إجمالي التحصيل النقدي</span>
+                      <span className="block text-[10px] text-slate-500 font-black mb-1">التحصيل النقدي</span>
                       <span className="text-xl font-extrabold text-amber-700">
-                        {formatNum(invoices.reduce((sum, inv) => sum + inv.paidAmount, 0))} ج.م
+                        {formatNum(prodFilteredInvoices.reduce((sum, inv) => sum + inv.paidAmount, 0))} ج.م
                       </span>
                     </div>
                   </div>
 
-                  {/* Real-time event log of recent invoices */}
                   <div className="border border-slate-150 rounded-xl overflow-hidden mt-2">
-                    <div className="bg-slate-50 p-2 px-3 border-b border-slate-150 text-xs font-black text-[#1A365D] flex justify-between">
-                      <span>سجل الحركة البيعية النشطة اليوم (تتبع الإنتاجية)</span>
-                      <span className="text-[10px] text-slate-400">محدث الآن 📡</span>
-                    </div>
-                    {invoices.length === 0 ? (
-                      <div className="p-6 text-center text-xs font-bold text-slate-400 bg-white">
-                        لم يتم تسجيل أي فواتير بيع ميداني اليوم حتى الآن.
+                    <div className="bg-slate-50 p-2 px-3 border-b border-slate-150 text-xs font-black text-[#1A365D] flex justify-between items-center">
+                      <span>سجل الحركة البيعية النشطة (تتبع الإنتاجية)</span>
+                      <div className="flex items-center gap-1">
+                        <button onClick={handleDownloadProductivityImage} className="text-[9px] bg-indigo-600 text-white px-2 py-1 rounded shadow-sm hover:bg-indigo-700 flex items-center gap-1 cursor-pointer">
+                          🖼️ تنزيل صورة
+                        </button>
+                        <button onClick={handlePrintProductivityPDF} className="text-[9px] bg-[#DD6B20] text-white px-2 py-1 rounded shadow-sm hover:bg-[#C05621] flex items-center gap-1 cursor-pointer">
+                          🖨️ طباعة PDF
+                        </button>
                       </div>
-                    ) : (
-                      <div className="divide-y divide-slate-100 max-h-56 overflow-y-auto bg-white">
-                        {[...invoices].reverse().map((inv) => {
-                          const customer = customers.find(c => c.id === inv.customerId);
-                          const totalItemsCount = inv.items.reduce((sum, it) => sum + it.quantity, 0);
-                          return (
-                            <div key={inv.id} className="p-2.5 px-3 flex justify-between items-center text-xs hover:bg-indigo-50/20 transition-all">
-                              <div className="flex flex-col gap-0.5">
-                                <span className="font-black text-[#1A365D]">
-                                  فاتورة #{inv.invoiceNumber} • {customer?.name || 'عميل مجهول'}
-                                </span>
-                                <span className="text-[10px] text-slate-400 font-bold">
-                                  باع {totalItemsCount} عبوة • {customer?.area || 'بدون منطقة'} • بقيمة {formatNum(inv.totalAfterDiscount)} ج.م
-                                </span>
-                              </div>
-                              <div className="flex flex-col items-end gap-1">
-                                <span className="text-[10px] font-mono font-black text-slate-500">
-                                  {inv.date ? inv.date.substring(11, 16) || 'الآّن' : 'الآن'}
-                                </span>
-                                <span className={`text-[9px] font-extrabold px-1.5 py-0.5 rounded ${
-                                  inv.paidAmount >= inv.totalAfterDiscount
-                                    ? 'bg-emerald-100 text-emerald-800'
-                                    : inv.paidAmount > 0 
-                                    ? 'bg-amber-100 text-amber-800'
-                                    : 'bg-rose-100 text-rose-800'
-                                }`}>
-                                  {inv.paidAmount >= inv.totalAfterDiscount 
-                                    ? 'خالص نقداً' 
-                                    : inv.paidAmount > 0 
-                                    ? 'متبقي جزء' 
-                                    : 'آجل بالكامل'}
-                                </span>
-                              </div>
-                            </div>
-                          );
+                    </div>
+                    
+                    {prodDayFilter === 'all' ? (
+                      <div className="p-3 bg-white max-h-56 overflow-y-auto custom-scroll">
+                        {Object.values(prodFilteredInvoices.reduce((acc: any, inv: any) => {
+                          const dStr = new Date(inv.date).toLocaleDateString('ar-EG');
+                          if (!acc[dStr]) acc[dStr] = { count: 0, total: 0, cash: 0, date: inv.date };
+                          acc[dStr].count += 1; acc[dStr].total += inv.totalAfterDiscount; acc[dStr].cash += inv.paidAmount;
+                          return acc;
+                        }, {} as Record<string, { count: number, total: number, cash: number, date: string }>))
+                        .sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime())
+                        .map((g: any, idx: number) => {
+                           const dayName = DAYS_OF_WEEK.find(d => d.id === new Date(g.date).getDay())?.name || '';
+                           return (
+                             <div key={idx} className="flex justify-between items-center p-2.5 border-b border-slate-100 text-xs">
+                                <div className="flex flex-col gap-0.5"><span className="font-black text-[#1A365D]">{dayName}</span><span className="text-[9px] text-slate-400">{new Date(g.date).toLocaleDateString('ar-EG')}</span></div>
+                                <div className="flex flex-col items-end gap-0.5"><span>{g.count} فواتير</span><span className="text-emerald-700 font-extrabold">{formatNum(g.total)} ج.م</span></div>
+                             </div>
+                           )
                         })}
                       </div>
+                    ) : (
+                      prodFilteredInvoices.length === 0 ? (
+                        <div className="p-6 text-center text-xs font-bold text-slate-400 bg-white">لم يتم تسجيل أي فواتير في هذا اليوم.</div>
+                      ) : (
+                        <div className="divide-y divide-slate-100 max-h-56 overflow-y-auto bg-white custom-scroll">
+                          {[...prodFilteredInvoices].reverse().map((inv) => {
+                            const customer = customers.find(c => c.id === inv.customerId);
+                            return (
+                              <div key={inv.id} className="p-2.5 px-3 flex justify-between items-center text-xs">
+                                <div className="flex flex-col gap-0.5"><span className="font-black text-[#1A365D]">فاتورة #{inv.invoiceNumber} • {customer?.name || 'مجهول'}</span><span className="text-[10px] text-slate-400 font-bold">المبلغ: {formatNum(inv.totalAfterDiscount)} ج.م</span></div>
+                                <div className="flex flex-col items-end gap-1"><span className="text-[10px] text-slate-500 font-mono">{inv.date ? new Date(inv.date).toLocaleTimeString('ar-EG') : 'الآن'}</span><span className={`text-[9px] font-extrabold px-1.5 py-0.5 rounded ${inv.paidAmount >= inv.totalAfterDiscount ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'}`}>{inv.paidAmount >= inv.totalAfterDiscount ? 'خالص' : 'متبقي'}</span></div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )
                     )}
                   </div>
                 </div>
@@ -1119,13 +1489,6 @@ export default function ManageTab({
             {/* Sub-tab 1.7: Custom Permissions and Expandable Folded List (بوابة التحقق ونظام المطويات) */}
             {managerSubTab === 'user_permissions' && (
                 <div className="bg-[#FFFFFF] p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col gap-4">
-                  <h3 className="font-bold text-[#1A365D] text-sm flex items-center gap-1.5 border-b border-slate-100 pb-2">
-                    <span className="p-1.5 bg-emerald-50 text-emerald-700 rounded-lg">🛡️</span>
-                    بوابة التحقق وتأمين صلاحيات أرقام الهواتف (هوية وصلاحيات المناديب والزوّار)
-                  </h3>
-                  <p className="text-[11px] text-slate-500 leading-relaxed font-bold">
-                    تظهر هنا طلبات تسجيل الدخول برقم الهاتف من المناديب. يمكنك تفعيل المندوب من حاله الترقب (قيد الانتظار) إلى حساب نشط، لتفويضه برؤية تبويبات أو جرد فرعي محدد. التبويبات الملغاة تختفي عنه تماماً.
-                  </p>
 
                   {/* Create New User Section */}
                   <div className="border border-indigo-100 rounded-2xl p-4 bg-indigo-50/20 flex flex-col gap-3">
@@ -1519,7 +1882,7 @@ export default function ManageTab({
                                       >
                                         <input
                                           type="checkbox"
-                                          disabled={tab.disabled || (isSelf && tab.id === 'administrative')} 
+                                          disabled={!!(tab.disabled || (isSelf && tab.id === 'administrative'))} 
                                           checked={isAllowed}
                                           onChange={() => {
                                             if (tab.id === 'dashboard') return;
@@ -1666,47 +2029,7 @@ export default function ManageTab({
                             <button
                               type="button"
                               onClick={() => {
-                                const scriptCode = `function doPost(e) {
-  try {
-    var ss = SpreadsheetApp.getActiveSpreadsheet();
-    var data = JSON.parse(e.postData.contents);
-    if (data.type === 'تقرير_كامل') {
-      var invoicesSheet = ss.getSheetByName('الفواتير');
-      if (!invoicesSheet) {
-        invoicesSheet = ss.insertSheet('الفواتير');
-        invoicesSheet.appendRow(['التاريخ', 'رقم الفاتورة', 'العميل', 'المنطقة', 'إجمالي الفاتورة', 'الملاحظات']);
-      }
-      if (data.invoices && data.invoices.length > 0) {
-        if (invoicesSheet.getLastRow() > 1) {
-          invoicesSheet.getRange(2, 1, invoicesSheet.getLastRow() - 1, invoicesSheet.getLastColumn()).clearContent();
-        }
-        var invoiceRows = data.invoices.map(function(inv) {
-          return [inv.date, inv.invNum, inv.customerName, inv.area, inv.total, inv.notes || ''];
-        });
-        invoicesSheet.getRange(2, 1, invoiceRows.length, invoiceRows[0].length).setValues(invoiceRows);
-      }
-      var expensesSheet = ss.getSheetByName('الماليات');
-      if (!expensesSheet) {
-        expensesSheet = ss.insertSheet('الماليات');
-        expensesSheet.appendRow(['التاريخ', 'الفئة', 'المبلغ', 'البيان']);
-      }
-      if (data.expenses && data.expenses.length > 0) {
-        if (expensesSheet.getLastRow() > 1) {
-          expensesSheet.getRange(2, 1, expensesSheet.getLastRow() - 1, expensesSheet.getLastColumn()).clearContent();
-        }
-        var expenseRows = data.expenses.map(function(exp) {
-          return [exp.date, exp.category, exp.amount, exp.description || ''];
-        });
-        expensesSheet.getRange(2, 1, expenseRows.length, expenseRows[0].length).setValues(expenseRows);
-      }
-      return ContentService.createTextOutput(JSON.stringify({"status": "success"})).setMimeType(ContentService.MimeType.JSON);
-    }
-    return ContentService.createTextOutput(JSON.stringify({"status": "ignored"})).setMimeType(ContentService.MimeType.JSON);
-  } catch(error) {
-    return ContentService.createTextOutput(JSON.stringify({"error": error.toString()})).setMimeType(ContentService.MimeType.JSON);
-  }
-}`;
-                                navigator.clipboard.writeText(scriptCode);
+                                navigator.clipboard.writeText(GOOGLE_APPS_SCRIPT_CODE);
                                 setScriptCopied(true);
                                 setTimeout(() => setScriptCopied(false), 2000);
                               }}
@@ -1716,110 +2039,7 @@ export default function ManageTab({
                               {scriptCopied ? <Check className="h-4 w-4 text-emerald-400" /> : <Copy className="h-4 w-4" />}
                             </button>
                             <pre className="bg-[#1A365D] text-white border-transparent text-emerald-100 p-3 pt-9 rounded-lg text-left text-[10px] sm:text-xs font-mono overflow-x-auto whitespace-pre-wrap user-select-all" dir="ltr">
-{`function doPost(e) {
-  try {
-    var ss = SpreadsheetApp.getActiveSpreadsheet();
-    var data = JSON.parse(e.postData.contents);
-    if (data.type === 'تقرير_كامل') {
-      var invoicesSheet = ss.getSheetByName('الفواتير');
-      if (!invoicesSheet) {
-        invoicesSheet = ss.insertSheet('الفواتير');
-        invoicesSheet.appendRow(['التاريخ', 'رقم الفاتورة', 'العميل', 'المنطقة', 'إجمالي الفاتورة', 'الملاحظات']);
-        invoicesSheet.getRange(1, 1, 1, invoicesSheet.getLastColumn()).setFontWeight("bold").setBackground("#cfe2f3");
-      }
-      if (data.invoices && data.invoices.length > 0) {
-        if (invoicesSheet.getLastRow() > 1) {
-          invoicesSheet.getRange(2, 1, invoicesSheet.getLastRow() - 1, invoicesSheet.getLastColumn()).clearContent();
-        }
-        var invoiceRows = data.invoices.map(function(inv) {
-          return [inv.date, inv.invNum, inv.customerName, inv.area, inv.total, inv.notes || ''];
-        });
-        invoicesSheet.getRange(2, 1, invoiceRows.length, invoiceRows[0].length).setValues(invoiceRows);
-      }
-      
-      var expensesSheet = ss.getSheetByName('الماليات');
-      if (!expensesSheet) {
-        expensesSheet = ss.insertSheet('الماليات');
-        expensesSheet.appendRow(['التاريخ', 'الفئة', 'المبلغ', 'البيان']);
-        expensesSheet.getRange(1, 1, 1, expensesSheet.getLastColumn()).setFontWeight("bold").setBackground("#e0e0e0");
-      }
-      if (data.expenses && data.expenses.length > 0) {
-        if (expensesSheet.getLastRow() > 1) {
-          expensesSheet.getRange(2, 1, expensesSheet.getLastRow() - 1, expensesSheet.getLastColumn()).clearContent();
-        }
-        var expenseRows = data.expenses.map(function(exp) {
-          return [exp.date, exp.category, exp.amount, exp.description || ''];
-        });
-        expensesSheet.getRange(2, 1, expenseRows.length, expenseRows[0].length).setValues(expenseRows);
-      }
-
-      var tripsSheet = ss.getSheetByName('المشاوير');
-      if (!tripsSheet) {
-        tripsSheet = ss.insertSheet('المشاوير');
-        tripsSheet.appendRow(['التاريخ', 'المنطقة', 'الأجرة', 'الحالة']);
-        tripsSheet.getRange(1, 1, 1, tripsSheet.getLastColumn()).setFontWeight("bold").setBackground("#ffe599");
-      }
-      if (data.trips && data.trips.length > 0) {
-        if (tripsSheet.getLastRow() > 1) {
-          tripsSheet.getRange(2, 1, tripsSheet.getLastRow() - 1, tripsSheet.getLastColumn()).clearContent();
-        }
-        var tripRows = data.trips.map(function(t) {
-          return [t.date, t.area, t.price, t.status];
-        });
-        tripsSheet.getRange(2, 1, tripRows.length, tripRows[0].length).setValues(tripRows);
-      }
-
-      var customersSheet = ss.getSheetByName('العملاء');
-      if (!customersSheet) {
-        customersSheet = ss.insertSheet('العملاء');
-        customersSheet.appendRow(['اسم العميل', 'رقم الهاتف', 'المنطقة']);
-        customersSheet.getRange(1, 1, 1, customersSheet.getLastColumn()).setFontWeight("bold").setBackground("#d9ead3");
-      }
-      if (data.customers && data.customers.length > 0) {
-        if (customersSheet.getLastRow() > 1) {
-          customersSheet.getRange(2, 1, customersSheet.getLastRow() - 1, customersSheet.getLastColumn()).clearContent();
-        }
-        var currRows = data.customers.map(function(c) {
-          return [c.name, c.phone, c.area];
-        });
-        customersSheet.getRange(2, 1, currRows.length, currRows[0].length).setValues(currRows);
-      }
-
-      var productsSheet = ss.getSheetByName('المنتجات');
-      if (!productsSheet) {
-        productsSheet = ss.insertSheet('المنتجات');
-        productsSheet.appendRow(['الصنف', 'السعر', 'الأوزان المتاحة']);
-        productsSheet.getRange(1, 1, 1, productsSheet.getLastColumn()).setFontWeight("bold").setBackground("#cfe2f3");
-      }
-      if (data.products && data.products.length > 0) {
-        if (productsSheet.getLastRow() > 1) {
-          productsSheet.getRange(2, 1, productsSheet.getLastRow() - 1, productsSheet.getLastColumn()).clearContent();
-        }
-        var pRows = data.products.map(function(p) {
-          return [p.name, p.purchasingPrice, p.count];
-        });
-        productsSheet.getRange(2, 1, pRows.length, pRows[0].length).setValues(pRows);
-      }
-      
-      var summarySheet = ss.getSheetByName('الملخص');
-      if (!summarySheet) {
-        summarySheet = ss.insertSheet('الملخص');
-        summarySheet.appendRow(['تاريخ المزامنة', 'إجمالي المبيعات', 'المنصرف والمصروفات', 'صافي الأرباح']);
-        summarySheet.getRange(1, 1, 1, summarySheet.getLastColumn()).setFontWeight("bold").setBackground("#d9ead3");
-      }
-      if (data.metadata) {
-        if (summarySheet.getLastRow() > 1) {
-           summarySheet.getRange(2, 1, summarySheet.getLastRow() - 1, summarySheet.getLastColumn()).clearContent();
-        }
-        summarySheet.appendRow([data.metadata.syncedAt, data.metadata.totalSales, data.metadata.totalExpenses, data.metadata.netProfit]);
-      }
-      return ContentService.createTextOutput(JSON.stringify({"status": "success"})).setMimeType(ContentService.MimeType.JSON);
-    }
-    return ContentService.createTextOutput(JSON.stringify({"status": "ignored"})).setMimeType(ContentService.MimeType.JSON);
-  } catch(error) {
-    return ContentService.createTextOutput(JSON.stringify({"error": error.toString()})).setMimeType(ContentService.MimeType.JSON);
-  }
-}`}
+{GOOGLE_APPS_SCRIPT_CODE}
                             </pre>
                           </div>
                         </div>
@@ -1851,6 +2071,15 @@ export default function ManageTab({
                           <Send className="h-4 w-4" />
                           {syncStatus === 'syncing' ? 'جاري الترحيل...' : 'ترحيل وصب الفواتير والماليات للسحابة ☁️'}
                         </button>
+                        <button
+                          type="button"
+                          onClick={handleRestoreFromGoogleSheets}
+                          disabled={isRestoring || syncStatus === 'syncing' || !googleUrl}
+                          className="w-full bg-[#DD6B20] text-white border-transparent border border-amber-700 rounded-lg py-2.5 text-xs font-bold hover:bg-[#C05621] active:scale-95 transition-all cursor-pointer disabled:opacity-50 flex items-center justify-center gap-2"
+                        >
+                          <Database className="h-4 w-4" />
+                          {isRestoring ? 'جاري الاستعادة...' : 'استعادة قاعدة البيانات من السحابة للموبايل 📥'}
+                        </button>
                         {syncMsg && (
                           <div className={`text-[11px] font-bold py-1.5 px-3 rounded-lg text-center ${
                             syncStatus === 'fail' ? 'bg-rose-50 text-rose-700' : 'bg-sky-50 text-sky-700'
@@ -1862,6 +2091,71 @@ export default function ManageTab({
                     </div>
                   </div>
                 )}
+              </div>
+            )}
+
+            {/* Manager Sub-tab 4: Database operations (صيانة واستعادة قاعدة البيانات) */}
+            {managerSubTab === 'db_ops' && (
+              <div className="bg-[#FFFFFF] p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col gap-4 animate-fade-in text-right">
+                <h3 className="font-bold text-[#DD6B20] text-base flex items-center gap-1.5 border-b border-slate-100 pb-2">
+                  <Database className="h-5 w-5" />
+                  صيانة واسترجاع قاعدة البيانات المحليّة
+                </h3>
+
+                <div className="bg-rose-50 border border-rose-200 p-4 rounded-xl flex flex-col gap-3">
+                  <span className="text-xs font-bold text-rose-800">لتأكيد عمليات الصيانة ومسح البيانات، يرجى إدخال كلمة مرور الإدارة:</span>
+                  <input 
+                    type="password" 
+                    value={wipeDbPassword}
+                    onChange={(e) => setWipeDbPassword(e.target.value)}
+                    placeholder="أدخل كلمة المرور..."
+                    className="bg-white border border-rose-300 rounded-lg p-2 text-center text-sm font-bold focus:ring-1 focus:ring-rose-500 outline-none"
+                  />
+                </div>
+
+                <div className={`grid grid-cols-2 gap-3 transition-opacity ${wipeDbPassword ? 'opacity-100' : 'opacity-50'}`}>
+                  <button
+                    disabled={!wipeDbPassword}
+                    onClick={async () => { 
+                      const ownerUser = usersList.find(u => u.phone === '01228466613' || u.role === 'owner');
+                      const correctWipePassword = ownerUser?.password || localStorage.getItem('owner_passcode_sys') || '1987';
+                      if (wipeDbPassword !== correctWipePassword) {
+                        alert('كلمة المرور غير صحيحة! يرجى إدخال كلمة المرور الصحيحة للإدارة.');
+                        return;
+                      }
+                      if (await confirmDialog('تنبيه: هل أنت متأكد من حذف كافة البيانات والمبيعات وتهيئة النظام مجدداً بالبيانات التجريبية؟')) {
+                        onResetDatabase(true);
+                        setWipeDbPassword('');
+                        alert('تم إعادة ضبط النظام ببيانات المصنع الافتراضية بنجاح!');
+                      }
+                    }}
+                    className="bg-[#F7FAFC] hover:bg-slate-200 active:scale-95 border border-slate-300 text-[#1A365D] p-3.5 rounded-xl text-center text-xs font-bold transition-all cursor-pointer flex flex-col items-center justify-center gap-1.5"
+                  >
+                    <RefreshCw className="h-5 w-5 text-[#2B6CB0]" />
+                    <span>تحميل البيانات التجريبية</span>
+                  </button>
+
+                  <button
+                    disabled={!wipeDbPassword}
+                    onClick={async () => { 
+                      const ownerUser = usersList.find(u => u.phone === '01228466613' || u.role === 'owner');
+                      const correctWipePassword = ownerUser?.password || localStorage.getItem('owner_passcode_sys') || '1987';
+                      if (wipeDbPassword !== correctWipePassword) {
+                        alert('كلمة المرور غير صحيحة! يرجى إدخال كلمة المرور الصحيحة للإدارة.');
+                        return;
+                      }
+                      if (await confirmDialog('تمويه خطير: سيقوم هذا الخيار بمسح كامل العملاء، الفواتير، المصرفات والأصناف كلياً. هل تريد المتابعة؟')) {
+                        onResetDatabase(false);
+                        setWipeDbPassword('');
+                        alert('تم مسح وإفراغ قاعدة البيانات بالكامل بنجاح!');
+                      }
+                    }}
+                    className="bg-rose-100 hover:bg-rose-200 active:scale-95 border border-rose-300 text-rose-700 p-3.5 rounded-xl text-center text-xs font-bold transition-all cursor-pointer flex flex-col items-center justify-center gap-1.5"
+                  >
+                    <Database className="h-5 w-5 text-rose-600" />
+                    <span>تهيئة ومسح شامل للبيانات</span>
+                  </button>
+                </div>
               </div>
             )}
           </div>
@@ -1940,7 +2234,7 @@ export default function ManageTab({
                                       type="number"
                                       min="0"
                                       step="0.01"
-                                      value={weight.addedValue === undefined || weight.addedValue === 0 || weight.addedValue === '' ? '' : weight.addedValue}
+                                      value={weight.addedValue === undefined || weight.addedValue === 0 || (weight.addedValue as any) === '' ? '' : weight.addedValue}
                                       onChange={(e) => handleWeightFieldChange(p.id, weight.id, 'addedValue', e.target.value)}
                                       className="w-full bg-[#FFFFFF] border border-slate-200 rounded-lg py-1 px-1.5 text-xs text-center font-bold text-[#1A365D] focus:outline-none focus:ring-1 focus:ring-indigo-400"
                                     />
@@ -2364,394 +2658,6 @@ export default function ManageTab({
               )}
             </div>
 
-          </div>
-        )}
-
-        {/* TAB 4: Google Sync Options */}
-        {subTab === 'google_sync' && (
-          <div className="bg-[#FFFFFF] p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col gap-4 animate-fade-in">
-            <h3 className="font-bold text-[#1A365D] text-base flex items-center gap-1.5 border-b border-slate-100 pb-2">
-              <FileSpreadsheet className="h-5 w-5 text-[#DD6B20]" />
-              إعدادات ربط جوجل شيت (محمي)
-            </h3>
-
-            {!isGooglePasswordValid ? (
-              <div className="flex flex-col gap-3">
-                <label className="block text-sm font-bold text-[#2B6CB0] mb-1">يرجى إدخال كلمة المرور للوصول إلى الرابط:</label>
-                <input
-                  type="password"
-                  placeholder="كلمة المرور"
-                  value={googlePassword}
-                  onChange={(e) => setGooglePassword(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && googlePassword === '1987') {
-                      setIsGooglePasswordValid(true);
-                    }
-                  }}
-                  className="w-full bg-[#F7FAFC] border border-slate-200 rounded-lg p-2.5 text-center focus:ring-2 focus:ring-emerald-500"
-                />
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (googlePassword === '1987') {
-                      setIsGooglePasswordValid(true);
-                    } else {
-                      alert('كلمة المرور غير صحيحة!');
-                    }
-                  }}
-                  className="w-full bg-[#DD6B20] text-white text-white rounded-lg py-2.5 text-sm font-bold hover:bg-[#C05621] transition"
-                >
-                  تأكيد
-                </button>
-              </div>
-            ) : (
-              <div className="flex flex-col gap-3.5">
-                <div>
-                  <label className="block text-xs font-bold text-[#2B6CB0] mb-1" style={{ borderColor: '#6c454f', color: '#6c4556' }}>رابط تطبيق الويب لجوجل (Google Web App URL)</label>
-                  <input
-                    type="url"
-                    placeholder="https://script.google.com/macros/s/.../exec"
-                    value={googleUrl}
-                    onChange={(e) => setGoogleUrl(e.target.value)}
-                    className="w-full bg-[#F7FAFC] border border-slate-200 rounded-lg p-2.5 text-xs text-left font-mono focus:ring-2 focus:ring-emerald-500"
-                  />
-                  <p className="text-[10px] text-gray-400 mt-1 leading-normal">
-                    عند إضافة هذا الرابط، يقوم التطبيق بمزامنة المبيعات والمصروفات فوراً.
-                  </p>
-                </div>
-                
-                <div className="mt-2 bg-emerald-50 rounded-lg p-3 border border-emerald-100">
-                  <details className="text-xs">
-                    <summary className="font-bold text-emerald-800 cursor-pointer select-none">طريقة تجهيز سكربت جوجل شيت لتقسيم الفواتير والماليات 🛠️</summary>
-                    <div className="mt-2 text-[#1A365D] space-y-2">
-                      <p>1. قم بإنشاء ملف Google Sheets جديد.</p>
-                      <p>2. اذهب إلى Extensions (الإضافات) &gt; Apps Script.</p>
-                      <p>3. امسح الكود الموجود وضع الكود التالي والذي سيقوم بتقسيم الفواتير في شيت والماليات في شيت منفصل تلقائياً:</p>
-                      <div className="relative mt-2">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const scriptCode = `function doPost(e) {
-  try {
-    var ss = SpreadsheetApp.getActiveSpreadsheet();
-    var data = JSON.parse(e.postData.contents);
-    
-    if (data.type === 'تقرير_كامل') {
-      
-      // 1. الفواتير
-      var invoicesSheet = ss.getSheetByName('الفواتير');
-      if (!invoicesSheet) {
-        invoicesSheet = ss.insertSheet('الفواتير');
-        invoicesSheet.appendRow(['التاريخ', 'رقم الفاتورة', 'العميل', 'المنطقة', 'إجمالي الفاتورة', 'الملاحظات']);
-        invoicesSheet.getRange(1, 1, 1, invoicesSheet.getLastColumn()).setFontWeight("bold").setBackground("#e0e0e0");
-      }
-      if (data.invoices && data.invoices.length > 0) {
-        if (invoicesSheet.getLastRow() > 1) {
-          invoicesSheet.getRange(2, 1, invoicesSheet.getLastRow() - 1, invoicesSheet.getLastColumn()).clearContent();
-        }
-        var invoiceRows = data.invoices.map(function(inv) {
-          return [inv.date, inv.invNum, inv.customerName, inv.area, inv.total, inv.notes || ''];
-        });
-        invoicesSheet.getRange(2, 1, invoiceRows.length, invoiceRows[0].length).setValues(invoiceRows);
-      }
-      
-      // 2. الماليات
-      var expensesSheet = ss.getSheetByName('الماليات');
-      if (!expensesSheet) {
-        expensesSheet = ss.insertSheet('الماليات');
-        expensesSheet.appendRow(['التاريخ', 'الفئة', 'المبلغ', 'البيان']);
-        expensesSheet.getRange(1, 1, 1, expensesSheet.getLastColumn()).setFontWeight("bold").setBackground("#e0e0e0");
-      }
-      if (data.expenses && data.expenses.length > 0) {
-        if (expensesSheet.getLastRow() > 1) {
-          expensesSheet.getRange(2, 1, expensesSheet.getLastRow() - 1, expensesSheet.getLastColumn()).clearContent();
-        }
-        var expenseRows = data.expenses.map(function(exp) {
-          return [exp.date, exp.category, exp.amount, exp.description || ''];
-        });
-        expensesSheet.getRange(2, 1, expenseRows.length, expenseRows[0].length).setValues(expenseRows);
-      }
-
-      // 3. المشاوير
-      var tripsSheet = ss.getSheetByName('المشاوير');
-      if (!tripsSheet) {
-        tripsSheet = ss.insertSheet('المشاوير');
-        tripsSheet.appendRow(['التاريخ', 'المنطقة', 'الأجرة', 'الحالة']);
-        tripsSheet.getRange(1, 1, 1, tripsSheet.getLastColumn()).setFontWeight("bold").setBackground("#ffe599");
-      }
-      if (data.trips && data.trips.length > 0) {
-        if (tripsSheet.getLastRow() > 1) {
-          tripsSheet.getRange(2, 1, tripsSheet.getLastRow() - 1, tripsSheet.getLastColumn()).clearContent();
-        }
-        var tripRows = data.trips.map(function(t) {
-          return [t.date, t.area, t.price, t.status];
-        });
-        tripsSheet.getRange(2, 1, tripRows.length, tripRows[0].length).setValues(tripRows);
-      }
-
-      // 4. العملاء
-      var customersSheet = ss.getSheetByName('العملاء');
-      if (!customersSheet) {
-        customersSheet = ss.insertSheet('العملاء');
-        customersSheet.appendRow(['اسم العميل', 'رقم الهاتف', 'المنطقة']);
-        customersSheet.getRange(1, 1, 1, customersSheet.getLastColumn()).setFontWeight("bold").setBackground("#d9ead3");
-      }
-      if (data.customers && data.customers.length > 0) {
-        if (customersSheet.getLastRow() > 1) {
-          customersSheet.getRange(2, 1, customersSheet.getLastRow() - 1, customersSheet.getLastColumn()).clearContent();
-        }
-        var currRows = data.customers.map(function(c) {
-          return [c.name, c.phone, c.area];
-        });
-        customersSheet.getRange(2, 1, currRows.length, currRows[0].length).setValues(currRows);
-      }
-
-      // 5. المنتجات
-      var productsSheet = ss.getSheetByName('المنتجات');
-      if (!productsSheet) {
-        productsSheet = ss.insertSheet('المنتجات');
-        productsSheet.appendRow(['الصنف', 'السعر', 'الأوزان المتاحة']);
-        productsSheet.getRange(1, 1, 1, productsSheet.getLastColumn()).setFontWeight("bold").setBackground("#cfe2f3");
-      }
-      if (data.products && data.products.length > 0) {
-        if (productsSheet.getLastRow() > 1) {
-          productsSheet.getRange(2, 1, productsSheet.getLastRow() - 1, productsSheet.getLastColumn()).clearContent();
-        }
-        var pRows = data.products.map(function(p) {
-          return [p.name, p.purchasingPrice, p.count];
-        });
-        productsSheet.getRange(2, 1, pRows.length, pRows[0].length).setValues(pRows);
-      }
-      
-      // 6. الملخص
-      var summarySheet = ss.getSheetByName('الملخص');
-      if (!summarySheet) {
-        summarySheet = ss.insertSheet('الملخص');
-        summarySheet.appendRow(['تاريخ المزامنة', 'إجمالي المبيعات', 'المنصرف والمصروفات', 'صافي الأرباح']);
-        summarySheet.getRange(1, 1, 1, summarySheet.getLastColumn()).setFontWeight("bold").setBackground("#d9ead3");
-      }
-      
-      if (data.metadata) {
-        if (summarySheet.getLastRow() > 1) {
-           summarySheet.getRange(2, 1, summarySheet.getLastRow() - 1, summarySheet.getLastColumn()).clearContent();
-        }
-        summarySheet.appendRow([data.metadata.syncedAt, data.metadata.totalSales, data.metadata.totalExpenses, data.metadata.netProfit]);
-      }
-      
-      return ContentService.createTextOutput(JSON.stringify({"status": "success"})).setMimeType(ContentService.MimeType.JSON);
-    }
-    
-    return ContentService.createTextOutput(JSON.stringify({"status": "ignored"})).setMimeType(ContentService.MimeType.JSON);
-    
-  } catch(error) {
-    return ContentService.createTextOutput(JSON.stringify({"error": error.toString()})).setMimeType(ContentService.MimeType.JSON);
-  }
-}`;
-                            navigator.clipboard.writeText(scriptCode);
-                            setScriptCopied(true);
-                            setTimeout(() => setScriptCopied(false), 2000);
-                          }}
-                          className="absolute right-2 top-2 bg-slate-700 hover:bg-slate-600 text-slate-200 p-1.5 rounded-md transition-colors cursor-pointer z-10 flex items-center justify-center"
-                          title="نسخ الكود"
-                        >
-                          {scriptCopied ? <Check className="h-4 w-4 text-emerald-400" /> : <Copy className="h-4 w-4" />}
-                        </button>
-                        <pre className="bg-[#1A365D] text-white border-transparent text-emerald-100 p-3 pt-9 rounded-lg text-left text-[10px] sm:text-xs font-mono overflow-x-auto whitespace-pre-wrap user-select-all" dir="ltr">
-{`function doPost(e) {
-  try {
-    var ss = SpreadsheetApp.getActiveSpreadsheet();
-    var data = JSON.parse(e.postData.contents);
-    
-    if (data.type === 'تقرير_كامل') {
-      
-      // 1. الفواتير
-      var invoicesSheet = ss.getSheetByName('الفواتير');
-      if (!invoicesSheet) {
-        invoicesSheet = ss.insertSheet('الفواتير');
-        invoicesSheet.appendRow(['التاريخ', 'رقم الفاتورة', 'العميل', 'المنطقة', 'إجمالي الفاتورة', 'الملاحظات']);
-        invoicesSheet.getRange(1, 1, 1, invoicesSheet.getLastColumn()).setFontWeight("bold").setBackground("#e0e0e0");
-      }
-      if (data.invoices && data.invoices.length > 0) {
-        if (invoicesSheet.getLastRow() > 1) {
-          invoicesSheet.getRange(2, 1, invoicesSheet.getLastRow() - 1, invoicesSheet.getLastColumn()).clearContent();
-        }
-        var invoiceRows = data.invoices.map(function(inv) {
-          return [inv.date, inv.invNum, inv.customerName, inv.area, inv.total, inv.notes || ''];
-        });
-        invoicesSheet.getRange(2, 1, invoiceRows.length, invoiceRows[0].length).setValues(invoiceRows);
-      }
-      
-      // 2. الماليات
-      var expensesSheet = ss.getSheetByName('الماليات');
-      if (!expensesSheet) {
-        expensesSheet = ss.insertSheet('الماليات');
-        expensesSheet.appendRow(['التاريخ', 'الفئة', 'المبلغ', 'البيان']);
-        expensesSheet.getRange(1, 1, 1, expensesSheet.getLastColumn()).setFontWeight("bold").setBackground("#e0e0e0");
-      }
-      if (data.expenses && data.expenses.length > 0) {
-        if (expensesSheet.getLastRow() > 1) {
-          expensesSheet.getRange(2, 1, expensesSheet.getLastRow() - 1, expensesSheet.getLastColumn()).clearContent();
-        }
-        var expenseRows = data.expenses.map(function(exp) {
-          return [exp.date, exp.category, exp.amount, exp.description || ''];
-        });
-        expensesSheet.getRange(2, 1, expenseRows.length, expenseRows[0].length).setValues(expenseRows);
-      }
-
-      // 3. المشاوير
-      var tripsSheet = ss.getSheetByName('المشاوير');
-      if (!tripsSheet) {
-        tripsSheet = ss.insertSheet('المشاوير');
-        tripsSheet.appendRow(['التاريخ', 'المنطقة', 'الأجرة', 'الحالة']);
-        tripsSheet.getRange(1, 1, 1, tripsSheet.getLastColumn()).setFontWeight("bold").setBackground("#ffe599");
-      }
-      if (data.trips && data.trips.length > 0) {
-        if (tripsSheet.getLastRow() > 1) {
-          tripsSheet.getRange(2, 1, tripsSheet.getLastRow() - 1, tripsSheet.getLastColumn()).clearContent();
-        }
-        var tripRows = data.trips.map(function(t) {
-          return [t.date, t.area, t.price, t.status];
-        });
-        tripsSheet.getRange(2, 1, tripRows.length, tripRows[0].length).setValues(tripRows);
-      }
-
-      // 4. العملاء
-      var customersSheet = ss.getSheetByName('العملاء');
-      if (!customersSheet) {
-        customersSheet = ss.insertSheet('العملاء');
-        customersSheet.appendRow(['اسم العميل', 'رقم الهاتف', 'المنطقة']);
-        customersSheet.getRange(1, 1, 1, customersSheet.getLastColumn()).setFontWeight("bold").setBackground("#d9ead3");
-      }
-      if (data.customers && data.customers.length > 0) {
-        if (customersSheet.getLastRow() > 1) {
-          customersSheet.getRange(2, 1, customersSheet.getLastRow() - 1, customersSheet.getLastColumn()).clearContent();
-        }
-        var currRows = data.customers.map(function(c) {
-          return [c.name, c.phone, c.area];
-        });
-        customersSheet.getRange(2, 1, currRows.length, currRows[0].length).setValues(currRows);
-      }
-
-      // 5. المنتجات
-      var productsSheet = ss.getSheetByName('المنتجات');
-      if (!productsSheet) {
-        productsSheet = ss.insertSheet('المنتجات');
-        productsSheet.appendRow(['الصنف', 'السعر', 'الأوزان المتاحة']);
-        productsSheet.getRange(1, 1, 1, productsSheet.getLastColumn()).setFontWeight("bold").setBackground("#cfe2f3");
-      }
-      if (data.products && data.products.length > 0) {
-        if (productsSheet.getLastRow() > 1) {
-          productsSheet.getRange(2, 1, productsSheet.getLastRow() - 1, productsSheet.getLastColumn()).clearContent();
-        }
-        var pRows = data.products.map(function(p) {
-          return [p.name, p.purchasingPrice, p.count];
-        });
-        productsSheet.getRange(2, 1, pRows.length, pRows[0].length).setValues(pRows);
-      }
-      
-      // 6. الملخص
-      var summarySheet = ss.getSheetByName('الملخص');
-      if (!summarySheet) {
-        summarySheet = ss.insertSheet('الملخص');
-        summarySheet.appendRow(['تاريخ المزامنة', 'إجمالي المبيعات', 'المنصرف والمصروفات', 'صافي الأرباح']);
-        summarySheet.getRange(1, 1, 1, summarySheet.getLastColumn()).setFontWeight("bold").setBackground("#d9ead3");
-      }
-      
-      if (data.metadata) {
-        if (summarySheet.getLastRow() > 1) {
-           summarySheet.getRange(2, 1, summarySheet.getLastRow() - 1, summarySheet.getLastColumn()).clearContent();
-        }
-        summarySheet.appendRow([data.metadata.syncedAt, data.metadata.totalSales, data.metadata.totalExpenses, data.metadata.netProfit]);
-      }
-      
-      return ContentService.createTextOutput(JSON.stringify({"status": "success"})).setMimeType(ContentService.MimeType.JSON);
-    }
-    
-    return ContentService.createTextOutput(JSON.stringify({"status": "ignored"})).setMimeType(ContentService.MimeType.JSON);
-    
-  } catch(error) {
-    return ContentService.createTextOutput(JSON.stringify({"error": error.toString()})).setMimeType(ContentService.MimeType.JSON);
-  }
-}`}
-                        </pre>
-                      </div>
-                      <p className="mt-2 text-[#DD6B20] font-bold">ملاحظة هامة: بعد وضع الكود اضغط Deploy ثم New Deployment كـ Web App واجعل الخيار Anyone (أي شخص) وضع الرابط بالأعلى.</p>
-                    </div>
-                  </details>
-                </div>
-
-                <div className="flex flex-col gap-2 mt-2">
-                  {saveSuccessMsg && (
-                    <div className="bg-emerald-50 text-[#DD6B20] text-[11px] font-bold py-1.5 px-3 rounded-lg flex items-center gap-1.5 animate-in fade-in">
-                      <Check className="h-4 w-4" />
-                      {saveSuccessMsg}
-                    </div>
-                  )}
-                  <button
-                    type="button"
-                    onClick={handleSaveSettings}
-                    className="w-full bg-emerald-100 border border-emerald-200 text-emerald-800 rounded-lg py-2 text-xs font-bold hover:bg-emerald-200 active:scale-95 transition-all cursor-pointer"
-                  >
-                    حفظ التعديلات
-                  </button>
-
-                  <div className="border-t border-slate-200 mt-4 pt-4 flex flex-col gap-2">
-                    <button
-                      type="button"
-                      onClick={handleBulkSyncToGoogleSheets}
-                      disabled={syncStatus === 'syncing' || !googleUrl}
-                      className="w-full bg-[#1A365D] text-white border-transparent border border-indigo-700 text-white rounded-lg py-2.5 text-xs font-bold hover:bg-[#1A365D] text-white border-transparent active:scale-95 transition-all cursor-pointer disabled:opacity-50 flex items-center justify-center gap-2"
-                    >
-                      <Send className="h-4 w-4" />
-                      {syncStatus === 'syncing' ? 'جاري الترحيل...' : 'ترحيل وصب الفواتير والماليات للسحابة'}
-                    </button>
-                    {syncMsg && (
-                      <div className={`text-[11px] font-bold py-1.5 px-3 rounded-lg text-center ${
-                        syncStatus === 'fail' ? 'bg-rose-50 text-rose-700' : 'bg-sky-50 text-sky-700'
-                      }`}>
-                        {syncMsg}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* TAB 4: Database operations (صيانة واستعادة قاعدة البيانات) */}
-        {subTab === 'db_ops' && (
-          <div className="bg-[#FFFFFF] p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col gap-4 animate-fade-in">
-            <h3 className="font-bold text-[#DD6B20] text-base flex items-center gap-1.5 border-b border-slate-100 pb-2">
-              <Database className="h-5 w-5" />
-              صيانة واسترجاع قاعدة البيانات المحليّة
-            </h3>
-
-            <div className="grid grid-cols-2 gap-3">
-              <button
-                onClick={async () => { if (await confirmDialog('تنبيه: هل أنت متأكد من حذف كافة البيانات والمبيعات وتهيئة النظام مجدداً بالبيانات التجريبية؟')) {
-                    onResetDatabase(true);
-                    alert('تم إعادة ضبط النظام ببيانات المصنع الافتراضية بنجاح!');
-                  }
-                }}
-                className="bg-[#F7FAFC] hover:bg-slate-200 active:scale-95 border border-slate-300 text-[#1A365D] p-3.5 rounded-xl text-center text-xs font-bold transition-all cursor-pointer flex flex-col items-center justify-center gap-1.5"
-              >
-                <RefreshCw className="h-5 w-5 text-[#2B6CB0]" />
-                <span>تحميل البيانات التجريبية</span>
-              </button>
-
-              <button
-                onClick={async () => { if (await confirmDialog('تمويه خطير: سيقوم هذا الخيار بمسح كامل العملاء، الفواتير، المصرفات والأصناف كلياً. هل تريد المتابعة؟')) {
-                    onResetDatabase(false);
-                    alert('تم مسح وإفراغ قاعدة البيانات بالكامل بنجاح!');
-                  }
-                }}
-                className="bg-rose-50 hover:bg-rose-100 active:scale-95 border border-rose-200 text-rose-700 p-3.5 rounded-xl text-center text-xs font-bold transition-all cursor-pointer flex flex-col items-center justify-center gap-1.5"
-              >
-                <Database className="h-5 w-5 text-rose-500" />
-                <span>تهيئة ومسح شامل للبيانات</span>
-              </button>
-            </div>
           </div>
         )}
 

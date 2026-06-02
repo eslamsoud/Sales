@@ -141,18 +141,26 @@ export default function AuthGate({ usersList, customersList = [], onUpdateUsers,
       return;
     }
 
-    // 3. Prevent any other accounts from logging in if system has no users registered at all
-    const isSystemEmpty = usersList.length === 0;
-    if (isSystemEmpty) {
-      setErrorMsg('النظام جديد: يجب تسجيل الدخول برقم هاتف وباسورد المالك الأساسي لتهيئة النظام.');
-      return;
-    }
-
-    // 4. Normal login flow (Only registered accounts with passwords)
     let found = usersList.find(u => u.phone === trimmedPhone);
 
     if (!found) {
-      setErrorMsg('رقم الهاتف غير مسجل في النظام كحساب نشط أو موظف.');
+      // التسجيل التلقائي كحساب قيد المراجعة بدلاً من الرفض
+      const enteredPass = password.trim();
+      const newUser: UserAuth = {
+        phone: trimmedPhone,
+        name: `مندوب جديد (${trimmedPhone})`,
+        role: 'employee',
+        status: 'pending',
+        permittedTabs: [],
+        password: enteredPass,
+        createdAt: new Date().toISOString()
+      };
+
+      const updatedList = [...usersList, newUser];
+      onUpdateUsers(updatedList);
+      localStorage.setItem('authed_user_phone', trimmedPhone);
+      setPendingUser(newUser);
+      setSuccessMsg('تم تسجيل حسابك بنجاح وهو الآن بانتظار موافقة الإدارة.');
       return;
     }
 

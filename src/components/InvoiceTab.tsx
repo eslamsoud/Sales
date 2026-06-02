@@ -6,7 +6,7 @@ import { confirmDialog } from '../utils/confirm';
 
 import React, { useState, useMemo, useEffect } from 'react';
 import { Customer, Product, ProductWeight, Invoice, InvoiceItem, FactoryLoad, getProductWeightsFallback, formatNum } from '../types';
-import { Receipt, Plus, Trash2, ArrowRight, Save, User, MapPin, Percent, HelpCircle, Package, AlertTriangle, Scale, Eye, Search, Check, Loader2 } from 'lucide-react';
+import { Receipt, Plus, Trash2, ArrowRight, Save, User, MapPin, Percent, HelpCircle, Package, AlertTriangle, Scale, Eye, Search, Check, Loader2, Scan, Bell } from 'lucide-react';
 import SecurePhoneDisplay from './SecurePhoneDisplay';
 
 interface InvoiceTabProps {
@@ -79,6 +79,10 @@ export default function InvoiceTab({
   const [currentWeightId, setCurrentWeightId] = useState('');
   const [currentQty, setCurrentQty] = useState('');
   const [currentDiscount, setCurrentDiscount] = useState(''); // defaulting to 0 or manual
+  const [currentItemType, setCurrentItemType] = useState<'sale' | 'bonus' | 'return'>('sale');
+
+  // Scanner State
+  const [showScanner, setShowScanner] = useState(false);
 
   // Added items on current working bill
   const [billItems, setBillItems] = useState<InvoiceItem[]>(() => {
@@ -141,6 +145,53 @@ export default function InvoiceTab({
   }, [customPaidAmount]);
 
   // Form states are persisted cleanly to client localStorage
+
+  // Barcode Scanner logic
+  const handleBarcodeScanned = (decodedText: string) => {
+    // Find product by barcode or ID (Add barcode property to your Product type in types.ts later if needed)
+    const prod = products.find(p => (p as any).barcode === decodedText || p.id === decodedText);
+    if (prod) {
+      setCurrentProductId(prod.id);
+      const weights = getProductWeightsFallback(prod);
+      if (weights.length > 0) setCurrentWeightId(weights[0].id);
+      setTimeout(() => document.getElementById('qty-input')?.focus(), 300);
+    } else {
+      alert('لم يتم العثور على منتج مسجل يطابق هذا الباركود: ' + decodedText);
+    }
+  };
+
+  useEffect(() => {
+    let html5QrcodeScanner: any = null;
+    if (showScanner) {
+      const initScanner = () => {
+        html5QrcodeScanner = new (window as any).Html5QrcodeScanner(
+          "qr-reader",
+          { fps: 10, qrbox: { width: 250, height: 250 } },
+          false
+        );
+        html5QrcodeScanner.render((decodedText: string) => {
+          handleBarcodeScanned(decodedText);
+          html5QrcodeScanner.clear();
+          setShowScanner(false);
+        }, undefined);
+      };
+
+      if (!(window as any).Html5QrcodeScanner) {
+        const script = document.createElement('script');
+        script.src = 'https://unpkg.com/html5-qrcode';
+        script.async = true;
+        script.onload = initScanner;
+        document.body.appendChild(script);
+      } else {
+        initScanner();
+      }
+    }
+    return () => {
+      if (html5QrcodeScanner) {
+        try { html5QrcodeScanner.clear(); } catch (e) {}
+      }
+    };
+  }, [showScanner]);
 
   // Calculate real-time car stock per product weight size combination
   const weightStocks = useMemo(() => {
@@ -265,7 +316,7 @@ export default function InvoiceTab({
     // Check stock bounds in car balances
     const stockKey = `${currentProductId}_${currentWeightId}`;
     const available = weightStocks[stockKey]?.remaining ?? 0;
-    if (qty > available) {
+    if (currentItemType !== 'return' && qty > available) {
       alert(`الطلب (${qtyInput}) أكبر من الرصيد داخل حمولة السيارة (${Math.floor(available / multiplier)})!`);
       return;
     }
@@ -273,16 +324,24 @@ export default function InvoiceTab({
     // Add item (removed merging to avoid confusion where users think items are deleted on same-product addition)
     setBillItems(prevList => {
       const origPrice = weight.retailPricePerUnit;
-      const finalPr = origPrice * (1 - discountPerc / 100);
+      let finalPr = origPrice * (1 - discountPerc / 100);
+      let finalQty = qty;
 
-      const newItem: InvoiceItem = {
+      if (currentItemType === 'bonus') {
+        finalPr = 0;
+      } else if (currentItemType === 'return') {
+        finalQty = -Math.abs(qty); // ensure negative for returns
+      }
+
+      const newItem: any = { // Using extended object
         productId: currentProductId,
         weightId: currentWeightId,
-        quantity: qty,
+        quantity: finalQty,
         originalPrice: origPrice,
         factoryPrice: weight.factoryPricePerUnit,
-        discountPercent: discountPerc,
-        finalPrice: Number(finalPr.toFixed(3))
+        discountPercent: currentItemType === 'bonus' ? 100 : discountPerc,
+        finalPrice: Number(finalPr.toFixed(3)),
+        itemType: currentItemType
       };
       
       return [...prevList, newItem];
@@ -293,6 +352,7 @@ export default function InvoiceTab({
     setCurrentWeightId('');
     setCurrentQty('');
     setCurrentDiscount('0');
+    setCurrentItemType('sale');
   };
 
   const handleRemoveDraftItem = (index: number) => {
@@ -312,7 +372,7 @@ export default function InvoiceTab({
     });
 
     const extraDiscount = extraDiscountApplied ? (parseFloat(extraDiscountAmount) || 0) : 0;
-    after = Math.max(0, after - extraDiscount);
+    after = after - extraDiscount; // removed Math.max to support negative invoices for returns!
 
     return {
       before,
@@ -338,6 +398,27 @@ export default function InvoiceTab({
     if (billItems.length === 0) {
       alert('الرجاء إضافة صنف واحد على الأقل للمبيعات.');
       return;
+    }
+
+    // Credit Limit Check (سقف الائتمان)
+    const currentCustomerDebt = invoices
+      .filter(i => i.customerId === selectedCustomerId)
+      .reduce((sum, inv) => sum + (inv.totalAfterDiscount - (inv.paidAmount ?? inv.totalAfterDiscount)), 0);
+    
+    const paidValueForCheck = customPaidAmount !== '' ? parseFloat(customPaidAmount) : totals.after;
+    const newDebt = totals.after - paidValueForCheck;
+    const totalProjectedDebt = currentCustomerDebt + newDebt;
+
+    const custObj = customers.find(c => c.id === selectedCustomerId);
+    const creditLimit = (custObj as any)?.creditLimit || 0;
+
+    if (creditLimit > 0 && totalProjectedDebt > creditLimit) {
+       const overrideCode = prompt(`🛑 تحذير مالي! العميل سيتخطى الحد الائتماني المسموح به (${formatNum(creditLimit)} ج.م).\nإجمالي مديونيته ستصبح ${formatNum(totalProjectedDebt)} ج.م.\n\nيرجى إدخال رمز مرور المالك للاستثناء وإصدار الفاتورة:`);
+       const ownerPasscode = localStorage.getItem('owner_passcode_sys') || '1987';
+       if (overrideCode !== ownerPasscode) {
+           alert('رمز الموافقة غير صحيح. تم إلغاء حفظ الفاتورة لحماية سقف الائتمان.');
+           return;
+       }
     }
 
     setIsSaving(true);
@@ -513,9 +594,12 @@ export default function InvoiceTab({
       const weight = ws.find(w => w.id === item.weightId) || ws[0];
       const prodName = prod ? prod.name : 'منتج غير معروف';
       const sizeLabel = weight ? weight.size : '';
+      const itemType = (item as any).itemType || 'sale';
+      const typeLabel = itemType === 'return' ? ' [مرتجع]' : itemType === 'bonus' ? ' [بونص]' : '';
 
       const multiplier = weight ? (weight.unitsPerCarton || 12) : 12;
-      const cartonsCount = Number((item.quantity / multiplier).toFixed(3));
+      const absQty = Math.abs(item.quantity);
+      const cartonsCount = Number((absQty / multiplier).toFixed(3));
       const cartonOriginalPrice = item.originalPrice * multiplier;
       const cartonFinalPrice = item.finalPrice * multiplier;
 
@@ -531,13 +615,13 @@ export default function InvoiceTab({
       ctx.lineWidth = 1;
       ctx.strokeRect(35, y - 10, canvas.width - 70, rowHeight);
 
-      ctx.fillStyle = '#b91c1c';
+      ctx.fillStyle = itemType === 'return' ? '#dc2626' : itemType === 'bonus' ? '#059669' : '#b91c1c';
       ctx.font = 'bold 12px system-ui, sans-serif';
       ctx.textAlign = 'right';
       // Truncate long names
       const maxNameLen = 18;
       const truncName = prodName.length > maxNameLen ? prodName.substring(0, maxNameLen) + '..' : prodName;
-      ctx.fillText(`${truncName} (${sizeLabel})`, canvas.width - 55, y + 16);
+      ctx.fillText(`${truncName} (${sizeLabel})${typeLabel}`, canvas.width - 55, y + 16);
 
       ctx.textAlign = 'center';
       ctx.fillStyle = '#0f172a';
@@ -545,17 +629,17 @@ export default function InvoiceTab({
 
       ctx.fillStyle = '#475569';
       ctx.font = 'bold 12px system-ui, sans-serif';
-      ctx.fillText(`${cartonOriginalPrice.toFixed(1)}ج`, canvas.width - 310, y + 16);
+      ctx.fillText(`ج ${cartonOriginalPrice.toFixed(1)}`, canvas.width - 310, y + 16);
       
       ctx.fillStyle = '#ea580c';
       ctx.font = 'bold 12px system-ui, sans-serif';
-      ctx.fillText(`${item.discountPercent}%`, canvas.width - 400, y + 16);
+      ctx.fillText(`%${item.discountPercent}`, canvas.width - 400, y + 16);
 
       ctx.textAlign = 'left';
       ctx.fillStyle = '#0f172a';
       ctx.font = 'extrabold 12px system-ui, sans-serif';
       const singleItemTotal = item.finalPrice * item.quantity;
-      ctx.fillText(`${singleItemTotal.toFixed(1)}ج`, 60, y + 16);
+      ctx.fillText(`ج ${singleItemTotal.toFixed(1)}`, 60, y + 16);
 
       y += rowHeight;
     });
@@ -588,32 +672,25 @@ export default function InvoiceTab({
       summaryY += 25;
     };
 
-    drawLine('الإجمالي قبل الخصم:', `${formatNum(inv.totalBeforeDiscount)} ج.م`, '#475569');
-    drawLine('إجمالي الخصومات:', `-${formatNum(inv.totalBeforeDiscount - inv.totalAfterDiscount)} ج.م`, '#dc2626');
-    drawLine('الصافي المطلوب:', `${formatNum(inv.totalAfterDiscount)} ج.م`, '#1e40af', true);
+    drawLine('الإجمالي قبل الخصم:', `ج.م ${formatNum(inv.totalBeforeDiscount)}`, '#475569');
+    drawLine('إجمالي الخصومات:', `ج.م ${formatNum(inv.totalBeforeDiscount - inv.totalAfterDiscount)}-`, '#dc2626');
+    drawLine('الصافي المطلوب:', `ج.م ${formatNum(inv.totalAfterDiscount)}`, '#1e40af', true);
 
     if (isPartialOrPaid) {
       const prev = inv._previousPaid || 0;
       const currentPay = inv._debtPaid ? (inv.totalAfterDiscount - prev) : inv._partialPayment;
       const remainingNow = inv.totalAfterDiscount - (prev + currentPay);
 
-      drawLine('المسدد من قبل:', `${formatNum(prev)} ج.m`, '#475569');
-      drawLine('المسدد الآن:', `${formatNum(currentPay)} ج.م`, '#16a34a', true);
-      drawLine(inv._debtPaid ? 'حالة الفاتورة:' : 'المتبقي الحالي:', inv._debtPaid ? 'خالصة ✔️' : `${formatNum(remainingNow)} ج.م`, inv._debtPaid ? '#10b981' : '#ea580c', true);
+      drawLine('المسدد من قبل:', `ج.م ${formatNum(prev)}`, '#475569');
+      drawLine('المسدد الآن:', `ج.م ${formatNum(currentPay)}`, '#16a34a', true);
+      drawLine(inv._debtPaid ? 'حالة الفاتورة:' : 'المتبقي الحالي:', inv._debtPaid ? 'خالصة ✔️' : `ج.م ${formatNum(remainingNow)}`, inv._debtPaid ? '#10b981' : '#ea580c', true);
     } else {
-      drawLine('المسدد:', `${formatNum(inv.paidAmount)} ج.م`, '#16a34a', true);
-      drawLine('المتبقي:', `${formatNum(inv.totalAfterDiscount - inv.paidAmount)} ج.م`, '#ea580c', true);
+      drawLine('المسدد:', `ج.م ${formatNum(inv.paidAmount)}`, '#16a34a', true);
+      drawLine('المتبقي:', `ج.م ${formatNum(inv.totalAfterDiscount - inv.paidAmount)}`, '#ea580c', true);
     }
 
     // Footer
     y = summaryY + 15;
-
-    ctx.strokeStyle = '#cbd5e1';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(35, y);
-    ctx.lineTo(canvas.width - 35, y);
-    ctx.stroke();
 
     y += 24;
     ctx.fillStyle = '#1e3a8a';
@@ -646,7 +723,7 @@ export default function InvoiceTab({
       return canvas.toDataURL('image/png');
     }
 
-    if (shareDirectly && navigator.share) {
+    if (shareDirectly && typeof navigator.share === 'function') {
       canvas.toBlob((blob) => {
         if (blob) {
           const file = new File([blob], `فاتورة_مبيعات_${customerObj.name}_${inv.invoiceNumber}.png`, { type: 'image/png' });
@@ -683,18 +760,22 @@ export default function InvoiceTab({
       const weight = ws.find(w => w.id === item.weightId) || ws[0];
       const prodName = prod ? prod.name : 'صنف';
       const sizeStr = weight ? weight.size : '';
+      const itemType = (item as any).itemType || 'sale';
+      const typeLabel = itemType === 'return' ? ' 🔄 [مرتجع]' : itemType === 'bonus' ? ' 🎁 [بونص]' : '';
       const totalItem = item.finalPrice * item.quantity;
       
       const multiplier = weight ? (weight.unitsPerCarton || 12) : 12;
-      const cartonsCount = Number((item.quantity / multiplier).toFixed(3));
+      const absQty = Math.abs(item.quantity);
+      const cartonsCount = Number((absQty / multiplier).toFixed(3));
       const cartonOriginalPrice = item.originalPrice * multiplier;
+      const accUnit = prod?.accountingUnit || 'كرتونة';
 
-      msg += `▪️ ${prodName} (${sizeStr})\n`;
-      msg += `   الكمية: ${cartonsCount} كرتونة\n`;
+      msg += `▪️ ${prodName} (${sizeStr})${typeLabel}\n`;
+      msg += `   الكمية: ${cartonsCount} ${accUnit}\n`;
       if (item.discountPercent > 0) {
-        msg += `   السعر: ${cartonOriginalPrice} ج.م/كرتونة (خصم ${item.discountPercent}%)\n`;
+        msg += `   السعر: ${cartonOriginalPrice} ج.م/${accUnit} (خصم ${item.discountPercent}%)\n`;
       } else {
-        msg += `   السعر: ${cartonOriginalPrice} ج.م/كرتونة\n`;
+        msg += `   السعر: ${cartonOriginalPrice} ج.م/${accUnit}\n`;
       }
       msg += `   الصافي: *${formatNum(totalItem)} ج.م*\n`;
     });
@@ -805,6 +886,20 @@ export default function InvoiceTab({
                   </button>
                 </>
               )}
+
+              {!justSavedInvoice._isPreview && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const text = encodeURIComponent(`🚨 إشعار مبيعات جديد:\n\nتم إصدار فاتورة رقم *${justSavedInvoice.invoiceNumber}*\nللعميل: *${justSavedInvoice.customer?.name || 'مجهول'}*\nالقيمة الإجمالية: *${formatNum(justSavedInvoice.totalAfterDiscount)} ج.م*\nالمحصل: *${formatNum(justSavedInvoice.paidAmount)} ج.م*`);
+                      window.open(`https://wa.me/2001228466613?text=${text}`, '_blank');
+                    }}
+                    className="w-full bg-[#2B6CB0] text-white hover:bg-[#1A365D] text-white font-bold py-2.5 rounded-xl text-xs transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-sm active:scale-95"
+                  >
+                    <Bell className="h-4 w-4" />
+                    إرسال إشعار للمدير (عبر واتساب)
+                  </button>
+              )}
             </div>
           );
         })()}
@@ -869,9 +964,9 @@ export default function InvoiceTab({
                   <span>رقم الهاتف:</span>
                   <SecurePhoneDisplay phone={selectedCustomer.phone} enableWhatsApp={false} className="inline font-bold" />
                 </div>
-                {selectedCustomer.locationUrl && (
+                {selectedCustomer.locationLink && (
                   <a
-                    href={selectedCustomer.locationUrl}
+                    href={selectedCustomer.locationLink}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="text-xs text-[#1A365D] font-bold hover:underline flex items-center gap-1 bg-[#FFFFFF] p-1 px-2 rounded border border-indigo-200"
@@ -923,7 +1018,12 @@ export default function InvoiceTab({
 
           <div className="grid grid-cols-1 gap-3.5">
             <div>
-              <label className="block text-xs font-bold text-[#2B6CB0] mb-1">المنتج</label>
+              <label className="block text-xs font-bold text-[#2B6CB0] mb-1 flex justify-between items-center">
+                <span>المنتج</span>
+                <button type="button" onClick={() => setShowScanner(true)} className="text-indigo-600 hover:text-indigo-800 flex items-center gap-1 bg-indigo-50 hover:bg-indigo-100 px-2 py-0.5 rounded text-[10px] transition-colors cursor-pointer shadow-sm">
+                  <Scan className="h-3 w-3" /> مسح باركود 📷
+                </button>
+              </label>
               <select
                 required
                 value={currentProductId}
@@ -1005,6 +1105,7 @@ export default function InvoiceTab({
                     required
                     value={currentDiscount}
                     onChange={(e) => setCurrentDiscount(e.target.value)}
+                    disabled={currentItemType !== 'sale'}
                     className="w-full bg-[#FFFFFF] border border-slate-200 rounded-lg p-2 text-xs font-bold focus:outline-none text-[#1A365D]"
                   >
                     <option value="0">بدون خصم (0%)</option>
@@ -1012,6 +1113,27 @@ export default function InvoiceTab({
                     <option value="1.25">خصم (1.25%)</option>
                     <option value="1.5">خصم (1.5%)</option>
                   </select>
+                </div>
+
+                <div className="col-span-1 mt-1 sm:col-span-2">
+                  <label className="block text-xs font-bold text-[#2B6CB0] mb-1">نوع العملية</label>
+                  <div className="flex bg-[#FFFFFF] p-1 rounded-lg border border-slate-200 items-center">
+                    <button
+                      type="button"
+                      onClick={() => { setCurrentItemType('sale'); setCurrentDiscount('0'); }}
+                      className={`flex-1 py-1.5 px-2 rounded-md font-bold text-[11px] transition-all cursor-pointer ${currentItemType === 'sale' ? 'bg-[#1A365D] text-white shadow-sm' : 'text-slate-500 hover:bg-slate-50'}`}
+                    >بيع بضاعة</button>
+                    <button
+                      type="button"
+                      onClick={() => { setCurrentItemType('bonus'); setCurrentDiscount('100'); }}
+                      className={`flex-1 py-1.5 px-2 rounded-md font-bold text-[11px] transition-all cursor-pointer ${currentItemType === 'bonus' ? 'bg-emerald-600 text-white shadow-sm' : 'text-slate-500 hover:bg-slate-50'}`}
+                    >عينة مجانية 🎁</button>
+                    <button
+                      type="button"
+                      onClick={() => { setCurrentItemType('return'); setCurrentDiscount('0'); }}
+                      className={`flex-1 py-1.5 px-2 rounded-md font-bold text-[11px] transition-all cursor-pointer ${currentItemType === 'return' ? 'bg-rose-600 text-white shadow-sm' : 'text-slate-500 hover:bg-slate-50'}`}
+                    >استلام مرتجع 🔄</button>
+                  </div>
                 </div>
               </div>
             )}
@@ -1032,6 +1154,23 @@ export default function InvoiceTab({
           <h3 className="font-bold text-[#1A365D] text-sm border-b border-slate-100 pb-2 flex items-center justify-between">
             <span>محتويات الفاتورة الحالية ({billItems.length})</span>
             {totals.after > 0 && <span className="text-xs bg-emerald-100 text-emerald-800 font-extrabold py-0.5 px-2 rounded-lg">قيد التحضير</span>}
+            <div className="flex items-center gap-2">
+              {billItems.length > 0 && (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    if (await confirmDialog('هل أنت متأكد من تفريغ كافة الأصناف المضافة للفاتورة الحالية؟')) {
+                      setBillItems([]);
+                    }
+                  }}
+                  className="text-[10px] bg-rose-50 text-rose-600 hover:bg-rose-100 hover:text-rose-700 px-2 py-1 rounded-lg font-bold flex items-center gap-1 transition-colors cursor-pointer shadow-sm active:scale-95"
+                >
+                  <Trash2 className="h-3 w-3" />
+                  تفريغ الفاتورة
+                </button>
+              )}
+              {totals.after > 0 && <span className="text-xs bg-emerald-100 text-emerald-800 font-extrabold py-0.5 px-2 rounded-lg hidden sm:inline-block">قيد التحضير</span>}
+            </div>
           </h3>
 
           <div className="flex flex-col gap-2.5">
@@ -1043,21 +1182,26 @@ export default function InvoiceTab({
                 const weights = prod ? getProductWeightsFallback(prod) : [];
                 const weight = weights.find(w => w.id === item.weightId) || weights[0];
                 const itemTotal = item.finalPrice * item.quantity;
+                const itemType = (item as any).itemType || 'sale';
                 
                 const multiplier = weight ? (weight.unitsPerCarton || 12) : 12;
-                const cartonsCount = Number((item.quantity / multiplier).toFixed(3));
+                const absQty = Math.abs(item.quantity);
+                const cartonsCount = Number((absQty / multiplier).toFixed(3));
                 const cartonFinalPrice = item.finalPrice * multiplier;
+
+                const typeBadge = itemType === 'bonus' ? <span className="bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded text-[9px] font-black mr-1">بونص 🎁</span> :
+                                  itemType === 'return' ? <span className="bg-rose-100 text-rose-800 px-1.5 py-0.5 rounded text-[9px] font-black mr-1">مرتجع 🔄</span> : null;
 
                 return (
                   <div key={index} className="bg-[#F7FAFC] border border-slate-150 p-3 rounded-xl flex items-center justify-between gap-2.5">
                     <div className="flex flex-col gap-1 text-xs">
-                      <span className="font-black text-[#1A365D]">{prod ? prod.name : 'منتج غير معروف'} ({weight ? weight.size : 'حجم عادي'})</span>
+                      <span className="font-black text-[#1A365D] flex items-center gap-1">{prod ? prod.name : 'منتج غير معروف'} ({weight ? weight.size : 'حجم عادي'}) {typeBadge}</span>
                       <div className="flex items-center gap-2 text-[#2B6CB0] font-medium">
                         <span>الكمية: <strong className="text-[#1A365D] font-bold">{cartonsCount} كرتونة</strong></span>
                         <span>•</span>
                         <span>السعر بعد الخصم ({item.discountPercent}%): <strong className="text-[#1A365D] font-bold">{formatNum(cartonFinalPrice)}</strong> <span className="text-[10px] text-gray-400">للِكرتونة</span></span>
                         <span>•</span>
-                        <span>الصافي: <strong className="text-[#DD6B20] font-extrabold">{formatNum(itemTotal)} ج.م</strong></span>
+                        <span>الصافي: <strong className={itemTotal < 0 ? "text-rose-600 font-extrabold" : "text-[#DD6B20] font-extrabold"}>{formatNum(itemTotal)} ج.م</strong></span>
                       </div>
                     </div>
                     
@@ -1103,9 +1247,9 @@ export default function InvoiceTab({
                   </div>
                 </div>
                 <div className="flex justify-between text-amber-600 font-bold items-baseline pb-1">
-                   <span>المتبقي:</span>
+                   <span>المتبقي للإجل:</span>
                    <span className="text-sm font-extrabold">
-                    {formatNum(Math.max(0, totals.after - (customPaidAmount !== '' ? parseFloat(customPaidAmount) || 0 : totals.after)))} ج.م
+                    {formatNum(totals.after - (customPaidAmount !== '' ? parseFloat(customPaidAmount) || 0 : totals.after))} ج.م
                   </span>
                 </div>
               </div>
@@ -1502,7 +1646,7 @@ export default function InvoiceTab({
                   <button
                     type="button"
                     onClick={() => {
-                      if (navigator.share) {
+                      if (typeof navigator.share === 'function') {
                         exportInvoiceAsPNG(justSavedInvoice, true);
                       } else {
                         alert('المشاركة المباشرة غير مدعومة في هذا المتصفح، يرجى استخدام التنزيل.');
@@ -1537,6 +1681,27 @@ export default function InvoiceTab({
             >
               {justSavedInvoice._isPreview ? 'العودة للتعديل' : 'إغلاق ومتابعة العمل'}
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* Camera Barcode Scanner Modal */}
+      {showScanner && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-slate-900/80 backdrop-blur-sm animate-in fade-in">
+          <div className="bg-[#FFFFFF] rounded-2xl w-full max-w-sm overflow-hidden shadow-2xl flex flex-col">
+            <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-[#F7FAFC]">
+              <h3 className="font-bold text-[#1A365D] text-sm flex items-center gap-2"><Scan className="h-4 w-4 text-[#DD6B20]" /> ماسح الباركود بالكاميرا</h3>
+              <button 
+                onClick={() => setShowScanner(false)}
+                className="bg-slate-200 hover:bg-slate-300 text-[#1A365D] rounded-full h-7 w-7 flex items-center justify-center transition-colors cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="p-4">
+              <div id="qr-reader" className="w-full bg-slate-100 rounded-lg overflow-hidden min-h-[300px]"></div>
+              <p className="text-[10px] text-slate-500 text-center mt-3 font-bold leading-relaxed">وجه كاميرا الهاتف نحو باركود المنتج لتمسحه تلقائياً وتدرجه بالفاتورة.</p>
+            </div>
           </div>
         </div>
       )}

@@ -215,6 +215,9 @@ export default function FactoryTab({
   const [advanceAmount, setAdvanceAmount] = useState('');
   const [showAdvanceInput, setShowAdvanceInput] = useState(false);
 
+  const [loadSource, setLoadSource] = useState<'factory' | 'van_in' | 'van_out'>('factory');
+  const [transferDelegateName, setTransferDelegateName] = useState('');
+
   // Quantities recorded per-weight of the currently selected loadProductId
   // Record<weightId, { cartons: string, units: string }>
   const [loadWeightsQty, setLoadWeightsQty] = useState<Record<string, { cartons: string, units: string }>>({});
@@ -372,7 +375,7 @@ export default function FactoryTab({
     setWeightSize(w.size);
     setWeightCartonPrice(w.cartonPriceFromFactory.toString());
     setWeightUnitsPerCarton(w.unitsPerCarton.toString());
-    setWeightAddedValue(w.addedValuePerCarton?.toString() || w.addedValue?.toString() || '');
+    setWeightAddedValue((w as any).addedValuePerCarton?.toString() || w.addedValue?.toString() || '');
     setWeightRetailPrice(w.retailPricePerUnit.toString());
     setEditingWeightId(id);
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -452,16 +455,31 @@ export default function FactoryTab({
 
     groupedDraftItems.forEach(group => {
       group.items.forEach(item => {
-        const totalUnits = item.cartons * item.weight.unitsPerCarton;
-        if (totalUnits > 0) {
+        let totalUnits = item.cartons * item.weight.unitsPerCarton;
+        let finalCartons = item.cartons;
+        
+        let finalNotes = loadNotes.trim() || `شحنة محملة [${group.product.name} - وزن ${item.weight.size}]`;
+        let finalKeeper = warehouseKeeper.trim();
+
+        if (loadSource === 'van_out') {
+           totalUnits = -Math.abs(totalUnits);
+           finalCartons = -Math.abs(finalCartons);
+           finalNotes = `نقل عهدة (صادر) إلى الزميل: ${transferDelegateName} | ` + finalNotes;
+           finalKeeper = `تحويل صادر (${transferDelegateName})`;
+        } else if (loadSource === 'van_in') {
+           finalNotes = `نقل عهدة (وارد) من الزميل: ${transferDelegateName} | ` + finalNotes;
+           finalKeeper = `تحويل وارد (${transferDelegateName})`;
+        }
+
+        if (totalUnits !== 0) {
           onAddLoad({
             productId: group.product.id,
             weightId: item.weight.id,
             quantity: totalUnits,
-            cartonsCount: item.cartons,
+            cartonsCount: finalCartons,
             looseUnitsCount: 0,
-            notes: loadNotes.trim() || `شحنة محملة [${group.product.name} - وزن ${item.weight.size}]`,
-            warehouseKeeper: warehouseKeeper.trim() || undefined,
+            notes: finalNotes,
+            warehouseKeeper: finalKeeper || undefined,
             advanceAmount: showAdvanceInput ? (parseFloat(advanceAmount) || undefined) : undefined,
             date: new Date(loadDate).toISOString()
           });
@@ -475,7 +493,7 @@ export default function FactoryTab({
       return;
     }
 
-    alert('تم حفظ تحديد حمولة السيارة بنجاح وتوزيع السلع والكميات لجميع الأصناف المحددة!');
+    alert(loadSource === 'factory' ? 'تم حفظ تحديد حمولة السيارة بنجاح وتوزيع السلع!' : 'تم حفظ وتأكيد إذن النقل الميداني وتحديث الجرد بنجاح!');
     // Reset loading states
     setLoadProductId('');
     setLoadWeightsQty({});
@@ -483,6 +501,8 @@ export default function FactoryTab({
     setWarehouseKeeper('');
     setAdvanceAmount('');
     setShowAdvanceInput(false);
+    setLoadSource('factory');
+    setTransferDelegateName('');
   };
 
   // Compute live cumulative totals of the current total factory load invoice (حساب المصنع والكميات المحملة)
@@ -515,7 +535,9 @@ export default function FactoryTab({
         loose,
         cartonPrice,
         subtotal,
-        date: load.date
+        date: load.date,
+        warehouseKeeper: load.warehouseKeeper,
+        advanceAmount: load.advanceAmount
       };
     });
 
@@ -571,7 +593,7 @@ export default function FactoryTab({
 
       groups[pId].weights.push({
         loadId: load.id,
-        weightId: load.weightId,
+        weightId: load.weightId || '',
         size: weight ? weight.size : 'حجم عادي',
         cartons,
         loose,
@@ -1461,6 +1483,43 @@ export default function FactoryTab({
                 </div>
               </div>
 
+              <div className="flex flex-col gap-2 mt-1 mb-2">
+                <label className="text-[11px] font-black text-[#1A365D]">نوع الحركة والجرد:</label>
+                <div className="flex bg-[#F7FAFC] p-1 rounded-xl border border-slate-200">
+                  <button
+                    type="button"
+                    onClick={() => setLoadSource('factory')}
+                    className={`flex-1 py-2 px-1 rounded-lg text-[10px] font-bold transition-all cursor-pointer ${loadSource === 'factory' ? 'bg-[#1A365D] text-white shadow-sm' : 'text-slate-500 hover:bg-slate-100'}`}
+                  >
+                    من المصنع 🏭
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setLoadSource('van_in')}
+                    className={`flex-1 py-2 px-1 rounded-lg text-[10px] font-bold transition-all cursor-pointer ${loadSource === 'van_in' ? 'bg-emerald-600 text-white shadow-sm' : 'text-slate-500 hover:bg-slate-100'}`}
+                  >
+                    وارد من زميل 🚚⬇️
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setLoadSource('van_out')}
+                    className={`flex-1 py-2 px-1 rounded-lg text-[10px] font-bold transition-all cursor-pointer ${loadSource === 'van_out' ? 'bg-rose-600 text-white shadow-sm' : 'text-slate-500 hover:bg-slate-100'}`}
+                  >
+                    صادر لزميل 🚚⬆️
+                  </button>
+                </div>
+                {loadSource !== 'factory' && (
+                  <input
+                    type="text"
+                    required
+                    placeholder="اسم المندوب الزميل (الطرف الآخر)"
+                    value={transferDelegateName}
+                    onChange={(e) => setTransferDelegateName(e.target.value)}
+                    className="bg-white border border-slate-200 rounded-lg p-2 text-xs font-bold focus:ring-1 focus:ring-indigo-500 mt-2"
+                  />
+                )}
+              </div>
+
               <div className="grid grid-cols-1 gap-3.5">
                 <div>
                   <label className="inline-block bg-indigo-100 text-indigo-950 border border-indigo-200 text-xs font-black px-2.5 py-1 rounded-md mb-2 shadow-sm">المنتج</label>
@@ -1632,7 +1691,7 @@ export default function FactoryTab({
                   <label className="block text-xs font-bold text-[#2B6CB0] mb-1">ملاحظات</label>
                   <input
                     type="text"
-                    placeholder="مثال: رقم لوحة السيارة أو ملاحظات عامة"
+                    placeholder={loadSource === 'factory' ? "مثال: رقم لوحة السيارة أو ملاحظات عامة" : "رقم السيارة أو رقم إذن النقل للزميل"}
                     value={loadNotes}
                     onChange={(e) => setLoadNotes(e.target.value)}
                     className="w-full bg-[#F7FAFC] border border-slate-200 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-indigo-500"
@@ -1646,7 +1705,7 @@ export default function FactoryTab({
                 className="w-full bg-[#1A365D] text-white border-transparent hover:bg-[#1A365D] text-white border-transparent disabled:bg-slate-300 text-white rounded-xl py-3 text-sm font-bold active:scale-95 transition-all shadow-sm flex items-center justify-center gap-2 cursor-pointer mt-2"
               >
                 <Plus className="h-5 w-5" />
-                <span>حفظ تحديد حمولة السيارة</span>
+                <span>{loadSource === 'factory' ? 'حفظ تحديد حمولة السيارة' : 'تأكيد إذن النقل الميداني (الجرد)'}</span>
               </button>
             </form>
 
@@ -1985,25 +2044,6 @@ export default function FactoryTab({
                         let grandLoadsSum = 0;
                         let grandPaymentsSum = 0;
                         let grandRemainingSum = 0;
-
-                        [...filteredLoads].forEach((load) => {
-                          const prod = products.find(p => p.id === load.productId);
-                          const weights = prod ? getProductWeightsFallback(prod) : [];
-                          const weight = weights.find(w => w.id === load.weightId) || weights[0];
-                          const cartonPrice = weight?.cartonPriceFromFactory || 0;
-                          const loadedCartons = Number((load.cartonsCount !== undefined ? load.cartonsCount : (load.quantity / (weight?.unitsPerCarton || 12))).toFixed(3));
-                          const loadVal = loadedCartons * cartonPrice;
-                          const paidVal = load.advanceAmount || 0;
-                          const remainingVal = loadVal - paidVal;
-
-                          grandLoadsSum += loadVal;
-                          grandPaymentsSum += paidVal;
-                          grandRemainingSum += remainingVal;
-                        });
-
-                        grandLoadsSum = 0;
-                        grandPaymentsSum = 0;
-                        grandRemainingSum = 0;
 
                         [...filteredLoads].forEach((load) => {
                           const prod = products.find(p => p.id === load.productId);
@@ -3667,4 +3707,3 @@ export default function FactoryTab({
     </div>
   );
 }
-
