@@ -440,6 +440,7 @@ export default function ManageTab({
   const [repName, setRepName] = useState(settings.representativeName || '');
   const [repPhone, setRepPhone] = useState(settings.representativePhone || '01228466613');
   const [invoiceAppName, setInvoiceAppName] = useState(settings.appName || 'الأخوة المتحدون EAG');
+  const [googleMapsKey, setGoogleMapsKey] = useState(settings.googleMapsApiKey || '');
   const [googlePassword, setGooglePassword] = useState('');
 
   // Delegate live tracking state
@@ -452,6 +453,7 @@ export default function ManageTab({
   
   // Local state for modified role names before hitting confirmation button
   const [localRoleNames, setLocalRoleNames] = useState<Record<string, string>>({});
+  const [localPasswords, setLocalPasswords] = useState<Record<string, string>>({});
   
   // Sync state
   const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'done' | 'fail'>('idle');
@@ -475,14 +477,14 @@ export default function ManageTab({
         });
       } else {
         setGeminiStatus({
-          status: 'healthy',
-          message: '✓ تم تفعيل الوضع الآمن والمحاكي المدمج للذكاء الاصطناعي (API-Key Free Mode) ليعمل مع أي استضافة مجانية مجاناً 100% وبسرعة وسهولة.'
+          status: 'error',
+          message: 'تعذر الاتصال بالذكاء الاصطناعي. يرجى التحقق من إعدادات الـ API.'
         });
       }
     } catch {
       setGeminiStatus({
-        status: 'healthy',
-        message: '✓ تم تفعيل الوضع الآمن والمحاكي المدمج للذكاء الاصطناعي (API-Key Free Mode) ليعمل مع أي استضافة مجانية مجاناً 100% وبسرعة وسهولة.'
+        status: 'error',
+        message: 'تعذر الاتصال بالذكاء الاصطناعي. تأكد من اتصالك بالإنترنت.'
       });
     }
   };
@@ -533,36 +535,8 @@ export default function ManageTab({
       setMarketSearchResult(data.text || '');
       setMarketSearchSources(data.sources || []);
     } catch (err: any) {
-      console.warn("Falling back to local market database due to API key error:", err.message);
-      
-      // Let's generate a beautiful local simulated market analysis response
-      const reportDate = new Date().toLocaleDateString('ar-EG');
-      const mockResult = `📊 **تقرير البورصة ومعلومات السوق المحلي والأصناف لـ [ ${finalQuery} ] (محدث بتاريخ ${reportDate}):**
-
-نظراً لتطبيقات العرض والطلب الحالية بمحافظات الدلتا الكبرى والقاهرة، إليك مؤشرات أسعار السمن والزيوت والمواد التموينية بالتجزئة والجملة:
-
-1. **الزيوت النباتية المصفاة (منتجاتنا والأصناف المنافسة):**
-   - **سعر طن زيت الصويا المكرر (بالميناء للجملة)**: 48,200 جنيه مصري (مستقر نسبيًا).
-   - **سعر طن زيت عباد الشمس المكرر**: 51,900 جنيه مصري.
-   - **سعر الكرتونة تجزئة (12 زجاجة 1 لتر)**: تتراوح بين 590 إلى 620 جنيه مصري. زيت مصنعنا يقدم نفس الجودة الممتازة بسعر 540 جنيه للكرتونة مما يضمن هامش ربح فوري يبلغ 15% للمحلات!
-
-2. **السمن النباتي والصناعي الطازج (البلدي والمخلّط):**
-   - **العلب زنة 1 كجم**: متوسط سعر البيع للمستهلك 85 - 95 جنيه مصري.
-   - **العلب زنة 2 كجم**: متوسط سعر البيع للمستهلك 170 - 190 جنيه مصري. سمن مصنعنا يوفر ميزة سعرية مذهلة تصل لـ 25-30 جنيه في العبوة الكبيرة لربات المنازل والمطاعم الشعبية.
-
-3. **رؤية حركة السحب والطلب بالأسواق:**
-   - هناك سحب متزايد بنسبة 5.8% على عبوات الزيوت المتوسطة زنة 700 مل و800 مل لسهولة ورواج بيعها بالتجزئة بقرى ومدن الدلتا (طنطا، المحلة، المنصورة).
-   - المخابز والحلوانية يزيد سحبهم للزبدة وسمن العجن بنسبة 12% استعداداً للمواسم مع تفضيلهم للدفع الآجل الجزئي أو التوريد الأسبوعي الثابت.
-
-💡 **توصية مبيعات مصنعنا الفورية للمندوب:**
-قم باستخدام هذه الأرقام لإقناع محلات المواد الغذائية والهايبر ماركت بتخفيض أسعار الرفوف لديهم مع زيادة هامشهم الربحي الصافي عن طريق استبدال 30% من معروضهم بعبوات منتجاتنا الفاخرة.`;
-
-      setMarketSearchResult(mockResult);
-      setMarketSearchSources([
-        { title: "بورصة السلع المصرية - تحديث أسعار الزيوت والسمن", uri: "https://www.egx.com.eg" },
-        { title: "مؤشرات الغرف التجارية والغذاء بالدلتا والقاهرة", uri: "https://www.fedcoc.org.eg" },
-        { title: "محرك تسعير مصنع الأخوة المتحدون والزيادة العادلة", uri: "https://ai.studio/build" }
-      ]);
+      console.warn("Market search failed:", err.message);
+      setMarketSearchError('حدث خطأ أثناء الاتصال بواجهة الذكاء الاصطناعي الخارجية. تأكد من تفعيل مفتاح الـ API الخاص بـ Gemini.');
     } finally {
       setIsSearchingMarket(false);
     }
@@ -697,54 +671,8 @@ export default function ManageTab({
       const data = await response.json();
       setAiChatHistory(prev => [...prev, { role: 'model', text: data.text }]);
     } catch (err: any) {
-      console.warn("Using smart local fallback auto-responder in ManageTab due to API key error:", err.message);
-      
-      const matchedCustomer = aiChatCustomerSearch ? customers.find(c => c.name.includes(aiChatCustomerSearch) || c.phone.includes(aiChatCustomerSearch)) : null;
-      let responseText = '';
-      const promptLower = userMessage.toLowerCase();
-      
-      if (promptLower.includes('سلام') || promptLower.includes('مرحب') || promptLower.includes('أهلاً') || promptLower.includes('اهل')) {
-        responseText = `أهلاً بك يا صديقي وشريكي المخلص في مبيعات مصنعنا! 👋
-
-أنا مستشارك الميداني وصديقك الحريص دائماً على تيسير ونجاح مبيعاتك وتذليل العقبات.
-
-العميل المستهدف المحدد لديك هو من فئة: **[ ${aiChatCategory} ]**.
-السياسة المعتمدة لمدير المبيعات هي: *"${pitchGuidelines}"*
-
-كيف يمكنني مساعدتك اليوم في ترويج وتوريد الطلبيات؟ يمكنك سؤالي عن نصائح إقناع أو صياغة رسائل!`;
-      } else if (promptLower.includes('رسالة') || promptLower.includes('عرض') || promptLower.includes('كتب') || promptLower.includes('اكتب') || promptLower.includes('صياغ')) {
-        responseText = `إليك مسودة رسالة ترويجية احترافية وجاهزة للنسخ لتقديمها لـ: **[ ${aiChatCategory} ]** (سواء بالواتساب أو شفهياً):
-
----
-**العنوان: شراكة الجودة وتوفير حقيقي لمحلكم الكريم 🌹**
-
-السلام عليكم ورحمة الله وبركاته يا فندم،
-معك مندوب مصنع "الأخوة المتحدون" لمنتجاتنا الفاخرة من الزيوت والسمن ذو الجودة الممتازة.
-
-يشرفنا جداً تقديم عرض توريد استثنائي خاص بمحلكم الكائن في منطقة ${matchedCustomer ? matchedCustomer.area : 'الدلتا'}، بخصومات مميزة للطلبات تبدأ من كميات مرنة وتسهيلات مريحة:
-1. **جودة فائقة**: نقاوة مصفاة ومقاومة عالية تناسب المطابخ والاستخدام المنزلي الراقي.
-2. **سعر منافس**: توفير يصل لـ 15% مقارنة بالماركات المستوردة بنفس الجودة، مما يضمن لكم هامش ربح أعلى.
-3. **دعم مستمر**: سحب دوري لمرتجعات الكرتون وفحص أسبوعي مجاني وتدريب للعمالة.
-
-هل نتشرف بتوريد أول شحنة تجريبية؟
----
-
-💡 **نصيحة إضافية**:
-حاول التركيز على تسليم عينتين مجانيتين صغار لربات البيوت لعرض جودة المنتج لسرعة سحبه بالمنطقة!`;
-      } else {
-        responseText = `مرحباً بك يا صديقي البطل! لقد استلمت استفسارك بخصوص: *" ${userMessage} "*
-
-بصفتي مستشارك وصديقك الحريص وشريكك في مبيعات مصنع الإخوة المتحدون، وبناءً على فئة العميل **[ ${aiChatCategory} ]** والسياسة الإرشادية لمدير المبيعات: *\"${pitchGuidelines}\"*، إليك التكتيك الأمثل لكي نربح معاً:
-
-1. **التعامل مع الاعتراضات السعرية**: إذا اشتكى عملاؤك من تذبذب الأسعار، أخبرهم فوراً أن منتجاتنا من الزيت والسمن تتميز باستقرار سعري وضمان توفير هامش ربح فوري يبلغ 15% مقارنة بباقي السلع بالسوق.
-
-2. **الاعتماد على العينات**: قدم عينات مجانية صغيرة لزيادة حركة سحب الصنف بالرفوف. فإقناع الطباخ أو ربة المنزل يمثل 90% من قرار الشراء.
-3. **العلاقة الودية المباشرة**: الالتزام بزيارتهم دورياً في نفس اليوم من كل أسبوع لكسب ثقتهم وتثبيت موعد سحب مرتجع الكرتون مسبقاً.
-
-هل تود الاستفسار حول نقطة أخرى أو صياغة رسائل إضافية؟ أنا معك لمساندتك لإنبات الصنف بالرفوف!`;
-      }
-
-      setAiChatHistory(prev => [...prev, { role: 'model', text: responseText }]);
+      console.warn("AI Chat failed:", err.message);
+      setAiChatHistory(prev => [...prev, { role: 'model', text: 'عذراً، حدث خطأ في الاتصال بالذكاء الاصطناعي. تأكد من تفعيل مفتاح الـ API الخاص بـ Gemini.' }]);
     } finally {
       setIsAskingAI(false);
     }
@@ -821,7 +749,8 @@ export default function ManageTab({
       aiRetentionGuidelines: retentionGuidelines.trim(),
       representativeName: repName.trim(),
       representativePhone: repPhone.trim(),
-      appName: invoiceAppName.trim()
+      appName: invoiceAppName.trim(),
+      googleMapsApiKey: googleMapsKey.trim()
     });
     setSaveSuccessMsg('تم حفظ الإعدادات بنجاح!');
     setTimeout(() => setSaveSuccessMsg(''), 3000);
@@ -1654,20 +1583,32 @@ export default function ManageTab({
                                   <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
                                     <input
                                       type="text"
-                                      value={user.password || '1234'}
+                                    value={localPasswords[user.phone] !== undefined ? localPasswords[user.phone] : (user.password || '1234')}
                                       onChange={(e) => {
                                         const newPass = e.target.value;
-                                        const updated = usersList.map(u => 
-                                          u.phone === user.phone ? { ...u, password: newPass } : u
-                                        );
-                                        onUpdateUsersList(updated);
-                                        localStorage.setItem('users_permissions_sys', JSON.stringify(updated));
+                                      setLocalPasswords(prev => ({ ...prev, [user.phone]: newPass }));
                                       }}
                                       className="bg-white border border-slate-300 focus:outline-none focus:border-[#DD6B20] focus:ring-1 focus:ring-[#DD6B20] rounded-lg px-2.5 py-1.5 text-xs text-[#1A365D] font-extrabold w-full sm:w-48 text-center"
                                       placeholder="مثال: 1234"
                                     />
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const targetPass = localPasswords[user.phone] !== undefined ? localPasswords[user.phone] : (user.password || '1234');
+                                      const updated = usersList.map(u => 
+                                        u.phone === user.phone ? { ...u, password: targetPass } : u
+                                      );
+                                      onUpdateUsersList(updated);
+                                      localStorage.setItem('users_permissions_sys', JSON.stringify(updated));
+                                      alert('تم حفظ كلمة المرور للمندوب بنجاح! ✓');
+                                    }}
+                                    className="bg-amber-600 hover:bg-amber-700 text-white rounded-lg px-3 py-1.5 text-xs font-black transition-all cursor-pointer shadow-sm active:scale-95 shrink-0 flex items-center justify-center gap-1"
+                                  >
+                                    <span>💾</span>
+                                    <span>حفظ الباسورد</span>
+                                  </button>
                                     <span className="text-[10px] text-amber-900 font-extrabold leading-normal">
-                                      💡 هذا الرمز يظهر لك الآن بوضوح لمنع النسيان. يمكنك تعديله مباشرة هنا وسيقوم المندوب باستخدامه لتسجيل الدخول الفوري برقم هاتفه.
+                                    💡 اكتب كلمة المرور الجديدة ثم اضغط على زر "حفظ الباسورد" لتأكيد التغيير وتطبيقه.
                                     </span>
                                   </div>
                                 </div>
@@ -2354,6 +2295,24 @@ export default function ManageTab({
                 </p>
               </div>
 
+              <div className="border border-sky-100 rounded-xl p-3 bg-sky-50/20 mt-1">
+                <label className="block text-xs font-black text-sky-950 mb-1.5 flex items-center gap-1.5">
+                  <MapPin className="h-4 w-4 text-[#2B6CB0]" />
+                  مفتاح خرائط جوجل (Google Maps API Key):
+                </label>
+                <input
+                  type="text"
+                  placeholder="AIzaSy..."
+                  value={googleMapsKey}
+                  onChange={(e) => setGoogleMapsKey(e.target.value)}
+                  dir="ltr"
+                  className="w-full bg-[#FFFFFF] border border-slate-200 rounded-lg p-2.5 text-xs text-[#1A365D] font-mono focus:outline-none focus:ring-1 focus:ring-sky-400"
+                />
+                <p className="text-[10px] text-gray-400 mt-1 leading-normal">
+                  ضع هنا مفتاح الـ API الخاص بـ Google Maps لتمكين النظام من سحب أرقام هواتف وعناوين المحلات الفعلية من خرائط جوجل بدقة عالية. (يجب تفعيل Places API و Maps JavaScript API).
+                </p>
+              </div>
+
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 my-1">
                 <div>
                   <label className="block text-xs font-bold text-[#2B6CB0] mb-1">رمز العملة داخل الفواتير</label>
@@ -2406,12 +2365,12 @@ export default function ManageTab({
                     <div className="flex items-center justify-between font-extrabold">
                       <div className="flex items-center gap-2">
                         <span className="w-2.5 h-2.5 rounded-full bg-amber-500 inline-block shrink-0" />
-                        <span>💡 حالة المساعد الذكي: يعمل الآن بوضع المحاكاة الاحتياطي</span>
+                        <span>💡 حالة المساعد الذكي: يوجد مشكلة في الاتصال</span>
                       </div>
                       <button type="button" onClick={checkGeminiStatus} className="text-[10px] text-[#2B6CB0] font-black hover:underline cursor-pointer shrink-0">أعد الفحص 🔄</button>
                     </div>
                     <p className="text-[11px] leading-relaxed text-slate-700 font-semibold text-right">
-                      {geminiStatus.status === 'missing' && 'مفتاح الـ API غير متوفر في الخادم حالياً. يستخدم المساعد الذكي خوارزمية تخزين محلية مسبقة للإجابة صيدلياً ببيانات نموذجية.'}
+                      {geminiStatus.status === 'missing' && 'مفتاح الـ API غير متوفر في الخادم حالياً. لن تتمكن من الحصول على ردود حتى يتم تفعيل المفتاح.'}
                       {geminiStatus.status === 'leaked' && 'تنبيه أمان: تم الكشف عن تسريب مفتاح الـ API المستخدم مسبقاً وتم تعطيله لحمايتك. يرجى تجديده.'}
                       {geminiStatus.status === 'error' && `حدثت مشكلة أثناء محاولة استخدام المفتاح: ${geminiStatus.message}`}
                     </p>

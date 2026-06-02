@@ -94,6 +94,7 @@ export interface AppSettings {
   representativeName?: string; // اسم المندوب
   representativePhone?: string; // رقم هاتف المندوب
   appName?: string; // الاسم ليظهر في الفواتير (اسم النشاط)
+  googleMapsApiKey?: string; // مفتاح API لخرائط جوجل لجلب العملاء
 }
 
 export interface UserAuth {
@@ -151,4 +152,3 @@ export function formatNum(num: number | string): string {
     maximumFractionDigits: 3
   }).format(val);
 }
-

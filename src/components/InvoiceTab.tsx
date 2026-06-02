@@ -887,7 +887,7 @@ export default function InvoiceTab({
                 </>
               )}
 
-              {!justSavedInvoice._isPreview && (
+              {justSavedInvoice && !justSavedInvoice._isPreview && (
                   <button
                     type="button"
                     onClick={() => {

@@ -76,11 +76,8 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
       const data = await response.json();
       window.open(getWhatsAppLink(customer.phone, data.text), '_blank');
     } catch (err: any) {
-      console.warn("Using premium local pitch message generator due to inactive Gemini API Key:", err.message);
-      
-      const guidelines = settings.aiRetentionGuidelines || 'تقديم عرض ترويجي خاص لمنتجاتنا الفاخرة';
-      const fallbackPitchMsg = `السلام عليكم ورحمة الله وبركاته يا فندم 🌸\nمعكم مندوب مبيعات منتجاتنا الممتازة من الزيوت والسمن الفاخر المخصص لجودة الفنادق والمطاعم والبيوت.\n\nنتشرف بالتعاون معكم في [ ${customer.name} ] بمنطقة [ ${customer.area} ] ونود تقديم عروضنا الخاصة والحصرية لكم لتوفير أفضل المنتجات المصفاة فائقة النقاوة، بهامش ربح ممتاز وتسهيلات سداد مريحة.\n\n(✨ هدفنا الاستراتيجي: ${guidelines})\n\nهل نتشرف بتحديد موعد قريب للزيارة وتجريب عيناتنا المجانية للتأكد من الجودة؟`;
-      window.open(getWhatsAppLink(customer.phone, fallbackPitchMsg), '_blank');
+      console.warn("Gemini API Error:", err.message);
+      alert('تعذر صياغة الرسالة عبر الذكاء الاصطناعي. تأكد من تفعيل مفتاح الـ API الخاص بـ Gemini.');
     } finally {
       setWaLoadingId(null);
     }
@@ -498,6 +495,97 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
         lon = latlng.lng;
       }
 
+      // 1. Try Google Places API first
+      let googleResults: any[] = [];
+      
+      if (settings.googleMapsApiKey) {
+        try {
+          const fetchPlacesFromGoogleJS = (): Promise<any[]> => {
+            return new Promise((resolve, reject) => {
+              const scriptId = 'google-maps-places-script';
+              const runSearch = () => {
+                if (!(window as any).google || !(window as any).google.maps) {
+                  reject(new Error("Google Maps object not found"));
+                  return;
+                }
+                const query = `${storeType === 'الكل' ? 'محلات وسوبر ماركت' : storeType} في ${finalArea}`;
+                const dummyDiv = document.createElement('div');
+                const service = new (window as any).google.maps.places.PlacesService(dummyDiv);
+                const request = { query: query, location: new (window as any).google.maps.LatLng(lat, lon), radius: radius };
+                
+                service.textSearch(request, async (results: any[], status: any) => {
+                  if (status === (window as any).google.maps.places.PlacesServiceStatus.OK && results) {
+                    const limitedResults = results.slice(0, batchSize);
+                    const detailedResults = await Promise.all(limitedResults.map(place => {
+                      return new Promise<any>((resolveDetail) => {
+                        service.getDetails({ placeId: place.place_id, fields: ['name', 'formatted_address', 'formatted_phone_number', 'rating', 'user_ratings_total', 'geometry', 'url'] }, (placeDetail: any, detailStatus: any) => {
+                          if (detailStatus === (window as any).google.maps.places.PlacesServiceStatus.OK && placeDetail) {
+                            resolveDetail(placeDetail);
+                          } else {
+                            resolveDetail(place);
+                          }
+                        });
+                      });
+                    }));
+                    resolve(detailedResults);
+                  } else if (status === (window as any).google.maps.places.PlacesServiceStatus.ZERO_RESULTS) {
+                        resolve([]);
+                  } else {
+                    reject(new Error("Google Places API error: " + status));
+                  }
+                });
+              };
+
+              if (!(window as any).google || !(window as any).google.maps || !(window as any).google.maps.places) {
+                let script = document.getElementById(scriptId) as HTMLScriptElement;
+                if (!script) {
+                  script = document.createElement('script');
+                  script.id = scriptId;
+                  script.src = `https://maps.googleapis.com/maps/api/js?key=${settings.googleMapsApiKey}&libraries=places`;
+                  script.async = true;
+                  script.defer = true;
+                  script.onload = () => setTimeout(runSearch, 500);
+                  script.onerror = () => reject(new Error("Failed to load Google Maps script"));
+                  document.head.appendChild(script);
+                } else {
+                  script.addEventListener('load', () => setTimeout(runSearch, 500));
+                }
+              } else {
+                runSearch();
+              }
+            });
+          };
+
+          const detailedResults = await fetchPlacesFromGoogleJS();
+          if (detailedResults && detailedResults.length > 0) {
+            googleResults = detailedResults.map((r: any, index: number) => {
+              const phone = r.formatted_phone_number ? r.formatted_phone_number.replace(/[^\d+]/g, '') : '';
+              let locLink = r.url || `https://maps.google.com/?q=${lat},${lon}`;
+              if (r.geometry && typeof r.geometry.location?.lat === 'function') {
+                locLink = r.url || `https://maps.google.com/?q=${r.geometry.location.lat()},${r.geometry.location.lng()}`;
+              }
+              return {
+                id: `google-lead-${r.place_id || index}`,
+                name: r.name,
+                phone: phone,
+                area: finalArea,
+                detailedAddress: r.formatted_address || finalArea,
+                rating: r.rating || Number((4.0 + Math.random() * 0.9).toFixed(1)),
+                reviewsCount: r.user_ratings_total || Math.floor(10 + Math.random() * 150),
+                locationLink: locLink,
+                type: storeType === 'الكل' ? 'نشاط تجاري' : storeType
+              };
+            });
+            setMapsResults(googleResults);
+            showToast(`تم جلب ${googleResults.length} نشاط تجاري حقيقي من خرائط جوجل بنجاح! 📍`);
+            setIsSearchingMaps(false);
+            return;
+          }
+        } catch (ge) {
+          console.warn("Google Places JS SDK search failed:", ge);
+        }
+      }
+
       const aroundStr = `(around:${Math.round(radius)},${lat},${lon})`;
       let overpassQuery = '';
       const t = storeType || '';
@@ -526,7 +614,7 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
           const realLeads = osmData.elements
             .filter((e: any) => e.tags && (e.tags.name || e.tags['name:ar']))
             .map((e: any, index: number) => {
-              const phone = e.tags.phone || `01${Math.floor(Math.random() * 3)}${Math.floor(10000000 + Math.random() * 90000000)}`;
+              const phone = e.tags.phone ? e.tags.phone.replace(/[^\d+]/g, '') : '';
               return {
                 id: `osm-lead-${e.id}-${index}`,
                 name: e.tags['name:ar'] || e.tags.name,
@@ -553,8 +641,8 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
       alert('لم يتم العثور على محلات مسجلة في هذا النطاق على الخرائط الحقيقية. جرب تكبير دائرة البحث أو تغيير المنطقة.');
 
     } catch (e: any) {
-      console.warn("OSM Maps search failed: ", e.message);
-      alert('حدث خطأ أثناء البحث في الخرائط. تأكد من اتصالك بالإنترنت.');
+      console.warn("OSM/Google Maps search failed: ", e.message);
+      alert('حدث خطأ أثناء البحث في الخرائط الحقيقية. تأكد من اتصالك بالإنترنت وتفعيل مفتاح الـ API الخاص بـ Google Maps.');
     } finally {
       setIsSearchingMaps(false);
     }

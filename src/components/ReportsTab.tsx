@@ -420,17 +420,8 @@ export default function ReportsTab({
       }
       window.open(`https://wa.me/${phone}?text=${messageText}`, '_blank');
     } catch (err: any) {
-      console.warn("Using local fallback WA message builder in ReportsTab:", err.message);
-      
-      const guidelines = settings.aiRetentionGuidelines || 'تقديم رسالة ترحيبية تشجعه على استمرار التعامل معنا، مع توضيح أننا نهتم بوجوده معنا';
-      const fallbackMsg = `السلام عليكم ورحمة الله وبركاته يا فندم 🌹\nمعكم مندوب مبيعات مصنعنا الفاخر للزيوت والسمن.\n\nنتشرف بالتعاون الدائم والمثمر معكم في [ ${customer.name} ] بمنطقتكم الكريمة [ ${customer.area} ]. نود في مصنع الإخوة المتحدون الإعراب عن عظيم تقديرنا لثقتكم الغالية بمنتجاتنا ذات الجودة الفائقة.\n\n(✨ سياستنا المعتمدة: ${guidelines})\n\nهل نتشرف بتسليم طلبية جديدة لسيادتكم بأسعار بورصة اليوم الممتازة؟ نحن في خدمتكم دائماً وبالموعد!`;
-      
-      const messageText = encodeURIComponent(fallbackMsg);
-      let phone = customer.phone;
-      if (phone.startsWith('0')) {
-        phone = '20' + phone.substring(1);
-      }
-      window.open(`https://wa.me/${phone}?text=${messageText}`, '_blank');
+      console.warn("Gemini API Error:", err.message);
+      alert('تعذر صياغة الرسالة عبر الذكاء الاصطناعي. تأكد من تفعيل مفتاح الـ API الخاص بـ Gemini.');
     } finally {
       setWaLoadingId(null);
     }
