@@ -880,7 +880,7 @@ export default function App() {
         نظام إدارة المبيعات والمخزون © {new Date().getFullYear()} ملك EAGS Group
       </footer>
 
-      <AiChatAssistant isOpen={isChatOpen} setIsOpen={setIsChatOpen} />
+      <AiChatAssistant isOpen={isChatOpen} setIsOpen={setIsChatOpen} settings={settings} />
 
       {/* Global Custom Toast / App Alerts */}
       <AnimatePresence>

@@ -59,22 +59,30 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
 "${settings.aiRetentionGuidelines || 'قدم رسالة ترحيبية تشجعه على استمرار التعامل معنا، مع توضيح أننا نهتم بوجوده معنا كشريك نجاح.'}"
 أريد فقط نص الرسالة بدون أي مقدمات أخرى لتكون جاهزة للإرسال مباشرة للعميل وبصيغة جذابة.`;
 
-      const response = await fetch('/api/gemini/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          systemInstruction: 'أنت مساعد مبيعات احترافي.',
-          history: [],
-          message: userMessage
-        })
-      });
-
-      if (!response.ok) {
-        throw new Error('مفتاح الـ API غير صالح أو غير نشط.');
+      if (settings.geminiApiKey) {
+        const payload = {
+          system_instruction: { parts: { text: 'أنت مساعد مبيعات احترافي.' } },
+          contents: [ { role: 'user', parts: [{ text: userMessage }] } ]
+        };
+        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${settings.geminiApiKey}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        if (!response.ok) throw new Error('مفتاح الـ API غير صالح أو غير نشط.');
+        const data = await response.json();
+        const replyText = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+        window.open(getWhatsAppLink(customer.phone, replyText), '_blank');
+      } else {
+        const response = await fetch('/api/gemini/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ systemInstruction: 'أنت مساعد مبيعات احترافي.', history: [], message: userMessage })
+        });
+        if (!response.ok) throw new Error('تعذر الاتصال التلقائي.');
+        const data = await response.json();
+        window.open(getWhatsAppLink(customer.phone, data.text), '_blank');
       }
-
-      const data = await response.json();
-      window.open(getWhatsAppLink(customer.phone, data.text), '_blank');
     } catch (err: any) {
       console.warn("Gemini API Error:", err.message);
       alert('تعذر صياغة الرسالة عبر الذكاء الاصطناعي. تأكد من تفعيل مفتاح الـ API الخاص بـ Gemini.');
@@ -129,23 +137,52 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
   const triggerReverseGeocode = async (lat: number, lng: number) => {
     setIsReverseGeocoding(true);
     try {
-      const resp = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&accept-language=ar`, {
-        headers: {
-          'User-Agent': 'SufanaAppletExplorer/1.0'
+      let areaFound = false;
+
+      // 1. Try RapidAPI cloud geocoder first
+      if (settings.rapidApiKey) {
+        try {
+          const rResp = await fetch(`https://local-business-data.p.rapidapi.com/reverse-geocoding?lat=${lat}&lng=${lng}&language=ar`, {
+            method: 'GET',
+            headers: {
+              'Content-Type': 'application/json',
+              'x-rapidapi-host': 'local-business-data.p.rapidapi.com',
+              'x-rapidapi-key': settings.rapidApiKey
+            }
+          });
+          if (rResp.ok) {
+            const rData = await rResp.json();
+            const placeName = rData.data?.city || rData.data?.neighborhood || rData.data?.town || rData.data?.county || (rData.data?.full_address ? rData.data.full_address.split(',')[0] : '');
+            if (placeName) {
+              setSelectedSearchArea(placeName.trim());
+              areaFound = true;
+            }
+          }
+        } catch (e) {
+          console.warn("RapidAPI reverse geocoding failed", e);
         }
-      });
-      if (resp.ok) {
-        const data = await resp.json();
-        const addr = data.address || {};
-        const placeName = addr.suburb || addr.quarter || addr.neighbourhood || addr.city || addr.town || addr.village || addr.county || '';
-        const finalPlace = [placeName, addr.city || addr.state].filter(Boolean).filter((v: any, i: number, a: any[]) => a.indexOf(v) === i).join('، ');
-        
-        if (finalPlace && finalPlace.trim()) {
-          setSelectedSearchArea(finalPlace.trim());
-        } else if (data.display_name) {
-          const segments = data.display_name.split(',');
-          const shortName = segments.slice(0, 2).join(',').trim();
-          setSelectedSearchArea(shortName);
+      }
+
+      // 2. Fallback to OpenStreetMap if RapidAPI key is missing or request failed
+      if (!areaFound) {
+        const resp = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&accept-language=ar`, {
+          headers: {
+            'User-Agent': 'SufanaAppletExplorer/1.0'
+          }
+        });
+        if (resp.ok) {
+          const data = await resp.json();
+          const addr = data.address || {};
+          const placeName = addr.suburb || addr.quarter || addr.neighbourhood || addr.city || addr.town || addr.village || addr.county || '';
+          const finalPlace = [placeName, addr.city || addr.state].filter(Boolean).filter((v: any, i: number, a: any[]) => a.indexOf(v) === i).join('، ');
+          
+          if (finalPlace && finalPlace.trim()) {
+            setSelectedSearchArea(finalPlace.trim());
+          } else if (data.display_name) {
+            const segments = data.display_name.split(',');
+            const shortName = segments.slice(0, 2).join(',').trim();
+            setSelectedSearchArea(shortName);
+          }
         }
       }
     } catch (e) {
@@ -583,6 +620,44 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
           }
         } catch (ge) {
           console.warn("Google Places JS SDK search failed:", ge);
+        }
+      } else if (settings.rapidApiKey) {
+        try {
+          const query = `${storeType === 'الكل' ? 'محلات وسوبر ماركت' : storeType} في ${finalArea}`;
+          const response = await fetch(`https://local-business-data.p.rapidapi.com/search?query=${encodeURIComponent(query)}&limit=${batchSize}&language=ar`, {
+            method: 'GET',
+            headers: {
+              'x-rapidapi-key': settings.rapidApiKey,
+              'x-rapidapi-host': 'local-business-data.p.rapidapi.com'
+            }
+          });
+          
+          if (response.ok) {
+            const data = await response.json();
+            if (data && data.data && data.data.length > 0) {
+              googleResults = data.data.map((r: any, index: number) => {
+                const phone = r.phone_number ? r.phone_number.replace(/[^\d+]/g, '') : '';
+                return {
+                  id: `rapid-lead-${r.place_id || index}`,
+                  name: r.name,
+                  phone: phone,
+                  area: finalArea,
+                  detailedAddress: r.full_address || finalArea,
+                  rating: r.rating || Number((4.0 + Math.random() * 0.9).toFixed(1)),
+                  reviewsCount: r.review_count || Math.floor(10 + Math.random() * 150),
+                  locationLink: r.place_link || `https://maps.google.com/?q=${r.latitude},${r.longitude}`,
+                  type: storeType === 'الكل' ? 'نشاط تجاري' : storeType
+                };
+              });
+              
+              setMapsResults(googleResults);
+              showToast(`تم السحب العبقري لـ ${googleResults.length} نشاط حقيقي عبر السحابة بنجاح! 📍`);
+              setIsSearchingMaps(false);
+              return;
+            }
+          }
+        } catch (err) {
+          console.warn("RapidAPI cloud scraper failed:", err);
         }
       }
 

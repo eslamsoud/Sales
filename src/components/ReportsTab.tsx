@@ -398,27 +398,34 @@ export default function ReportsTab({
 "${settings.aiRetentionGuidelines || 'قدم رسالة ترحيبية تشجعه على استمرار التعامل معنا، مع توضيح أننا نهتم بوجوده معنا كشريك نجاح.'}"
 أريد فقط نص الرسالة بدون أي مقدمات أخرى لتكون جاهزة للإرسال.`;
 
-      const response = await fetch('/api/gemini/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          systemInstruction: 'أنت مساعد مبيعات احترافي.',
-          history: [],
-          message: userMessage
-        })
-      });
-
-      if (!response.ok) {
-        throw new Error('الخادم الخارجي للذكاء الاصطناعي معطل حالياً.');
+      if (settings.geminiApiKey) {
+        const payload = {
+          system_instruction: { parts: { text: 'أنت مساعد مبيعات احترافي.' } },
+          contents: [ { role: 'user', parts: [{ text: userMessage }] } ]
+        };
+        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${settings.geminiApiKey}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        if (!response.ok) throw new Error('الخادم الخارجي للذكاء الاصطناعي معطل حالياً.');
+        const data = await response.json();
+        const replyText = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+        let phone = customer.phone;
+        if (phone.startsWith('0')) phone = '20' + phone.substring(1);
+        window.open(`https://wa.me/${phone}?text=${encodeURIComponent(replyText)}`, '_blank');
+      } else {
+        const response = await fetch('/api/gemini/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ systemInstruction: 'أنت مساعد مبيعات احترافي.', history: [], message: userMessage })
+        });
+        if (!response.ok) throw new Error('الخادم الخارجي للذكاء الاصطناعي معطل حالياً.');
+        const data = await response.json();
+        let phone = customer.phone;
+        if (phone.startsWith('0')) phone = '20' + phone.substring(1);
+        window.open(`https://wa.me/${phone}?text=${encodeURIComponent(data.text)}`, '_blank');
       }
-
-      const data = await response.json();
-      const messageText = encodeURIComponent(data.text);
-      let phone = customer.phone;
-      if (phone.startsWith('0')) {
-        phone = '20' + phone.substring(1);
-      }
-      window.open(`https://wa.me/${phone}?text=${messageText}`, '_blank');
     } catch (err: any) {
       console.warn("Gemini API Error:", err.message);
       alert('تعذر صياغة الرسالة عبر الذكاء الاصطناعي. تأكد من تفعيل مفتاح الـ API الخاص بـ Gemini.');

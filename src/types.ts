@@ -95,6 +95,8 @@ export interface AppSettings {
   representativePhone?: string; // رقم هاتف المندوب
   appName?: string; // الاسم ليظهر في الفواتير (اسم النشاط)
   googleMapsApiKey?: string; // مفتاح API لخرائط جوجل لجلب العملاء
+  rapidApiKey?: string; // مفتاح RapidAPI السحابي المجاني (بديل الفيزا)
+  geminiApiKey?: string; // مفتاح Gemini للذكاء الاصطناعي
 }
 
 export interface UserAuth {

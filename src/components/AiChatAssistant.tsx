@@ -1,13 +1,15 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { MessageCircle, X, Send, Loader2, Maximize2, Minimize2, Mic, Volume2, Square } from 'lucide-react';
 import Markdown from 'react-markdown';
+import { AppSettings } from '../types';
 
 interface AiChatAssistantProps {
   isOpen: boolean;
   setIsOpen: (val: boolean) => void;
+  settings: AppSettings;
 }
 
-export default function AiChatAssistant({ isOpen, setIsOpen }: AiChatAssistantProps) {
+export default function AiChatAssistant({ isOpen, setIsOpen, settings }: AiChatAssistantProps) {
   const [isMinimized, setIsMinimized] = useState(false);
   const [messages, setMessages] = useState<Array<{ role: 'user' | 'model', text: string }>>([
     {
@@ -98,24 +100,42 @@ export default function AiChatAssistant({ isOpen, setIsOpen }: AiChatAssistantPr
     setIsLoading(true);
 
     try {
-      const response = await fetch('/api/gemini/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          systemInstruction: 'أنت صديق مخلص، ومستشار مبيعات ميداني حريص، وشريك حقيقي للمندوب في العمل. تتحدث معه بأسلوب دافئ، تشجيعي وأخوي دائمًا ("يا صديقي"، "يا شريك نجاحي"، "يا بطل"). مهمتك هي مؤازرة المندوب ميدانياً كتفاً بكتف، ومساعدته في تحليل السوق، واكتشاف الأخطاء وتوجيهه برفق وبذكاء لحلول فورية وعملية تزيد مبيعاته وتحمي رزقه ورزق المصنع. أشر دائماً إلى المنتجات بـ "منتجاتنا الفاخرة" أو "منتجات المصنع" نظراً لتعدد وتنوع المنتجات لدينا.',
-          history: messages.slice(1).map(m => ({
-            role: m.role,
-            text: m.text
-          })),
-          message: userMessage
-        })
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        setMessages(prev => [...prev, { role: 'model', text: data.text }]);
+      if (settings.geminiApiKey) {
+        const payload = {
+          system_instruction: { parts: { text: 'أنت صديق مخلص، ومستشار مبيعات ميداني حريص، وشريك حقيقي للمندوب في العمل. تتحدث معه بأسلوب دافئ، تشجيعي وأخوي دائمًا ("يا صديقي"، "يا شريك نجاحي"، "يا بطل"). مهمتك هي مؤازرة المندوب ميدانياً كتفاً بكتف، ومساعدته في تحليل السوق، واكتشاف الأخطاء وتوجيهه برفق وبذكاء لحلول فورية وعملية تزيد مبيعاته وتحمي رزقه ورزق المصنع. أشر دائماً إلى المنتجات بـ "منتجاتنا الفاخرة" أو "منتجات المصنع" نظراً لتعدد وتنوع المنتجات لدينا.' } },
+          contents: [
+            ...messages.slice(1).map(m => ({ role: m.role === 'model' ? 'model' : 'user', parts: [{ text: m.text }] })),
+            { role: 'user', parts: [{ text: userMessage }] }
+          ]
+        };
+        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${settings.geminiApiKey}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        if (response.ok) {
+          const data = await response.json();
+          const replyText = data.candidates?.[0]?.content?.parts?.[0]?.text || 'عذراً، لم أتمكن من صياغة رد.';
+          setMessages(prev => [...prev, { role: 'model', text: replyText }]);
+        } else {
+          throw new Error('فشل جلب الرد');
+        }
       } else {
-        throw new Error('فشل جلب الرد');
+        const response = await fetch('/api/gemini/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            systemInstruction: 'أنت صديق مخلص، ومستشار مبيعات ميداني حريص، وشريك حقيقي للمندوب في العمل. تتحدث معه بأسلوب دافئ، تشجيعي وأخوي دائمًا ("يا صديقي"، "يا شريك نجاحي"، "يا بطل"). مهمتك هي مؤازرة المندوب ميدانياً كتفاً بكتف، ومساعدته في تحليل السوق، واكتشاف الأخطاء وتوجيهه برفق وبذكاء لحلول فورية وعملية تزيد مبيعاته وتحمي رزقه ورزق المصنع. أشر دائماً إلى المنتجات بـ "منتجاتنا الفاخرة" أو "منتجات المصنع" نظراً لتعدد وتنوع المنتجات لدينا.',
+            history: messages.slice(1).map(m => ({ role: m.role, text: m.text })),
+            message: userMessage
+          })
+        });
+        if (response.ok) {
+          const data = await response.json();
+          setMessages(prev => [...prev, { role: 'model', text: data.text }]);
+        } else {
+          throw new Error('فشل جلب الرد');
+        }
       }
     } catch (e) {
       setMessages(prev => [...prev, { role: 'model', text: 'عفواً، لا يمكنني الاتصال بالشبكة حالياً. حاول مجدداً لاحقاً.' }]);

@@ -244,7 +244,7 @@ export default function ManageTab({
   const [subTab, setSubTab] = useState<'products' | 'ai_settings' | 'manager_main'>(
     currentUser?.phone === '01228466613' ? 'manager_main' : 'products'
   );
-  const [managerSubTab, setManagerSubTab] = useState<'live_tracking' | 'user_permissions' | 'google_integration' | 'db_ops'>('user_permissions');
+  const [managerSubTab, setManagerSubTab] = useState<'live_tracking' | 'user_permissions' | 'google_integration' | 'db_ops' | 'ai_integration'>('user_permissions');
 
   // New variables for Wipe DB Password & Productivity tracking
   const [wipeDbPassword, setWipeDbPassword] = useState('');
@@ -441,6 +441,8 @@ export default function ManageTab({
   const [repPhone, setRepPhone] = useState(settings.representativePhone || '01228466613');
   const [invoiceAppName, setInvoiceAppName] = useState(settings.appName || 'الأخوة المتحدون EAG');
   const [googleMapsKey, setGoogleMapsKey] = useState(settings.googleMapsApiKey || '');
+  const [rapidKey, setRapidKey] = useState(settings.rapidApiKey || '');
+  const [geminiKey, setGeminiKey] = useState(settings.geminiApiKey || '');
   const [googlePassword, setGooglePassword] = useState('');
 
   // Delegate live tracking state
@@ -467,19 +469,32 @@ export default function ManageTab({
   });
 
   const checkGeminiStatus = async () => {
+    setGeminiStatus({ status: 'loading', message: 'جاري فحص حالة الذكاء الاصطناعي...' });
     try {
-      const response = await fetch('/api/gemini/status');
-      if (response.ok) {
-        const data = await response.json();
-        setGeminiStatus({
-          status: data.status,
-          message: data.message || ''
+      if (settings.geminiApiKey) {
+        const payload = { contents: [ { role: 'user', parts: [{ text: 'test' }] } ] };
+        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${settings.geminiApiKey}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
         });
+
+        if (response.ok) {
+          setGeminiStatus({ status: 'healthy', message: '● الذكاء الاصطناعي نشط ومتصل بـ Google Gemini (من الهاتف) بنجاح.' });
+        } else {
+          setGeminiStatus({ status: 'error', message: 'المفتاح غير صالح أو به مسافات خاطئة. تأكد من نسخه بالكامل.' });
+        }
       } else {
-        setGeminiStatus({
-          status: 'error',
-          message: 'تعذر الاتصال بالذكاء الاصطناعي. يرجى التحقق من إعدادات الـ API.'
-        });
+        const response = await fetch('/api/gemini/status');
+        if (response.ok) {
+          const data = await response.json();
+          setGeminiStatus({
+            status: data.status,
+            message: data.message || '● الذكاء الاصطناعي نشط ومتصل تلقائياً (عبر الخادم).'
+          });
+        } else {
+          setGeminiStatus({ status: 'missing', message: 'مفتاح الـ API غير متوفر في الخادم حالياً.' });
+        }
       }
     } catch {
       setGeminiStatus({
@@ -493,7 +508,7 @@ export default function ManageTab({
     if (subTab === 'ai_settings') {
       checkGeminiStatus();
     }
-  }, [subTab]);
+  }, [subTab, settings.geminiApiKey]);
 
   // AI Chat States
   const [aiChatCategory, setAiChatCategory] = useState('سوبر ماركت');
@@ -521,19 +536,32 @@ export default function ManageTab({
     setMarketSearchError('');
 
     try {
-      const response = await fetch('/api/gemini/market-research', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: finalQuery })
-      });
-
-      if (!response.ok) {
-        throw new Error('مفتاح الـ API الخارجي غير نشط حالياً.');
+      if (settings.geminiApiKey) {
+        const payload = {
+          system_instruction: { parts: { text: "أنت خبير في تحليل السوق وبورصة السلع والزيوت. قم بإعطاء إجابات دقيقة بناءً على المعطيات المتاحة ومحركات البحث." } },
+          contents: [ { role: "user", parts: [{ text: finalQuery }] } ]
+        };
+        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${settings.geminiApiKey}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        if (!response.ok) throw new Error('مفتاح الـ API الخارجي غير نشط حالياً.');
+        const data = await response.json();
+        const replyText = data.candidates?.[0]?.content?.parts?.[0]?.text || 'لم أتمكن من جلب بيانات.';
+        setMarketSearchResult(replyText);
+        setMarketSearchSources([]);
+      } else {
+        const response = await fetch('/api/gemini/market-research', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query: finalQuery })
+        });
+        if (!response.ok) throw new Error('مفتاح الـ API الخارجي غير نشط حالياً.');
+        const data = await response.json();
+        setMarketSearchResult(data.text || '');
+        setMarketSearchSources(data.sources || []);
       }
-
-      const data = await response.json();
-      setMarketSearchResult(data.text || '');
-      setMarketSearchSources(data.sources || []);
     } catch (err: any) {
       console.warn("Market search failed:", err.message);
       setMarketSearchError('حدث خطأ أثناء الاتصال بواجهة الذكاء الاصطناعي الخارجية. تأكد من تفعيل مفتاح الـ API الخاص بـ Gemini.');
@@ -654,22 +682,33 @@ export default function ManageTab({
 العميل المستهدف ينتمي لفئة: ${aiChatCategory}.${customerContext}
 المطلوب: قم بتقديم نصائح للتعامل، اقترح رسائل ترويجية، وأجب عن استفسارات المندوب بناءً على المعطيات أعلاه وفئة العميل بأسلوب الشريك الصديق الحريص. استخدم تنسيق Markdown للخط العريض والقوائم.`;
 
-      const response = await fetch('/api/gemini/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          systemInstruction,
-          history: aiChatHistory,
-          message: userMessage
-        })
-      });
-
-      if (!response.ok) {
-        throw new Error('الخادم الخارجي غير مستجيب حالياً.');
+      if (settings.geminiApiKey) {
+        const payload = {
+          system_instruction: { parts: { text: systemInstruction } },
+          contents: [
+            ...aiChatHistory.map(m => ({ role: m.role === 'model' ? 'model' : 'user', parts: [{ text: m.text }] })),
+            { role: "user", parts: [{ text: userMessage }] }
+          ]
+        };
+        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${settings.geminiApiKey}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        if (!response.ok) throw new Error('الخادم الخارجي غير مستجيب حالياً.');
+        const data = await response.json();
+        const replyText = data.candidates?.[0]?.content?.parts?.[0]?.text || 'عذراً، لم أتمكن من صياغة رد.';
+        setAiChatHistory(prev => [...prev, { role: 'model', text: replyText }]);
+      } else {
+        const response = await fetch('/api/gemini/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ systemInstruction, history: aiChatHistory, message: userMessage })
+        });
+        if (!response.ok) throw new Error('الخادم الخارجي غير مستجيب حالياً.');
+        const data = await response.json();
+        setAiChatHistory(prev => [...prev, { role: 'model', text: data.text }]);
       }
-
-      const data = await response.json();
-      setAiChatHistory(prev => [...prev, { role: 'model', text: data.text }]);
     } catch (err: any) {
       console.warn("AI Chat failed:", err.message);
       setAiChatHistory(prev => [...prev, { role: 'model', text: 'عذراً، حدث خطأ في الاتصال بالذكاء الاصطناعي. تأكد من تفعيل مفتاح الـ API الخاص بـ Gemini.' }]);
@@ -750,7 +789,9 @@ export default function ManageTab({
       representativeName: repName.trim(),
       representativePhone: repPhone.trim(),
       appName: invoiceAppName.trim(),
-      googleMapsApiKey: googleMapsKey.trim()
+      googleMapsApiKey: googleMapsKey.trim(),
+      rapidApiKey: rapidKey.trim(),
+      geminiApiKey: geminiKey.trim()
     });
     setSaveSuccessMsg('تم حفظ الإعدادات بنجاح!');
     setTimeout(() => setSaveSuccessMsg(''), 3000);
@@ -1238,6 +1279,17 @@ export default function ManageTab({
                 }`}
               >
                 ☁️ مزامنة جوجل شيت
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setManagerSubTab('ai_integration');
+                }}
+                className={`flex-1 min-w-[120px] py-1.5 px-0.5 rounded-xl text-xs font-black transition-all cursor-pointer select-none text-center ${
+                  managerSubTab === 'ai_integration' ? 'bg-[#FFFFFF] text-[#1A365D] shadow-sm font-extrabold' : 'text-slate-500 bg-transparent'
+                }`}
+              >
+                🤖 مفاتيح الـ API
               </button>
             </div>
 
@@ -2099,6 +2151,102 @@ export default function ManageTab({
                 </div>
               </div>
             )}
+
+            {/* Manager Sub-tab 5: AI and API Keys */}
+            {managerSubTab === 'ai_integration' && (
+              <div className="bg-[#FFFFFF] p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col gap-4 animate-fade-in text-right">
+                <h3 className="font-bold text-[#1A365D] text-base flex items-center gap-1.5 border-b border-slate-100 pb-2">
+                  <Sparkles className="h-5 w-5 text-[#1A365D]" />
+                  مفاتيح الـ API وإعدادات الذكاء الاصطناعي
+                </h3>
+
+                <div className="flex flex-col gap-3.5">
+
+                  <div className="border border-sky-100 rounded-xl p-3 bg-sky-50/20 mt-1">
+                    <label className="block text-xs font-black text-sky-950 mb-1.5 flex items-center gap-1.5">
+                      <MapPin className="h-4 w-4 text-[#2B6CB0]" />
+                      مفتاح خرائط جوجل (Google Maps API Key):
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="AIzaSy..."
+                      value={googleMapsKey}
+                      onChange={(e) => setGoogleMapsKey(e.target.value)}
+                      dir="ltr"
+                      className="w-full bg-[#FFFFFF] border border-slate-200 rounded-lg p-2.5 text-xs text-[#1A365D] font-mono focus:outline-none focus:ring-1 focus:ring-sky-400"
+                    />
+                    <p className="text-[10px] text-gray-400 mt-1 leading-normal">
+                      ضع هنا مفتاح الـ API الخاص بـ Google Maps لتمكين النظام من سحب أرقام هواتف وعناوين المحلات الفعلية من خرائط جوجل بدقة عالية. (يجب تفعيل Places API و Maps JavaScript API).
+                    </p>
+                  </div>
+
+                  <div className="border border-emerald-100 rounded-xl p-3 bg-emerald-50/20 mt-1">
+                    <label className="block text-xs font-black text-emerald-950 mb-1.5 flex items-center gap-1.5">
+                      <MapPin className="h-4 w-4 text-[#2B6CB0]" />
+                      مفتاح الساحب السحابي المجاني (RapidAPI Key) بديل الفيزا:
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="اكتب المفتاح السحابي هنا..."
+                      value={rapidKey}
+                      onChange={(e) => setRapidKey(e.target.value)}
+                      dir="ltr"
+                      className="w-full bg-[#FFFFFF] border border-slate-200 rounded-lg p-2.5 text-xs text-[#1A365D] font-mono focus:outline-none focus:ring-1 focus:ring-emerald-400"
+                    />
+                    <p className="text-[10px] text-gray-500 mt-1 leading-normal font-bold">
+                      💡 الحل العبقري: سجل مجاناً في موقع RapidAPI بإيميلك للحصول على المفتاح. سيقوم السيرفر السحابي بفتح خرائط جوجل وسحب المحلات وإرسالها لتطبيق الموبايل بدون فيزا وبدون برامج كمبيوتر!
+                    </p>
+                  </div>
+
+                  <div className="border border-purple-100 rounded-xl p-3 bg-purple-50/20 mt-1">
+                    <label className="block text-xs font-black text-purple-950 mb-1.5 flex items-center gap-1.5">
+                      <Sparkles className="h-4 w-4 text-[#2B6CB0]" />
+                      مفتاح الذكاء الاصطناعي (Gemini API Key):
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="AIzaSy..."
+                      value={geminiKey}
+                      onChange={(e) => setGeminiKey(e.target.value)}
+                      dir="ltr"
+                      className="w-full bg-[#FFFFFF] border border-slate-200 rounded-lg p-2.5 text-xs text-[#1A365D] font-mono focus:outline-none focus:ring-1 focus:ring-purple-400"
+                    />
+                    <p className="text-[10px] text-gray-500 mt-1 leading-normal font-bold">
+                      💡 احصل عليه مجاناً من Google AI Studio لتمكين المساعد الذكي وصياغة الرسائل الميدانية.
+                    </p>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 my-1">
+                    <div>
+                      <label className="block text-xs font-bold text-[#2B6CB0] mb-1">رمز العملة داخل الفواتير</label>
+                      <input
+                        type="text"
+                        value={currency}
+                        onChange={(e) => setCurrency(e.target.value)}
+                        className="w-full bg-[#F7FAFC] border border-slate-200 rounded-lg p-2 text-xs font-semibold focus:ring-2 focus:ring-indigo-500 text-center"
+                        style={{ backgroundColor: '#bfdbf8' }}
+                      />
+                    </div>
+
+                    <div className="flex flex-col gap-2">
+                      {saveSuccessMsg && (
+                        <div className="bg-emerald-50 text-[#DD6B20] text-[11px] font-bold py-1.5 px-3 rounded-lg flex items-center gap-1.5 animate-in fade-in">
+                          <CheckCircle2 className="h-4 w-4" />
+                          {saveSuccessMsg}
+                        </div>
+                      )}
+                      <button
+                        type="button"
+                        onClick={handleSaveSettings}
+                        className="w-full bg-[#1A365D] border border-[#1A365D] text-white rounded-xl py-3 text-xs font-black hover:bg-indigo-900 active:scale-95 transition-all cursor-pointer shadow-sm mt-2"
+                      >
+                        💾 حفظ المفاتيح والمتغيرات
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -2256,95 +2404,10 @@ export default function ManageTab({
           <div className="bg-[#FFFFFF] p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col gap-4 animate-fade-in">
             <h3 className="font-bold text-[#1A365D] text-base flex items-center gap-1.5 border-b border-slate-100 pb-2">
               <Sparkles className="h-5 w-5 text-[#1A365D]" />
-              إعدادات الذكاء الاصطناعي والعامة
+              أدوات المساعد الذكي
             </h3>
 
-            <div className="flex flex-col gap-3.5">
-              {/* AI Pitch Guidelines Field */}
-              <div className="border border-indigo-100 rounded-xl p-3 bg-indigo-50/20 mt-1">
-                <label className="block text-xs font-black text-indigo-950 mb-1.5 flex items-center gap-1.5" style={{ color: '#4d1a21' }}>
-                  <Sparkles className="h-4 w-4 text-[#1A365D]" />
-                  الأفكار والخطوط العريضة لرسالة الذكاء الاصطناعي الترويجية (للعملاء الجدد):
-                </label>
-                <textarea
-                  placeholder="مثال: ركز على أن نسبة الخصم تصل لـ 15%، وأن الجودة تضاهي الشركات الكبرى مع توصيل سريع في نفس اليوم..."
-                  value={pitchGuidelines}
-                  onChange={(e) => setPitchGuidelines(e.target.value)}
-                  dir="rtl"
-                  className="w-full bg-[#FFFFFF] border border-slate-200 rounded-lg p-2.5 text-xs text-[#1A365D] font-bold leading-relaxed resize-y focus:outline-none focus:ring-1 focus:ring-indigo-400 h-20"
-                />
-                <p className="text-[10px] text-gray-400 mt-1 leading-normal">
-                  الخطوط والأفكار المُدخلة هنا سيستخدمها العقل الذكي لتنشيط وتخصيص صياغة الرسائل الترويجية المناسبة عند عرض ترويج العميل.
-                </p>
-              </div>
-
-              <div className="border border-emerald-100 rounded-xl p-3 bg-emerald-50/20 mt-1">
-                <label className="block text-xs font-black text-emerald-950 mb-1.5 flex items-center gap-1.5" style={{ color: '#096434' }}>
-                  <Sparkles className="h-4 w-4 text-[#DD6B20]" />
-                  الأفكار لرسالة الذكاء الاصطناعي (للعملاء الخاملين والنشطين للتحفيز):
-                </label>
-                <textarea
-                  placeholder="مثال: رسائل تهنئة، عروض خاصة للمسحوبات الكبيرة، أو رسائل عتاب محفزة للعملاء الذين توقفوا عن الشراء..."
-                  value={retentionGuidelines}
-                  onChange={(e) => setRetentionGuidelines(e.target.value)}
-                  dir="rtl"
-                  className="w-full bg-[#FFFFFF] border border-slate-200 rounded-lg p-2.5 text-xs text-[#1A365D] font-bold leading-relaxed resize-y focus:outline-none focus:ring-1 focus:ring-emerald-400 h-20"
-                />
-                <p className="text-[10px] text-gray-400 mt-1 leading-normal">
-                  هذه التعليمات ستستخدم عند كتابة رسائل الواتساب للعملاء من خلال قسم التقارير والعملاء (النشطين لزيادة البيع والخاملين لتحفيزهم).
-                </p>
-              </div>
-
-              <div className="border border-sky-100 rounded-xl p-3 bg-sky-50/20 mt-1">
-                <label className="block text-xs font-black text-sky-950 mb-1.5 flex items-center gap-1.5">
-                  <MapPin className="h-4 w-4 text-[#2B6CB0]" />
-                  مفتاح خرائط جوجل (Google Maps API Key):
-                </label>
-                <input
-                  type="text"
-                  placeholder="AIzaSy..."
-                  value={googleMapsKey}
-                  onChange={(e) => setGoogleMapsKey(e.target.value)}
-                  dir="ltr"
-                  className="w-full bg-[#FFFFFF] border border-slate-200 rounded-lg p-2.5 text-xs text-[#1A365D] font-mono focus:outline-none focus:ring-1 focus:ring-sky-400"
-                />
-                <p className="text-[10px] text-gray-400 mt-1 leading-normal">
-                  ضع هنا مفتاح الـ API الخاص بـ Google Maps لتمكين النظام من سحب أرقام هواتف وعناوين المحلات الفعلية من خرائط جوجل بدقة عالية. (يجب تفعيل Places API و Maps JavaScript API).
-                </p>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 my-1">
-                <div>
-                  <label className="block text-xs font-bold text-[#2B6CB0] mb-1">رمز العملة داخل الفواتير</label>
-                  <input
-                    type="text"
-                    value={currency}
-                    onChange={(e) => setCurrency(e.target.value)}
-                    className="w-full bg-[#F7FAFC] border border-slate-200 rounded-lg p-2 text-xs font-semibold focus:ring-2 focus:ring-indigo-500 text-center"
-                    style={{ backgroundColor: '#bfdbf8' }}
-                  />
-                </div>
-
-                <div className="flex flex-col gap-2">
-                  {saveSuccessMsg && (
-                    <div className="bg-emerald-50 text-[#DD6B20] text-[11px] font-bold py-1.5 px-3 rounded-lg flex items-center gap-1.5 animate-in fade-in">
-                      <CheckCircle2 className="h-4 w-4" />
-                      {saveSuccessMsg}
-                    </div>
-                  )}
-                  <button
-                    type="button"
-                    onClick={handleSaveSettings}
-                    className="w-full bg-indigo-100 border border-indigo-200 text-[#1A365D] rounded-lg py-2 text-xs font-bold hover:bg-indigo-200 active:scale-95 transition-all cursor-pointer"
-                  >
-                    حفظ المتغيرات
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            {/* AI Control Center with Dual Active tabs */}
-            <div className="mt-4 pt-4 border-t border-slate-100 flex flex-col gap-3">
+            <div className="flex flex-col gap-3">
               {/* AI Connection Status Indicator */}
               <div className="text-right">
                 {geminiStatus.status === 'loading' ? (
@@ -2370,15 +2433,67 @@ export default function ManageTab({
                       <button type="button" onClick={checkGeminiStatus} className="text-[10px] text-[#2B6CB0] font-black hover:underline cursor-pointer shrink-0">أعد الفحص 🔄</button>
                     </div>
                     <p className="text-[11px] leading-relaxed text-slate-700 font-semibold text-right">
-                      {geminiStatus.status === 'missing' && 'مفتاح الـ API غير متوفر في الخادم حالياً. لن تتمكن من الحصول على ردود حتى يتم تفعيل المفتاح.'}
+                      {geminiStatus.status === 'missing' && 'الخادم السحابي معطل حالياً. يمكنك الاعتماد على الاتصال المباشر عبر لصق مفتاح في (المدير > مفاتيح الـ API).'}
                       {geminiStatus.status === 'leaked' && 'تنبيه أمان: تم الكشف عن تسريب مفتاح الـ API المستخدم مسبقاً وتم تعطيله لحمايتك. يرجى تجديده.'}
-                      {geminiStatus.status === 'error' && `حدثت مشكلة أثناء محاولة استخدام المفتاح: ${geminiStatus.message}`}
+                      {geminiStatus.status === 'error' && `تنبيه: ${geminiStatus.message}`}
                     </p>
                     <div className="bg-white/90 p-2.5 rounded-lg border border-amber-100 text-[10.5px] text-[#1A365D] font-bold mt-1.5 leading-relaxed text-right md:text-right">
-                       🔑 <strong className="text-[#DD6B20]">طريقة تفعيل الذكاء الاصطناعي (Gemini):</strong> اضغط على زر الإعدادات <strong className="text-indigo-600">(Settings)</strong> أعلى يمين شاشة منصة AI Studio، ثم اختر القائمة الجانبية <strong className="text-indigo-600">(Secrets)</strong>، وقم بإضافة مفتاح جديد باسم <code className="bg-slate-100 p-0.5 px-1 rounded font-mono select-all">GEMINI_API_KEY</code> وضع قيمته التي حصلت عليها من غوغل.
+                       🔑 <strong className="text-[#DD6B20]">تلميح:</strong> التطبيق يعتمد الآن على الاتصال التلقائي المدمج، ولكن يمكنك دائماً وضع مفتاح Gemini خاص بك ليعمل المساعد مباشرة من الهاتف بقوة أكبر.
                     </div>
                   </div>
                 )}
+              </div>
+
+              <div className="flex flex-col gap-3 mt-2 mb-2">
+                <div className="border border-indigo-100 rounded-xl p-3 bg-indigo-50/20">
+                  <label className="block text-xs font-black text-indigo-950 mb-1.5 flex items-center gap-1.5" style={{ color: '#4d1a21' }}>
+                    <Sparkles className="h-4 w-4 text-[#1A365D]" />
+                    الأفكار والخطوط العريضة لرسالة الذكاء الاصطناعي الترويجية (للعملاء الجدد):
+                  </label>
+                  <textarea
+                    placeholder="مثال: ركز على أن نسبة الخصم تصل لـ 15%، وأن الجودة تضاهي الشركات الكبرى مع توصيل سريع في نفس اليوم..."
+                    value={pitchGuidelines}
+                    onChange={(e) => setPitchGuidelines(e.target.value)}
+                    dir="rtl"
+                    className="w-full bg-[#FFFFFF] border border-slate-200 rounded-lg p-2.5 text-xs text-[#1A365D] font-bold leading-relaxed resize-y focus:outline-none focus:ring-1 focus:ring-indigo-400 h-20"
+                  />
+                  <p className="text-[10px] text-gray-400 mt-1 leading-normal">
+                    الخطوط والأفكار المُدخلة هنا سيستخدمها العقل الذكي لتنشيط وتخصيص صياغة الرسائل الترويجية المناسبة عند عرض ترويج العميل.
+                  </p>
+                </div>
+
+                <div className="border border-emerald-100 rounded-xl p-3 bg-emerald-50/20">
+                  <label className="block text-xs font-black text-emerald-950 mb-1.5 flex items-center gap-1.5" style={{ color: '#096434' }}>
+                    <Sparkles className="h-4 w-4 text-[#DD6B20]" />
+                    الأفكار لرسالة الذكاء الاصطناعي (للعملاء الخاملين والنشطين للتحفيز):
+                  </label>
+                  <textarea
+                    placeholder="مثال: رسائل تهنئة، عروض خاصة للمسحوبات الكبيرة، أو رسائل عتاب محفزة للعملاء الذين توقفوا عن الشراء..."
+                    value={retentionGuidelines}
+                    onChange={(e) => setRetentionGuidelines(e.target.value)}
+                    dir="rtl"
+                    className="w-full bg-[#FFFFFF] border border-slate-200 rounded-lg p-2.5 text-xs text-[#1A365D] font-bold leading-relaxed resize-y focus:outline-none focus:ring-1 focus:ring-emerald-400 h-20"
+                  />
+                  <p className="text-[10px] text-gray-400 mt-1 leading-normal">
+                    هذه التعليمات ستستخدم عند كتابة رسائل الواتساب للعملاء من خلال قسم التقارير والعملاء (النشطين لزيادة البيع والخاملين لتحفيزهم).
+                  </p>
+                </div>
+
+                <div className="flex justify-end gap-2">
+                  {saveSuccessMsg && (
+                    <div className="bg-emerald-50 text-[#DD6B20] text-[11px] font-bold py-1.5 px-3 rounded-lg flex items-center gap-1.5 animate-in fade-in">
+                      <CheckCircle2 className="h-4 w-4" />
+                      {saveSuccessMsg}
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    onClick={handleSaveSettings}
+                    className="bg-[#1A365D] text-white rounded-xl py-2 px-6 text-xs font-black hover:bg-indigo-900 active:scale-95 transition-all shadow-sm flex items-center gap-1"
+                  >
+                    💾 حفظ الأفكار والتعليمات
+                  </button>
+                </div>
               </div>
 
               <div className="flex border-b border-indigo-100">
