@@ -1,0 +1,17 @@
+{
+  "name": "الأخوة المتحدون للمبيعات",
+  "short_name": "الأخوة المتحدون",
+  "description": "نظام إدارة المبيعات الميداني لشركة الأخوة المتحدون",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#F7FAFC",
+  "theme_color": "#1A365D",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "https://cdn-icons-png.flaticon.com/512/3063/3063822.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
