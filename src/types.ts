@@ -148,7 +148,7 @@ export function getProductWeightsFallback(product: Product): ProductWeight[] {
     return product.weights;
   }
   // استخراج الحجم التقريبي من الاسم إن وجد (للتوافق الرجعي)
-  let detectedSize = "عبوة افتراضية";
+  let detectedSize = "كرتونة";
   if (product.name.includes("1 لتر")) detectedSize = "1 لتر";
   else if (product.name.includes("750 مل")) detectedSize = "750 مل";
   else if (product.name.includes("700 مل")) detectedSize = "700 مل";
@@ -175,4 +175,3 @@ export function formatNum(num: number | string): string {
     maximumFractionDigits: 3
   }).format(val);
 }
-

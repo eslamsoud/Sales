@@ -502,9 +502,9 @@ export default function App() {
         metadata: {
           syncedAt: new Date().toISOString(),
           app: 'نظام المبيعات والمخزون للسيارة',
-          totalSales,
-          totalExpenses: totalSpent,
-          netProfit
+          totalSales: Number(totalSales) || 0,
+          totalExpenses: Number(totalSpent) || 0,
+          netProfit: Number(netProfit) || 0
         },
         invoices: invoices.map(inv => {
           const cust = customersMap.get(inv.customerId);
@@ -521,11 +521,12 @@ export default function App() {
             items: inv.items || []
           };
         }),
-        expenses: (expenses || []).map(e => ({
+        expenses: (expenses || []).filter(e => e.amount > 0).map(e => ({
           id: e.id,
           date: e.date,
           amount: e.amount,
           category: e.category,
+          type: e.type || 'expense',
           description: e.description,
           delegateName: e.delegateName || 'مجهول'
         })),
@@ -817,7 +818,11 @@ export default function App() {
         // 1. Update users permissions list (highly sensitive, managed by general manager)
         if (data.users && Array.isArray(data.users)) {
           const mappedUsers = data.users.map((u: any) => ({
-            phone: String(u.phone).trim(),
+            phone: (() => {
+              let p = String(u.phone).replace(/^'/, '').trim();
+              if (p.length === 10 && p.startsWith('1')) return '0' + p;
+              return p;
+            })(),
             name: String(u.name || ''),
             role: (u.role === 'owner' ? 'owner' : 'employee') as 'owner' | 'employee',
             status: (u.status === 'active' || u.status === 'pending' ? u.status : 'active') as 'active' | 'pending',
@@ -827,7 +832,7 @@ export default function App() {
             permittedSubTabs: typeof u.permittedSubTabs === 'string' 
               ? u.permittedSubTabs.split(',').map((t: string) => t.trim()).filter(Boolean)
               : Array.isArray(u.permittedSubTabs) ? u.permittedSubTabs : [],
-            password: String(u.password || ''),
+            password: String(u.password || '').replace(/^'/, ''),
             customRoleName: String(u.customRoleName || ''),
             createdAt: u.createdAt || new Date().toISOString()
           }));
@@ -842,8 +847,53 @@ export default function App() {
           handleUpdateUsersList(mappedUsers);
         }
 
-        // 2. Update products and categories (highly sensitive items)
-        if (data.products && Array.isArray(data.products)) {
+        // 2. Update products and categories (النسخة المسطحة الجديدة المتوافقة مع التعديل اليدوي)
+        if (data.flatProducts && Array.isArray(data.flatProducts) && data.flatProducts.length > 0) {
+          const productGroups: Record<string, Product> = {};
+          const nameToIdMap: Record<string, string> = {};
+          
+          data.flatProducts.forEach((fp: any) => {
+            const pName = String(fp.productName || 'صنف جديد').trim();
+            let pid = fp.productId ? String(fp.productId).trim() : '';
+            
+            // ذكاء اصطناعي: لو ضفت الصنف يدويا في الشيت ونسيت الـ ID، التطبيق هيجمعه بالاسم ويديله ID لوحده!
+            if (!pid) {
+              if (nameToIdMap[pName]) {
+                pid = nameToIdMap[pName];
+              } else {
+                pid = 'prod-' + Math.random().toString(36).substr(2, 9);
+                nameToIdMap[pName] = pid;
+              }
+            }
+            
+            if (!productGroups[pid]) {
+              productGroups[pid] = {
+                id: pid,
+                name: pName,
+                price: Number(fp.retailPricePerUnit || 0),
+                minStockAlert: 20,
+                accountingUnit: 'كرتونة',
+                weights: []
+              };
+            }
+            
+            productGroups[pid].weights!.push({
+              id: String(fp.weightId || 'w-' + Math.random().toString(36).substr(2, 9)),
+              size: String(fp.size || 'كرتونة'),
+              cartonPriceFromFactory: Number(fp.cartonPriceFromFactory || 0),
+              unitsPerCarton: Number(fp.unitsPerCarton || 12),
+              factoryPricePerUnit: Number(fp.factoryPricePerUnit || 0),
+              profitMarginPercent: 0,
+              addedValue: Number(fp.addedValue || 0),
+              retailPricePerUnit: Number(fp.retailPricePerUnit || 0)
+            });
+          });
+          
+          const mappedProducts = Object.values(productGroups);
+          setProducts(mappedProducts);
+          localStorage.setItem('products_sys', JSON.stringify(mappedProducts));
+        } else if (data.products && Array.isArray(data.products)) {
+          // التوافق الرجعي لو السيرفر لسه مبعتش النسخة المسطحة
           const mappedProducts = data.products.map((p: any) => ({
             id: p.id || p.name,
             name: p.name,
@@ -851,7 +901,7 @@ export default function App() {
             purchasingPrice: Number(p.purchasingPrice || p.price || 0),
             count: Number(p.count || 0),
             category: p.category || 'عام',
-            weights: Array.isArray(p.weights) && p.weights.length > 0 ? p.weights : [{ id: '1', size: 'عبوة', price: Number(p.price || 0) }]
+            weights: Array.isArray(p.weights) && p.weights.length > 0 ? p.weights : [{ id: '1', size: 'كرتونة', cartonPriceFromFactory: Number(p.price || 0)*12, unitsPerCarton: 12, factoryPricePerUnit: Number(p.price || 0), profitMarginPercent: 0, retailPricePerUnit: Number(p.price || 0) }]
           }));
           setProducts(mappedProducts);
           localStorage.setItem('products_sys', JSON.stringify(mappedProducts));
@@ -898,10 +948,11 @@ export default function App() {
 
         if (data.expenses && Array.isArray(data.expenses)) {
           const mappedExpenses = data.expenses.map((e: any) => ({
-            id: e.id || String(Math.random()),
+            id: String(e.id || Math.random()).replace(/^'/, ''),
             date: e.date,
             amount: Number(e.amount || 0),
             category: e.category,
+            type: e.type === 'revenue' ? 'revenue' : 'expense',
             description: e.description || '',
             delegateName: e.delegateName || 'مجهول'
           }));
@@ -927,7 +978,7 @@ export default function App() {
             id: fl.id || String(Math.random()),
             date: fl.date,
             productName: fl.productName,
-            weightSize: fl.weightSize || 'عبوة',
+            weightSize: fl.weightSize || 'كرتونة',
             cartonsCount: Number(fl.cartonsCount || 0),
             quantity: Number(fl.quantity || 0),
             advanceAmount: Number(fl.advanceAmount || 0),
