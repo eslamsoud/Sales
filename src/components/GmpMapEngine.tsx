@@ -18,6 +18,39 @@ interface GmpMapEngineProps {
   setIsSearching: (b: boolean) => void;
 }
 
+// مكون مساعد لرسم دائرة نطاق البحث على الخريطة بشكل مرئي وتفاعلي
+function MapCircle({ center, radius }: { center: any, radius: number }) {
+  const map = useMap();
+  const circleRef = useRef<any>(null);
+
+  useEffect(() => {
+    if (!map || !window.google || !window.google.maps || !window.google.maps.Circle) return;
+
+    if (!circleRef.current) {
+      circleRef.current = new window.google.maps.Circle({
+        strokeColor: '#DD6B20',
+        strokeOpacity: 0.8,
+        strokeWeight: 2,
+        fillColor: '#DD6B20',
+        fillOpacity: 0.15,
+        map,
+        center,
+        radius,
+      });
+    } else {
+      circleRef.current.setOptions({ center, radius });
+    }
+
+    return () => {
+      if (circleRef.current) {
+        circleRef.current.setMap(null);
+      }
+    };
+  }, [map, center, radius]);
+
+  return null;
+}
+
 // Inner component to use maps library
 function MapSearchInner({ storeType, batchSize, onResults, isSearching, setIsSearching }: GmpMapEngineProps) {
   const map = useMap();
@@ -219,6 +252,7 @@ function MapSearchInner({ storeType, batchSize, onResults, isSearching, setIsSea
                 }}>
                     <Pin background="#E11D48" glyphColor="#fff" borderColor="#BE123C" />
                 </AdvancedMarker>
+                <MapCircle center={center} radius={mapRadius} />
             </Map>
           </div>
 
@@ -280,71 +314,9 @@ function MapSearchInner({ storeType, batchSize, onResults, isSearching, setIsSea
 }
 
 export default function GmpMapEngine(props: GmpMapEngineProps) {
-  const [mapError, setMapError] = useState<string | null>(null);
-
-  useEffect(() => {
-    (window as any).gm_authFailure = () => {
-      setMapError("فشل مصادقة Google Maps API. يرجى التأكد من تفعيل الدفع (Billing)، إضافة النطاق الحالي ضمن (HTTP Referrers) في الـ (Credentials) وتفعيل الـ (APIs) المطلوبة في حسابك على Google Cloud.");
-    };
-
-    const handleWindowError = (e: ErrorEvent) => {
-      if (e.message && e.message.includes("Google Maps JavaScript API error")) {
-         setMapError(`رسالة من خوادم جوجل: ${e.message}. يرجى مراجعة إعدادات (Billing / Referrers) في حسابك.`);
-      }
-    };
-    window.addEventListener('error', handleWindowError);
-    return () => window.removeEventListener('error', handleWindowError);
-  }, []);
-
-  if (mapError) {
-    return (
-      <div className="flex flex-col gap-4 mt-4">
-        <div className="flex flex-col items-center justify-center p-6 bg-red-50 rounded-xl border border-red-200 text-center text-red-900">
-          <h2 className="text-lg font-bold mb-2">تعذر تفعيل الخريطة</h2>
-          <p className="text-xs mb-4 font-bold leading-relaxed whitespace-pre-wrap">{mapError}</p>
-          <div className="text-right text-[11px] bg-white p-3 rounded border border-red-100 w-full">
-              <p><strong>يرجى مراجعة الأمور التالية في Google Cloud Console:</strong></p>
-              <ul className="list-disc list-inside mt-2 space-y-1 text-red-800">
-                  <li>تفعيل الدفع <strong>(Billing Account)</strong>.</li>
-                  <li>تفعيل حزم <strong>(Places API (New))</strong>, <strong>(Maps JavaScript API)</strong>, <strong>(Geocoding API)</strong>.</li>
-                  <li>تأكد من إضافة روابط هذا التطبيق <code>الروابط التي تظهر في شريط المتصفح</code> ضمن قسم <strong>HTTP Referrers</strong> الخاص بالمفتاح، أو اجعل المفتاح لا يحتوي على قيود مؤقتاً للتجربة.</li>
-              </ul>
-          </div>
-        </div>
-        <div className="flex flex-col gap-2 relative z-10 opacity-40 grayscale pointer-events-none mt-2">
-          <label className="text-xs font-black text-[#1A365D]">المنطقة الجغرافية (المدينة / الحي):</label>
-          <div className="flex items-center gap-2">
-              <input
-                type="text"
-                disabled
-                placeholder="اكتب اسم المدينة أو المنطقة المجرى استكشافها هنا..."
-                className="flex-1 bg-[#F7FAFC] border border-slate-200 rounded-lg p-2.5 text-xs font-bold text-right text-[#1A365D]"
-              />
-              <button
-                type="button"
-                disabled
-                className="bg-[#2B6CB0] text-white px-4 py-2.5 rounded-lg text-xs flex items-center justify-center"
-              >
-                <Search className="h-4 w-4 shrink-0" />
-              </button>
-          </div>
-          <div className="mt-3.5 border border-slate-200 rounded-xl bg-slate-200/50 h-32 flex items-center justify-center">
-             <span className="text-slate-400 font-bold text-xs flex flex-col items-center gap-1"><MapPin className="h-5 w-5" />الخريطة التفاعلية مغلقة مؤقتاً</span>
-          </div>
-        </div>
-        <button
-          disabled
-          className="w-full bg-slate-300 text-white rounded-xl py-3.5 text-xs font-bold leading-none shadow-md flex items-center justify-center gap-2 cursor-not-allowed opacity-70 mt-2"
-        >
-          <Search className="h-4 w-4 text-slate-100" />
-          <span>بدء سحب العملاء من خرائط جوجل بالمنطقة المحددة (مغلق مؤقتاً)</span>
-        </button>
-      </div>
-    );
-  }
 
   return (
-    <APIProvider apiKey={API_KEY} version="weekly" onError={() => setMapError('حدث خطأ أثناء تحميل سكربت خرائط جوجل. تأكد من اتصالك بالإنترنت وأن مفتاح API لا يمنع النطاق الحالي.')}>
+    <APIProvider apiKey={API_KEY} version="weekly">
       <MapSearchInner {...props} />
     </APIProvider>
   );
