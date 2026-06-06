@@ -389,6 +389,7 @@ interface ManageTabProps {
   onUpdateSettings: (settings: AppSettings) => void;
   onResetDatabase: (demoMode: boolean) => void;
   onGoBack: () => void;
+  onTriggerSync?: (desc: string) => void;
   factoryLoads?: FactoryLoad[];
 }
 export default function ManageTab({
@@ -407,6 +408,7 @@ export default function ManageTab({
   onUpdateSettings,
   onResetDatabase,
   onGoBack,
+  onTriggerSync,
   factoryLoads = []
 }: ManageTabProps) {
   // Helper for subtabs permissions
@@ -1019,6 +1021,7 @@ export default function ManageTab({
     setNewUserPhone('');
     setNewUserPassword('');
     alert("تم بنجاح تسجيل الحساب بصفة \"" + customRoleName + "\" وتفعيل صلاحياته لـ \"" + newUserName + "\"!");
+    onTriggerSync?.('إضافة مستخدم جديد وصلاحياته');
   };
   const isOwner = currentUser?.phone === '01228466613';
   const isDelegateLockRequired = !isOwner && !isDelegateUnlocked;
@@ -1583,6 +1586,7 @@ export default function ManageTab({
                           setCurrentOwnerPassword('');
                           setNewOwnerPassword('');
                           alert('تم تغيير الرمز السري للمدير العام بنجاح! ✓');
+                          onTriggerSync?.('تغيير الرمز السري للإدارة');
                         }}
                         className="bg-amber-600 hover:bg-amber-700 text-white rounded-xl py-2 text-xs font-black transition-all active:scale-95 cursor-pointer flex items-center justify-center gap-1.5"
                       >
@@ -1698,6 +1702,7 @@ export default function ManageTab({
                                     );
                                     onUpdateUsersList(updated);
                                     localStorage.setItem('users_permissions_sys', JSON.stringify(updated));
+                                    onTriggerSync?.('تغيير حالة الحساب (تفعيل/إيقاف)');
                                   }}
  className={`px-2.5 py-1 rounded-xl text-[10px] font-black transition-colors cursor-pointer ${ user.status === 'active' ? 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200' : 'bg-amber-100 text-amber-800 hover:bg-amber-150' }`}
                                 >
@@ -1714,6 +1719,7 @@ export default function ManageTab({
                                       const updated = usersList.filter(u => u.phone !== user.phone);
                                       onUpdateUsersList(updated);
                                       localStorage.setItem('users_permissions_sys', JSON.stringify(updated));
+                                      onTriggerSync?.('حذف مستخدم من النظام');
                                     }
                                   }}
                                   className="text-rose-600 hover:text-rose-800 p-1 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer text-xs"
@@ -1779,6 +1785,7 @@ export default function ManageTab({
                                             onUpdateUsersList(updated);
                                             localStorage.setItem('users_permissions_sys', JSON.stringify(updated));
                                             alert('تم تعديل وحفظ المسمى الوظيفي بنجاح! ✓');
+                                            onTriggerSync?.('تعديل المسمى الوظيفي');
                                           }
                                         }}
                                         className="bg-purple-800 hover:bg-purple-900 text-white rounded-lg px-3 py-1.5 text-xs font-black tracking-wide transition-all cursor-pointer shadow-sm active:scale-95 shrink-0 flex items-center justify-center gap-1"
@@ -1838,6 +1845,7 @@ export default function ManageTab({
                                         onUpdateUsersList(updated);
                                         localStorage.setItem('users_permissions_sys', JSON.stringify(updated));
                                         alert('تم تطبيق قالب (الزائر): تفعيل عرض المنتجات والأسعار فقط.');
+                                        onTriggerSync?.('تطبيق قالب الزائر');
                                       }}
                                       className="p-2 text-center rounded-xl bg-white border border-slate-200 hover:bg-amber-50 hover:border-amber-300 transition-all cursor-pointer shadow-sm active:scale-95 flex items-center justify-center min-h-[55px]"
                                     >
@@ -1862,6 +1870,7 @@ export default function ManageTab({
                                         onUpdateUsersList(updated);
                                         localStorage.setItem('users_permissions_sys', JSON.stringify(updated));
                                         alert('تم تطبيق قالب (مندوب): تفعيل الفواتير، العملاء، والرئيسية للمبيعات الميدانية.');
+                                        onTriggerSync?.('تطبيق قالب مندوب مبيعات');
                                       }}
                                       className="p-2 text-center rounded-xl bg-white border border-slate-200 hover:bg-blue-50 hover:border-blue-300 transition-all cursor-pointer shadow-sm active:scale-95 flex items-center justify-center min-h-[55px]"
                                     >
@@ -1886,6 +1895,7 @@ export default function ManageTab({
                                         onUpdateUsersList(updated);
                                         localStorage.setItem('users_permissions_sys', JSON.stringify(updated));
                                         alert('تم تطبيق قالب (ليدر تيم): تفعيل المبيعات مع التقارير بلمسات مرنة.');
+                                        onTriggerSync?.('تطبيق قالب ليدر مبيعات');
                                       }}
                                       className="p-2 text-center rounded-xl bg-white border border-slate-200 hover:bg-[#DEEAF6] hover:border-indigo-300 transition-all cursor-pointer shadow-sm active:scale-95 flex items-center justify-center min-h-[55px]"
                                     >
@@ -1914,6 +1924,7 @@ export default function ManageTab({
                                         onUpdateUsersList(updated);
                                         localStorage.setItem('users_permissions_sys', JSON.stringify(updated));
                                         alert('تم تطبيق قالب (مشرف عام): تفعيل كافة التبويبات للمتابعة وللاشراف دون المالك.');
+                                        onTriggerSync?.('تطبيق قالب مشرف عام');
                                       }}
                                       className="p-2 text-center rounded-xl bg-white border border-slate-200 hover:bg-[#E2F0D9] hover:border-emerald-300 transition-all cursor-pointer shadow-sm active:scale-95 flex items-center justify-center min-h-[55px]"
                                     >
@@ -1966,6 +1977,7 @@ export default function ManageTab({
                                             );
                                             onUpdateUsersList(updated);
                                             localStorage.setItem('users_permissions_sys', JSON.stringify(updated));
+                                            onTriggerSync?.('تعديل الصلاحيات الرئيسية');
                                           }}
                                           className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 h-4 w-4 cursor-pointer accent-[#1A365D]"
                                         />
@@ -2001,6 +2013,7 @@ export default function ManageTab({
                                                     );
                                                     onUpdateUsersList(updated);
                                                     localStorage.setItem('users_permissions_sys', JSON.stringify(updated));
+                                                    onTriggerSync?.('تعديل الصلاحيات الفرعية');
                                                   }}
                                                   className="rounded border-slate-300 text-amber-500 h-3.5 w-3.5 cursor-pointer accent-[#DD6B20]"
                                                 />
@@ -2209,6 +2222,7 @@ export default function ManageTab({
                                     localStorage.setItem('users_permissions_sys', JSON.stringify(updated));
                                     alert("تم بنجاح حفظ وتثبيت وتعميد صلاحيات ولقب والرمز السري بنظام الإدارة للمندوب \"" + user.name + "\"! ✓");
                                     setExpandedUserPhone(null);
+                                    onTriggerSync?.('حفظ وتعميد جميع التعديلات والصلاحيات');
                                   }}
                                   className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs py-3 rounded-2xl transition-all shadow-md active:scale-95 flex items-center justify-center gap-2 cursor-pointer"
                                 >

@@ -1332,6 +1332,7 @@ export default function App() {
             onUpdateSettings={setSettings}
             onResetDatabase={handleResetDatabase}
             onGoBack={() => setActiveTab('dashboard')}
+            onTriggerSync={promptForSync}
           />
         )}
 
