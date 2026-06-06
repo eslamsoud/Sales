@@ -152,7 +152,7 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
 
   // Google Maps Lead Finder State
   const [selectedSearchArea, setSelectedSearchArea] = useState('');
-  const [storeType, setStoreType] = useState('سوبر ماركت');
+  const [storeTypes, setStoreTypes] = useState<string[]>(['الكل']);
   const [isSearchingMaps, setIsSearchingMaps] = useState(false);
   const [mapsResults, setMapsResults] = useState<any[]>([]);
   const [addedLeadIds, setAddedLeadIds] = useState<string[]>([]);
@@ -996,23 +996,35 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
               <div className="grid grid-cols-1 gap-3.5">
                 {/* Lead classification details */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div>
-                    <label className="inline-block bg-sky-100 text-sky-950 border border-sky-200 text-xs font-black px-2.5 py-1 rounded-md mb-2 shadow-sm">النشاط التجاري</label>
-                     <select
-                      value={storeType}
-                      onChange={(e) => setStoreType(e.target.value)}
-                      className="w-full bg-[#F7FAFC] border border-slate-200 rounded-lg p-2.5 text-xs font-bold focus:ring-2 focus:ring-indigo-500 text-[#1A365D] text-right"
-                    >
-                      <option value="الكل">الكل</option>
-                      <option value="هايبر ماركت">هايبر ماركت</option>
-                      <option value="سوبر ماركت">سوبر ماركت</option>
-                      <option value="ميني ماركت">ميني ماركت</option>
-                      <option value="حلواني ومخبز">حلواني ومخبز</option>
-                      <option value="عطارة">عطارة</option>
-                      <option value="بقالة تموينية">بقالة تموينية</option>
-                      <option value="مواد تموينية">مواد تموينية</option>
-                      <option value="مطاعم">مطاعم</option>
-                    </select>
+                  <div className="col-span-1 sm:col-span-2">
+                    <label className="inline-block bg-sky-100 text-sky-950 border border-sky-200 text-xs font-black px-2.5 py-1 rounded-md mb-2 shadow-sm">الأنشطة التجارية المستهدفة (يمكنك اختيار أكثر من نشاط)</label>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setStoreTypes(['الكل'])}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer select-none ${storeTypes.includes('الكل') ? 'bg-[#1A365D] text-white shadow-sm' : 'bg-[#F7FAFC] text-[#1A365D] border border-slate-200 hover:bg-slate-100'}`}
+                      >الكل</button>
+                      {['هايبر ماركت', 'سوبر ماركت', 'ميني ماركت', 'حلواني ومخبز', 'عطارة', 'بقالة تموينية', 'مطاعم'].map(t => (
+                        <button
+                          key={t}
+                          type="button"
+                          onClick={() => {
+                            let newTypes = [...storeTypes];
+                            if (newTypes.includes('الكل')) newTypes = [];
+                            if (newTypes.includes(t)) {
+                              newTypes = newTypes.filter(x => x !== t);
+                              if (newTypes.length === 0) newTypes = ['الكل'];
+                            } else {
+                              newTypes.push(t);
+                            }
+                            setStoreTypes(newTypes);
+                          }}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer select-none ${storeTypes.includes(t) && !storeTypes.includes('الكل') ? 'bg-[#DD6B20] text-white shadow-sm' : 'bg-[#F7FAFC] text-[#1A365D] border border-slate-200 hover:bg-slate-100'}`}
+                        >
+                          {t}
+                        </button>
+                      ))}
+                    </div>
                   </div>
 
                   <div>
@@ -1030,7 +1042,7 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                 </div>
 
                 <GmpMapEngine 
-                  storeType={storeType} 
+                  storeType={storeTypes} 
                   batchSize={batchSize} 
                   onResults={setMapsResults} 
                   isSearching={isSearchingMaps} 

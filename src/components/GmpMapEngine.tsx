@@ -11,7 +11,7 @@ const API_KEY =
 const hasValidKey = Boolean(API_KEY) && API_KEY !== 'YOUR_API_KEY';
 
 interface GmpMapEngineProps {
-  storeType: string;
+  storeType: string | string[];
   batchSize: number;
   onResults: (results: any[]) => void;
   isSearching: boolean;
@@ -26,27 +26,31 @@ function MapCircle({ center, radius }: { center: any, radius: number }) {
   useEffect(() => {
     if (!map || !window.google || !window.google.maps || !window.google.maps.Circle) return;
 
-    if (!circleRef.current) {
-      circleRef.current = new window.google.maps.Circle({
-        strokeColor: '#DD6B20',
-        strokeOpacity: 0.8,
-        strokeWeight: 2,
-        fillColor: '#DD6B20',
-        fillOpacity: 0.15,
-        map,
-        center,
-        radius,
-      });
-    } else {
-      circleRef.current.setOptions({ center, radius });
-    }
+    circleRef.current = new window.google.maps.Circle({
+      strokeColor: '#DD6B20',
+      strokeOpacity: 0.8,
+      strokeWeight: 2,
+      fillColor: '#DD6B20',
+      fillOpacity: 0.15,
+      map,
+      center,
+      radius,
+    });
 
     return () => {
       if (circleRef.current) {
         circleRef.current.setMap(null);
+        circleRef.current = null;
       }
     };
-  }, [map, center, radius]);
+  }, [map]); // ننشئ الدائرة مرة واحدة فقط عند تحميل الخريطة
+
+  // دالة مستقلة لتحديث الحجم والمكان بسلاسة عند تحريك المؤشر
+  useEffect(() => {
+    if (circleRef.current) {
+      circleRef.current.setOptions({ center, radius });
+    }
+  }, [center, radius]);
 
   return null;
 }
@@ -82,6 +86,16 @@ function MapSearchInner({ storeType, batchSize, onResults, isSearching, setIsSea
       };
 
       const finalArea = searchAreaText.trim() || 'القاهرة';
+      const selectedTypesArray = Array.isArray(storeType) ? storeType : [storeType];
+
+      let searchTypes: string[] = [];
+      if (selectedTypesArray.includes('الكل') || selectedTypesArray.length === 0) {
+        searchTypes = ['supermarket', 'convenience_store', 'bakery', 'restaurant', 'grocery_store', 'spice_store'];
+      } else {
+        searchTypes = selectedTypesArray.map(t => typeMap[t]).filter(Boolean);
+        searchTypes = Array.from(new Set(searchTypes)); // لمنع التكرار
+        if (searchTypes.length === 0) searchTypes = ['store'];
+      }
 
       const response = await placesLib.Place.searchNearby({
         fields: ['id', 'displayName', 'formattedAddress', 'location', 'internationalPhoneNumber', 'rating', 'userRatingCount', 'types'],
@@ -89,7 +103,7 @@ function MapSearchInner({ storeType, batchSize, onResults, isSearching, setIsSea
           center: center,
           radius: mapRadius
         },
-        includedTypes: [typeMap[storeType] || 'store'],
+        includedTypes: searchTypes,
         maxResultCount: batchSize > 20 ? 20 : batchSize,
       });
 
@@ -99,7 +113,8 @@ function MapSearchInner({ storeType, batchSize, onResults, isSearching, setIsSea
           let detailedAddress = p.formattedAddress || finalArea;
           let rating = p.rating ? parseFloat(p.rating.toFixed(1)) : null;
           let reviewsCount = p.userRatingCount || null;
-          let type = storeType;
+          
+          let type = selectedTypesArray.includes('الكل') ? 'نشاط غذائي' : selectedTypesArray.join(' و ');
           if (p.types && p.types.length > 0) {
               if (p.types.includes('supermarket')) type = 'سوبر ماركت';
               else if (p.types.includes('bakery')) type = 'حلواني ومخبز';
