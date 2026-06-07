@@ -8,6 +8,7 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { Product, getProductWeightsFallback, formatNum } from '../types';
 import { Tags, ArrowRight, HelpCircle, Calculator, Check, Scale, Download } from 'lucide-react';
 import { jsPDF } from 'jspdf';
+import { showToast } from '../utils/toast';
 
 interface PricesTabProps {
   products: Product[];
@@ -364,7 +365,7 @@ export default function PricesTab({ products: rawProducts, onGoBack }: PricesTab
       })
       .catch((err) => {
         console.error('Failed to copy text:', err);
-        alert('حدث خطأ أثناء محاولة نسخ النص، يرجى النسخ يدوياً.');
+        showToast('⚠️ حدث خطأ أثناء محاولة نسخ النص، يرجى النسخ يدوياً.');
       });
   };
 
@@ -405,7 +406,7 @@ export default function PricesTab({ products: rawProducts, onGoBack }: PricesTab
       })
       .catch((err) => {
         console.error('Failed to copy text:', err);
-        alert('حدث خطأ أثناء محاولة نسخ النص، يرجى النسخ يدوياً.');
+        showToast('⚠️ حدث خطأ أثناء محاولة نسخ النص، يرجى النسخ يدوياً.');
       });
   };
 
@@ -967,7 +968,7 @@ export default function PricesTab({ products: rawProducts, onGoBack }: PricesTab
                 onClick={() => {
                   navigator.clipboard.writeText(buildAllPricesText())
                     .then(() => {
-                      alert('✓ تم نسخ نص الأسعار لردود البوت بنجاح! الصقه الآن في تطبيق الرد التلقائي لتفعيل الخدمة.');
+                      showToast('✓ تم نسخ نص الأسعار بنجاح!');
                     });
                 }}
                 className="bg-[#1A365D] hover:bg-opacity-90 active:scale-95 text-white rounded-xl py-2 px-3 text-xs font-black transition-all flex items-center justify-center gap-1.5 cursor-pointer"

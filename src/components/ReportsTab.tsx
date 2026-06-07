@@ -24,8 +24,10 @@ interface ReportsTabProps {
 }
 
 const formatCartonsAndPieces = (rawQty: number, unitsPerCarton: number): string => {
-  const cartons = Math.floor(rawQty / unitsPerCarton);
-  const pieces = rawQty % unitsPerCarton;
+  const raw = Number(rawQty) || 0;
+  const units = Number(unitsPerCarton) || 12;
+  const cartons = Math.floor(raw / units);
+  const pieces = raw % units;
   
   const parts: string[] = [];
   if (cartons > 0) {
@@ -37,19 +39,58 @@ const formatCartonsAndPieces = (rawQty: number, unitsPerCarton: number): string 
   return parts.length > 0 ? parts.join(' و ') : '0 قطعة';
 };
 
-export default function ReportsTab({
-  invoices,
-  expenses,
-  products,
-  customers,
-  trips = [],
-  factoryLoads = [],
+class ReportsErrorBoundary extends React.Component<{children: React.ReactNode}, { hasError: boolean; errorInfo: string }> {
+  constructor(props: any) {
+    super(props);
+    this.state = { hasError: false, errorInfo: '' };
+  }
+  static getDerivedStateFromError(error: any) {
+    return { hasError: true, errorInfo: error.toString() };
+  }
+  componentDidCatch(error: any, errorInfo: any) {
+    console.error("Reports Tab Crash Prevented:", error, errorInfo);
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="p-8 text-center bg-rose-50 border border-rose-200 rounded-2xl m-4 shadow-xl flex flex-col items-center gap-4 animate-fade-in" dir="rtl">
+          <AlertCircle className="h-12 w-12 text-rose-500" />
+          <h2 className="text-xl font-black text-rose-800">حدث خطأ أثناء معالجة بيانات التقارير!</h2>
+          <p className="text-sm font-bold text-slate-700">هناك بيانات تالفة (فاتورة أو مصروف قديم) تسببت في هذا العطل، وتم إيقافه لمنع انهيار التطبيق.</p>
+          <code className="bg-white p-3 rounded-lg border border-rose-100 text-rose-600 text-xs w-full overflow-x-auto text-left font-mono" dir="ltr">
+            {this.state.errorInfo}
+          </code>
+          <button onClick={() => this.setState({ hasError: false })} className="bg-rose-600 text-white px-6 py-2.5 rounded-xl font-bold shadow-md hover:bg-rose-700 active:scale-95 transition-all mt-2">
+            محاولة إعادة التحميل 🔄
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+function ReportsTabComponent({
+  invoices: rawInvoices,
+  expenses: rawExpenses,
+  products: rawProducts,
+  customers: rawCustomers,
+  trips: rawTrips = [],
+  factoryLoads: rawFactoryLoads = [],
   settings,
   usersList = [],
   onUpdateInvoice,
   onGoBack,
   permittedSubTabs
 }: ReportsTabProps) {
+  // 🛡️ تنظيف وتأمين جميع قواعد البيانات من أي نصوص أو عناصر فارغة تالفة لمنع الشاشة البيضاء نهائياً
+  const invoices = React.useMemo(() => (rawInvoices || []).filter(i => i && typeof i === 'object'), [rawInvoices]);
+  const expenses = React.useMemo(() => (rawExpenses || []).filter(e => e && typeof e === 'object'), [rawExpenses]);
+  const products = React.useMemo(() => (rawProducts || []).filter(p => p && typeof p === 'object'), [rawProducts]);
+  const customers = React.useMemo(() => (rawCustomers || []).filter(c => c && typeof c === 'object'), [rawCustomers]);
+  const trips = React.useMemo(() => (rawTrips || []).filter(t => t && typeof t === 'object'), [rawTrips]);
+  const factoryLoads = React.useMemo(() => (rawFactoryLoads || []).filter(l => l && typeof l === 'object'), [rawFactoryLoads]);
+
   const [activeSubTab, setActiveSubTab] = useState<'finance' | 'stats' | 'active_customers' | 'invoices' | 'inventory'>(() => {
     if (permittedSubTabs && permittedSubTabs.length > 0) {
       if (permittedSubTabs.includes('reports_finance')) return 'finance';
@@ -99,14 +140,16 @@ export default function ReportsTab({
 
   const currentFilteredData = React.useMemo(() => {
     const isWithinPeriod = (dateString: string) => {
+      if (!dateString || typeof dateString !== 'string') return false;
       const d = new Date(dateString);
+      if (isNaN(d.getTime())) return false;
       const now = new Date();
       if (periodFilter === 'today') {
         return d.toDateString() === now.toDateString();
       }
       if (periodFilter === 'week') {
         const msInWeek = 7 * 24 * 60 * 60 * 1000;
-        return (now.getTime() - d.getTime()) < msInWeek;
+        return now.getTime() - d.getTime() < msInWeek;
       }
       return true;
     };
@@ -115,19 +158,19 @@ export default function ReportsTab({
       try {
         const cod = parseFloat(localStorage.getItem('factory_carried_debt_sys') || '0');
         const ep = JSON.parse(localStorage.getItem('factory_extra_payments_sys') || '[]');
-        return { carriedOverDebt: cod, extraPayments: ep };
+        return { carriedOverDebt: isNaN(cod) ? 0 : cod, extraPayments: Array.isArray(ep) ? ep : [] };
       } catch {
         return { carriedOverDebt: 0, extraPayments: [] as any[] };
       }
     })();
 
     return {
-      invoices: invoices.filter(i => isWithinPeriod(i.date)),
-      expenses: expenses.filter(e => isWithinPeriod(e.date)),
-      trips: trips.filter(t => isWithinPeriod(t.date || new Date().toISOString())),
-      factoryLoads: (factoryLoads || []).filter(fl => isWithinPeriod(fl.date)),
-      extraPayments: extraPayments.filter((ep: any) => isWithinPeriod(ep.date)),
-      allExtraPayments: extraPayments, // for cumulative calculation
+      invoices: (invoices || []).filter(i => i && isWithinPeriod(i.date)),
+      expenses: (expenses || []).filter(e => e && isWithinPeriod(e.date)),
+      trips: (trips || []).filter(t => t && isWithinPeriod(t.date || new Date().toISOString())),
+      factoryLoads: (factoryLoads || []).filter(fl => fl && isWithinPeriod(fl.date)),
+      extraPayments: (extraPayments || []).filter((ep: any) => ep && isWithinPeriod(ep.date)),
+      allExtraPayments: extraPayments || [], // for cumulative calculation
       carriedOverDebt
     };
   }, [invoices, expenses, trips, factoryLoads, periodFilter]);
@@ -135,25 +178,31 @@ export default function ReportsTab({
   // 1. Calculations based on period filter
   const salesStats = React.useMemo(() => {
     // True total sales collected
-    const trueTotalSales = currentFilteredData.invoices.reduce((sum, inv) => sum + inv.totalAfterDiscount, 0);
-    const totalCollected = currentFilteredData.invoices.reduce((sum, inv) => sum + (inv.paidAmount !== undefined ? inv.paidAmount : inv.totalAfterDiscount), 0);
-    const totalRemaining = currentFilteredData.invoices.reduce((sum, inv) => sum + (inv.totalAfterDiscount - (inv.paidAmount !== undefined ? inv.paidAmount : inv.totalAfterDiscount)), 0);
-    const totalBeforeDisc = currentFilteredData.invoices.reduce((sum, inv) => sum + inv.totalBeforeDiscount, 0);
+    const trueTotalSales = currentFilteredData.invoices.reduce((sum, inv) => sum + (inv.totalAfterDiscount || 0), 0);
+    const totalCollected = currentFilteredData.invoices.reduce((sum, inv) => sum + (inv.paidAmount !== undefined ? inv.paidAmount : (inv.totalAfterDiscount || 0)), 0);
+    const totalRemaining = currentFilteredData.invoices.reduce((sum, inv) => sum + ((inv.totalAfterDiscount || 0) - (inv.paidAmount !== undefined ? inv.paidAmount : (inv.totalAfterDiscount || 0))), 0);
+    const totalBeforeDisc = currentFilteredData.invoices.reduce((sum, inv) => sum + (inv.totalBeforeDiscount || 0), 0);
     const totalDiscounts = totalBeforeDisc - trueTotalSales;
 
     // totalProfit is the Net Profit of invoices
-    const totalProfit = currentFilteredData.invoices.reduce((sum, inv) => sum + inv.items.reduce((isum, it) => isum + ((it.finalPrice - (it.factoryPrice || it.originalPrice * 0.9)) * it.quantity), 0), 0);
+    const totalProfit = currentFilteredData.invoices.reduce((sum, inv) => {
+      const itemsProfit = Array.isArray(inv.items) ? inv.items.reduce((isum, it) => {
+        if (!it) return isum;
+        return isum + (((it.finalPrice || 0) - (it.factoryPrice || (it.originalPrice || 0) * 0.9)) * (it.quantity || 0));
+      }, 0) : 0;
+      return sum + itemsProfit;
+    }, 0);
 
-    const totalSpent = currentFilteredData.expenses.filter(e => e.type !== 'revenue').reduce((sum, exp) => sum + exp.amount, 0);
-    const extraRevenues = currentFilteredData.expenses.filter(e => e.type === 'revenue').reduce((sum, exp) => sum + exp.amount, 0);
-    const totalTripsCollectedProfit = currentFilteredData.trips.filter(t => t.collected).reduce((sum, t) => sum + t.price, 0);
+    const totalSpent = currentFilteredData.expenses.filter(e => e.type !== 'revenue').reduce((sum, exp) => sum + (exp.amount || 0), 0);
+    const extraRevenues = currentFilteredData.expenses.filter(e => e.type === 'revenue').reduce((sum, exp) => sum + (exp.amount || 0), 0);
+    const totalTripsCollectedProfit = currentFilteredData.trips.filter(t => t.collected).reduce((sum, t) => sum + (t.price || 0), 0);
     
     // final netProfit = product profits + extraRevenues - totalSpent + trips
     const netProfit = totalProfit + extraRevenues - totalSpent + totalTripsCollectedProfit;
 
     // Factory stats calculations
     const periodAdvances = currentFilteredData.factoryLoads.reduce((sum, fl) => sum + (fl.advanceAmount ?? 0), 0);
-    const periodExtraPayments = currentFilteredData.extraPayments.reduce((sum, ep) => sum + (ep.amount - (ep.appliedToCarriedDebt || 0)), 0);
+    const periodExtraPayments = currentFilteredData.extraPayments.reduce((sum, ep) => sum + ((ep.amount || 0) - (ep.appliedToCarriedDebt || 0)), 0);
     const totalPaidToFactoryInPeriod = periodAdvances + periodExtraPayments;
 
     // Cumulative overall remaining debt due to factory
@@ -164,8 +213,9 @@ export default function ReportsTab({
       const weight = weights.find(w => w.id === load.weightId);
       if (weight) {
         const unitsPerCarton = weight.unitsPerCarton || 12;
-        const cartons = load.cartonsCount !== undefined ? load.cartonsCount : Math.floor(load.quantity / unitsPerCarton);
-        const loose = load.looseUnitsCount !== undefined ? load.looseUnitsCount : (load.quantity % unitsPerCarton);
+        const qty = Number(load.quantity) || 0;
+        const cartons = load.cartonsCount !== undefined ? load.cartonsCount : Math.floor(qty / unitsPerCarton);
+        const loose = load.looseUnitsCount !== undefined ? load.looseUnitsCount : (qty % unitsPerCarton);
         const cartonPrice = weight.cartonPriceFromFactory || 0;
         const unitPrice = weight.factoryPricePerUnit || 0;
         rawAllLoadedValue += (cartons * cartonPrice) + (loose * unitPrice);
@@ -174,7 +224,7 @@ export default function ReportsTab({
 
     const totalWithdrawnValue = rawAllLoadedValue + currentFilteredData.carriedOverDebt;
     const currentAdvancesTotal = (factoryLoads || []).reduce((sum, fl) => sum + (fl.advanceAmount ?? 0), 0);
-    const manualPaymentsSumTotal = currentFilteredData.allExtraPayments.reduce((sum, p) => sum + (p.amount - (p.appliedToCarriedDebt || 0)), 0);
+    const manualPaymentsSumTotal = currentFilteredData.allExtraPayments.reduce((sum, p) => sum + ((p.amount || 0) - (p.appliedToCarriedDebt || 0)), 0);
     const totalOverallPaidToFactory = currentAdvancesTotal + manualPaymentsSumTotal;
     const remainingDebtToFactory = Math.max(0, totalWithdrawnValue - totalOverallPaidToFactory);
 
@@ -195,19 +245,20 @@ export default function ReportsTab({
 
   // Calculate unpaid debt / debtor customers list 
   const debtorCustomers = React.useMemo(() => {
-    const unpaidInvoices = invoices.filter(inv => {
-      const paid = inv.paidAmount !== undefined ? inv.paidAmount : inv.totalAfterDiscount;
-      return (inv.totalAfterDiscount - paid) > 0.05; // has outstanding debt
+    const unpaidInvoices = (invoices || []).filter(inv => {
+      if (!inv) return false;
+      const paid = inv.paidAmount !== undefined ? inv.paidAmount : (inv.totalAfterDiscount || 0);
+      return ((inv.totalAfterDiscount || 0) - paid) > 0.05; // has outstanding debt
     });
 
-    const customersMap = new Map(customers.map(c => [c.id, c]));
+    const customersMap = new Map((customers || []).map(c => [c.id, c]));
     const map: Record<string, { invoices: Invoice[]; totalDebt: number }> = {};
     unpaidInvoices.forEach(inv => {
       if (!map[inv.customerId]) {
         map[inv.customerId] = { invoices: [], totalDebt: 0 };
       }
-      const paid = inv.paidAmount !== undefined ? inv.paidAmount : inv.totalAfterDiscount;
-      const remaining = inv.totalAfterDiscount - paid;
+      const paid = inv.paidAmount !== undefined ? inv.paidAmount : (inv.totalAfterDiscount || 0);
+      const remaining = (inv.totalAfterDiscount || 0) - paid;
       map[inv.customerId].invoices.push(inv);
       map[inv.customerId].totalDebt += remaining;
     });
@@ -222,7 +273,11 @@ export default function ReportsTab({
       };
       return {
         customer,
-        invoices: data.invoices.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()),
+        invoices: [...data.invoices].sort((a, b) => {
+          const timeA = a.date ? new Date(a.date).getTime() : 0;
+          const timeB = b.date ? new Date(b.date).getTime() : 0;
+          return (isNaN(timeA) ? 0 : timeA) - (isNaN(timeB) ? 0 : timeB);
+        }),
         totalDebt: data.totalDebt
       };
     }).sort((a, b) => b.totalDebt - a.totalDebt);
@@ -247,7 +302,7 @@ export default function ReportsTab({
     if (!onUpdateInvoice) return;
     const updatedInv = {
       ...inv,
-      paidAmount: inv.totalAfterDiscount
+                                      paidAmount: inv.totalAfterDiscount || 0
     };
     onUpdateInvoice(updatedInv);
   };
@@ -261,8 +316,8 @@ export default function ReportsTab({
   const delegateDebtBreakdown = React.useMemo(() => {
     const map: Record<string, number> = {};
     currentFilteredData.invoices.forEach(inv => {
-      const paid = inv.paidAmount !== undefined ? inv.paidAmount : inv.totalAfterDiscount;
-      const remaining = inv.totalAfterDiscount - paid;
+            const paid = inv.paidAmount !== undefined ? inv.paidAmount : (inv.totalAfterDiscount || 0);
+            const remaining = (inv.totalAfterDiscount || 0) - paid;
       if (remaining > 0.05) {
         const del = inv.delegateName || 'مناديب غير محددين';
         map[del] = (map[del] || 0) + remaining;
@@ -285,8 +340,13 @@ export default function ReportsTab({
     let periodLabel = periodFilter === 'today' ? 'اليوم (يومي)' : 'آخر ٧ أيام (أسبوعي)';
 
     // compute cost of sold goods
-    const soldGoodsFactoryCost = currentFilteredData.invoices.reduce((sum, inv) => 
-      sum + inv.items.reduce((isum, it) => isum + ((it.factoryPrice || it.originalPrice * 0.9) * it.quantity), 0), 0);
+    const soldGoodsFactoryCost = currentFilteredData.invoices.reduce((sum, inv) => {
+      const cost = Array.isArray(inv.items) ? inv.items.reduce((isum, it) => {
+        if (!it) return isum;
+        return isum + ((it.factoryPrice || (it.originalPrice || 0) * 0.9) * (it.quantity || 0));
+      }, 0) : 0;
+      return sum + cost;
+    }, 0);
 
     const doc = iframe.contentWindow?.document;
     if (!doc) return;
@@ -386,18 +446,19 @@ export default function ReportsTab({
               </tr>
             </thead>
             <tbody>
-              ${currentFilteredData.invoices.length === 0 ? '<tr><td colspan="7" style="text-align:center; color:#94a3b8;">لا توجد فواتير مبيعات في هذه الفترة.</td></tr>' : 
-                currentFilteredData.invoices.map((inv, idx) => {
-                  const cust = customers.find(c => c.id === inv.customerId);
-                  const paid = inv.paidAmount !== undefined ? inv.paidAmount : inv.totalAfterDiscount;
-                  const remaining = inv.totalAfterDiscount - paid;
+              ${!currentFilteredData.invoices || currentFilteredData.invoices.length === 0 ? '<tr><td colspan="7" style="text-align:center; color:#94a3b8;">لا توجد فواتير مبيعات في هذه الفترة.</td></tr>' : 
+                currentFilteredData.invoices.map((inv: any, idx: number) => {
+                  const cust = (customers || []).find(c => c.id === inv.customerId);
+                  const totalAfter = inv.totalAfterDiscount || 0;
+                  const paid = inv.paidAmount !== undefined ? inv.paidAmount : totalAfter;
+                  const remaining = totalAfter - paid;
                   return `
                     <tr>
                       <td>${idx + 1}</td>
                       <td><b>#${inv.invoiceNumber}</b></td>
                       <td>${cust ? cust.name : 'عميل غير مسجل'}</td>
                       <td>${inv.delegateName || 'غير محدد'}</td>
-                      <td><b>${inv.totalAfterDiscount.toLocaleString('ar-EG')} ج.م</b></td>
+                      <td><b>${totalAfter.toLocaleString('ar-EG')} ج.م</b></td>
                       <td style="color: #16a34a;">${paid.toLocaleString('ar-EG')} ج.م</td>
                       <td style="color: ${remaining > 0 ? '#dc2626' : '#64748b'}; font-weight: ${remaining > 0 ? 'bold' : 'normal'}">${remaining.toLocaleString('ar-EG')} ج.م</td>
                     </tr>
@@ -425,10 +486,10 @@ export default function ReportsTab({
                   return `
                     <tr>
                       <td>${idx + 1}</td>
-                      <td>${exp.description}</td>
+                      <td>${exp.description || 'بدون بيان'}</td>
                       <td>${exp.category || 'عام'}</td>
                       <td><span class="badge ${isRev ? 'badge-success' : 'badge-danger'}">${isRev ? 'إيراد وارد' : 'مصروف منصرف'}</span></td>
-                      <td style="font-weight: bold; color: ${isRev ? '#16a34a' : '#b91c1c'}">${exp.amount.toLocaleString('ar-EG')} ج.م</td>
+                      <td style="font-weight: bold; color: ${isRev ? '#16a34a' : '#b91c1c'}">${(exp.amount || 0).toLocaleString('ar-EG')} ج.م</td>
                     </tr>
                   `;
                 }).join('')
@@ -487,31 +548,41 @@ export default function ReportsTab({
   const monthlyBreakdown = React.useMemo(() => {
     const months: Record<string, { sales: number; expenses: number; revs: number; count: number }> = {};
 
-    invoices.forEach(inv => {
-      const parts = inv.date.split('-');
-      const monthYear = parts[0] + '-' + parts[1]; // YYYY-MM
+    (invoices || []).forEach(inv => {
+      if (!inv || !inv.date) return;
+      const parts = String(inv.date).split('-');
+      if (parts.length < 2) return;
+      const monthYear = parts[0] + '-' + parts[1];
       if (!months[monthYear]) {
         months[monthYear] = { sales: 0, expenses: 0, revs: 0, count: 0 };
       }
-      months[monthYear].sales += inv.totalAfterDiscount;
+      months[monthYear].sales += (inv.totalAfterDiscount || 0);
       months[monthYear].count += 1;
     });
 
-    expenses.forEach(exp => {
-      const parts = exp.date.split('-');
-      const monthYear = parts[0] + '-' + parts[1]; // YYYY-MM
+    (expenses || []).forEach(exp => {
+      if (!exp || !exp.date) return;
+      const parts = String(exp.date).split('-');
+      if (parts.length < 2) return;
+      const monthYear = parts[0] + '-' + parts[1];
       if (!months[monthYear]) {
         months[monthYear] = { sales: 0, expenses: 0, revs: 0, count: 0 };
       }
       if (exp.type === 'revenue') {
-        months[monthYear].revs += exp.amount;
+        months[monthYear].revs += (exp.amount || 0);
       } else {
-        months[monthYear].expenses += exp.amount;
+        months[monthYear].expenses += (exp.amount || 0);
       }
     });
 
     return Object.entries(months).map(([dateStr, d]) => {
-      const displayDate = new Date(dateStr + '-01').toLocaleDateString('ar-EG', { month: 'long', year: 'numeric' });
+      let displayDate = dateStr;
+      try {
+        const dateObj = new Date(dateStr + '-01');
+        if (!isNaN(dateObj.getTime())) {
+          displayDate = dateObj.toLocaleDateString('ar-EG', { month: 'long', year: 'numeric' });
+        }
+      } catch (e) {}
       return {
         dateStr,
         displayDate,
@@ -525,19 +596,21 @@ export default function ReportsTab({
   }, [invoices, expenses]);
 
   // Filter invoices for registry lookup
-  const filteredInvoices = invoices.filter(inv => {
-    const cust = customers.find(c => c.id === inv.customerId);
+  const filteredInvoices = (invoices || []).filter(inv => {
+    if (!inv) return false;
+    const cust = (customers || []).find(c => c.id === inv.customerId);
     const q = searchInvoice.toLowerCase();
     const textMatch = 
-      inv.invoiceNumber.toLowerCase().includes(q) ||
-      (cust && cust.name.toLowerCase().includes(q)) ||
-      (cust && cust.area.toLowerCase().includes(q));
+      String(inv.invoiceNumber || '').toLowerCase().includes(q) ||
+      (cust && (cust.name || '').toLowerCase().includes(q)) ||
+      (cust && (cust.area || '').toLowerCase().includes(q));
       
     if (!textMatch) return false;
     
     if (dateFilter === 'all') return true;
     
-    const invDate = new Date(inv.date);
+    const invDate = new Date(inv.date || '');
+    if (isNaN(invDate.getTime())) return false;
     const now = new Date();
     
     if (dateFilter === 'today') {
@@ -554,6 +627,25 @@ export default function ReportsTab({
     return true;
   });
 
+  React.useEffect(() => {
+    if (permittedSubTabs && permittedSubTabs.length > 0) {
+      const permMap: Record<string, string> = {
+        'finance': 'reports_finance',
+        'stats': 'reports_stats',
+        'active_customers': 'reports_areas',
+        'invoices': 'reports_invoices',
+        'inventory': 'reports_inventory'
+      };
+      if (!permittedSubTabs.includes(permMap[activeSubTab])) {
+        if (permittedSubTabs.includes('reports_finance')) setActiveSubTab('finance');
+        else if (permittedSubTabs.includes('reports_stats')) setActiveSubTab('stats');
+        else if (permittedSubTabs.includes('reports_areas')) setActiveSubTab('active_customers');
+        else if (permittedSubTabs.includes('reports_invoices')) setActiveSubTab('invoices');
+        else if (permittedSubTabs.includes('reports_inventory')) setActiveSubTab('inventory');
+      }
+    }
+  }, [permittedSubTabs, activeSubTab]);
+
   const exportMonthlyReportAsPDF = (monthStr: string, displayDate: string, sales: number, revenuesParam: number, expensesParam: number, profit: number) => {
     // 1. Create iframe
     const iframe = document.createElement('iframe');
@@ -565,11 +657,11 @@ export default function ReportsTab({
     document.body.appendChild(iframe);
 
     // 2. Prepare content
-    const mInvoices = invoices.filter(inv => inv.date.startsWith(monthStr));
-    const mExpenses = expenses.filter(exp => exp.date.startsWith(monthStr));
+    const mInvoices = invoices.filter(inv => inv && typeof inv.date === 'string' && inv.date.startsWith(monthStr));
+    const mExpenses = expenses.filter(exp => exp && typeof exp.date === 'string' && exp.date.startsWith(monthStr));
     
-    const mTotalBeforeDisc = mInvoices.reduce((sum, i) => sum + i.totalBeforeDiscount, 0);
-    const mDisc = mInvoices.reduce((sum, i) => sum + (i.totalBeforeDiscount - i.totalAfterDiscount), 0);
+    const mTotalBeforeDisc = mInvoices.reduce((sum, i) => sum + (i.totalBeforeDiscount || 0), 0);
+    const mDisc = mInvoices.reduce((sum, i) => sum + ((i.totalBeforeDiscount || 0) - (i.totalAfterDiscount || 0)), 0);
     const mTotalSales = mTotalBeforeDisc - mDisc;
     const remaining = mTotalSales - sales;
 
@@ -701,7 +793,7 @@ export default function ReportsTab({
       console.warn("Using local fallback WA message builder in ReportsTab:", err.message);
       
       const guidelines = settings.aiRetentionGuidelines || 'تقديم رسالة ترحيبية تشجعه على استمرار التعامل معنا، مع توضيح أننا نهتم بوجوده معنا';
-      const fallbackMsg = `السلام عليكم ورحمة الله وبركاته يا فندم 🌹\nمعكم مندوب مبيعات مصنع زيوت وسمن "سوفانا" الفاخرة.\n\nنتشرف بالتعاون الدائم والمثمر معكم في [ ${customer.name} ] بمنطقتكم الكريمة [ ${customer.area} ]. نود في مصعد الإخوة المتحدون الإعراب عن عظيم تقديرنا لثقتكم الغالية بمنتجاتنا وزيت وسمن سوفانا ذو الجودة الفائقة.\n\n(✨ سياستنا المعتمدة: ${guidelines})\n\nهل نتشرف بتسليم طلبية جديدة لسيادتكم بأسعار بورصة اليوم الممتازة؟ نحن في خدمتكم دائماً وبالموعد!`;
+      const fallbackMsg = `السلام عليكم ورحمة الله وبركاته يا فندم 🌹\nمعكم مندوب مبيعات مصنع زيوت وسمن "سوفانا" الفاخرة.\n\nنتشرف بالتعاون الدائم والمثمر معكم في [ ${customer.name} ] بمنطقتكم الكريمة [ ${customer.area} ]. نود في الاخوه EAGS لخدمات التوزيع الإعراب عن عظيم تقديرنا لثقتكم الغالية بمنتجاتنا وزيت وسمن سوفانا ذو الجودة الفائقة.\n\n(✨ سياستنا المعتمدة: ${guidelines})\n\nهل نتشرف بتسليم طلبية جديدة لسيادتكم بأسعار بورصة اليوم الممتازة؟ نحن في خدمتكم دائماً وبالموعد!`;
       
       const messageText = encodeURIComponent(fallbackMsg);
       let phone = customer.phone;
@@ -714,16 +806,16 @@ export default function ReportsTab({
     }
   };
 
-  const filteredArchiveList = filteredInvoices.filter(inv => inv.totalAfterDiscount <= (inv.paidAmount ?? inv.totalAfterDiscount));
-  const filteredDebtorsList = filteredInvoices.filter(inv => inv.totalAfterDiscount > (inv.paidAmount ?? inv.totalAfterDiscount));
+  const filteredArchiveList = filteredInvoices.filter(inv => (inv.totalAfterDiscount || 0) <= (inv.paidAmount ?? (inv.totalAfterDiscount || 0)));
+  const filteredDebtorsList = filteredInvoices.filter(inv => (inv.totalAfterDiscount || 0) > (inv.paidAmount ?? (inv.totalAfterDiscount || 0)));
 
   const exportMonthlyReportAsPNG = (monthStr: string, displayDate: string, sales: number, revenuesParam: number, expensesParam: number, profit: number) => {
     const canvas = document.createElement('canvas');
     const rowHeight = 35;
     
     // get this month's invoices and expenses
-    const mInvoices = invoices.filter(inv => inv.date.startsWith(monthStr));
-    const mExpenses = expenses.filter(exp => exp.date.startsWith(monthStr));
+    const mInvoices = invoices.filter(inv => inv && typeof inv.date === 'string' && inv.date.startsWith(monthStr));
+    const mExpenses = expenses.filter(exp => exp && typeof exp.date === 'string' && exp.date.startsWith(monthStr));
     
     const totalLines = mInvoices.length + mExpenses.length;
     const baseHeight = 350;
@@ -819,7 +911,7 @@ export default function ReportsTab({
       ctx.fillStyle = '#0f172a';
       ctx.textAlign = 'right';
       ctx.fillText(index.toString(), canvas.width - 35, y + 22);
-      ctx.fillText(`${isRev ? 'إيراد' : 'مصروف'}: ${exp.category} - ${exp.description.substring(0, 30)}`, canvas.width - 80, y + 22);
+      ctx.fillText(`${isRev ? 'إيراد' : 'مصروف'}: ${exp.category || 'عام'} - ${(exp.description || 'بدون بيان').substring(0, 30)}`, canvas.width - 80, y + 22);
       
       ctx.textAlign = 'center';
       ctx.fillStyle = isRev ? '#059669' : '#e11d48';
@@ -881,7 +973,7 @@ export default function ReportsTab({
   };
 
   const filteredCustomerActivity = React.useMemo(() => {
-    let list = [...customers];
+    let list = [...(customers || [])];
     
     // Filter by Area
     if (custAreaFilter) {
@@ -889,8 +981,10 @@ export default function ReportsTab({
     }
     
     const invoicesByCustomer = new Map<string, Invoice[]>();
-    invoices.forEach(inv => {
+    (invoices || []).forEach(inv => {
+      if (!inv || !inv.date) return;
       const invDate = new Date(inv.date).getTime();
+      if (isNaN(invDate)) return;
       const now = new Date().getTime();
       
       let include = true;
@@ -918,14 +1012,18 @@ export default function ReportsTab({
     return list.map(c => {
       const custInvoices = invoicesByCustomer.get(c.id) || [];
       
-      const totalPurchases = custInvoices.reduce((sum, inv) => sum + inv.totalAfterDiscount, 0);
+      const totalPurchases = custInvoices.reduce((sum, inv) => sum + (inv.totalAfterDiscount || 0), 0);
       const invoicesCount = custInvoices.length;
       
       return {
         ...c,
         totalPurchases,
         invoicesCount,
-        recentInvoices: custInvoices.sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime()),
+        recentInvoices: [...custInvoices].sort((a,b) => {
+          const timeA = a.date ? new Date(a.date).getTime() : 0;
+          const timeB = b.date ? new Date(b.date).getTime() : 0;
+          return (isNaN(timeB) ? 0 : timeB) - (isNaN(timeA) ? 0 : timeA);
+        }),
         isActive: totalPurchases > 0
       };
     }).sort((a, b) => b.totalPurchases - a.totalPurchases);
@@ -1108,12 +1206,16 @@ export default function ReportsTab({
                   ) : (
                     currentFilteredData.expenses
                       .filter(e => e.type !== 'revenue')
-                      .sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+                      .sort((a,b) => {
+                        const timeA = a.date ? new Date(a.date).getTime() : 0;
+                        const timeB = b.date ? new Date(b.date).getTime() : 0;
+                        return (isNaN(timeB) ? 0 : timeB) - (isNaN(timeA) ? 0 : timeA);
+                      })
                       .map((exp, idx) => (
                         <div key={idx} className="flex justify-between items-center border border-slate-100 p-2.5 rounded-lg bg-[#F7FAFC]">
                           <div className="flex flex-col gap-0.5">
                             <span className="text-[11px] font-bold text-[#DD6B20]">{exp.description}</span>
-                            <span className="text-[9px] text-gray-400 font-medium">{new Date(exp.date).toLocaleString('ar-EG')}</span>
+                            <span className="text-[9px] text-gray-400 font-medium">{exp.date && !isNaN(new Date(exp.date).getTime()) ? new Date(exp.date).toLocaleString('ar-EG') : 'بدون تاريخ'}</span>
                           </div>
                           <span className="font-black text-xs text-rose-700">
                             - {exp.amount.toLocaleString('ar-EG')}ج.م
@@ -1231,11 +1333,19 @@ export default function ReportsTab({
                     </div>
                     <div className="bg-[#FFFFFF] border border-indigo-100 p-2 rounded-xl flex flex-col">
                       <span className="text-indigo-600 font-bold text-[9px] mb-1">المستهلك/المصاريف</span>
-                      <span className="text-rose-700" dir="rtl">{(currentFilteredData.expenses.filter(e => e.type !== 'revenue' && (e.description.includes('بنزين') || e.description.includes('وقود') || e.description.includes('مشوار') || e.description.includes('سيارة') || e.description.includes('سفر'))).reduce((sum, e) => sum + e.amount, 0)).toLocaleString('ar-EG')} ج.م</span>
+                      <span className="text-rose-700" dir="rtl">{(currentFilteredData.expenses.filter(e => {
+                        if (e.type === 'revenue') return false;
+                        const desc = e.description || '';
+                        return desc.includes('بنزين') || desc.includes('وقود') || desc.includes('مشوار') || desc.includes('سيارة') || desc.includes('سفر');
+                      }).reduce((sum, e) => sum + (e.amount || 0), 0)).toLocaleString('ar-EG')} ج.م</span>
                     </div>
                     <div className="bg-[#FFFFFF] border border-indigo-100 p-2 rounded-xl flex flex-col">
                       <span className="text-indigo-600 font-bold text-[9px] mb-1">الصافي الفعلي</span>
-                      <span className="text-indigo-900" dir="rtl">{((salesStats.totalTripsCollectedProfit) - (currentFilteredData.expenses.filter(e => e.type !== 'revenue' && (e.description.includes('بنزين') || e.description.includes('وقود') || e.description.includes('مشوار') || e.description.includes('سيارة') || e.description.includes('سفر'))).reduce((sum, e) => sum + e.amount, 0))).toLocaleString('ar-EG')} ج.م</span>
+                      <span className="text-indigo-900" dir="rtl">{((salesStats.totalTripsCollectedProfit) - (currentFilteredData.expenses.filter(e => {
+                        if (e.type === 'revenue') return false;
+                        const desc = e.description || '';
+                        return desc.includes('بنزين') || desc.includes('وقود') || desc.includes('مشوار') || desc.includes('سيارة') || desc.includes('سفر');
+                      }).reduce((sum, e) => sum + (e.amount || 0), 0))).toLocaleString('ar-EG')} ج.م</span>
                     </div>
                   </div>
                   <p className="text-[10px] text-indigo-700 leading-relaxed font-bold">
@@ -1258,7 +1368,10 @@ export default function ReportsTab({
                     </div>
                     <div className="flex justify-between border-b border-dashed border-emerald-200 pb-1.5">
                       <span className="text-slate-600">يخصم: تكلفة البضاعة المباعة للمصنع</span>
-                      <span className="text-rose-700" dir="rtl">- {(currentFilteredData.invoices.reduce((sum, inv) => sum + inv.items.reduce((isum, it) => isum + ((it.factoryPrice || it.originalPrice * 0.9) * it.quantity), 0), 0)).toLocaleString('ar-EG')} ج.م</span>
+                      <span className="text-rose-700" dir="rtl">- {(currentFilteredData.invoices.reduce((sum, inv) => {
+                        const items = Array.isArray(inv.items) ? inv.items : [];
+                        return sum + items.reduce((isum, it) => isum + ((it.factoryPrice || (it.originalPrice || 0) * 0.9) * (it.quantity || 0)), 0);
+                      }, 0)).toLocaleString('ar-EG')} ج.م</span>
                     </div>
                     <div className="flex justify-between border-b border-dashed border-emerald-200 pb-1.5">
                       <span className="text-slate-600">يخصم: إجمالي المصروفات الإدارية والتشغيلية المعتمدة</span>
@@ -1424,8 +1537,9 @@ export default function ReportsTab({
           <div className="flex flex-col gap-4 animate-fade-in">
             {selectedInvoice && (() => {
               const customer = customers.find(c => c.id === selectedInvoice.customerId);
-              const invoiceProfit = selectedInvoice.items.reduce((sum, it) => sum + ((it.finalPrice - (it.factoryPrice || it.originalPrice * 0.9)) * it.quantity), 0);
-              const invoiceDate = new Date(selectedInvoice.date);
+              const itemsList = Array.isArray(selectedInvoice.items) ? selectedInvoice.items.filter(it => it) : [];
+              const invoiceProfit = itemsList.reduce((sum, it) => sum + (((it.finalPrice || 0) - (it.factoryPrice || (it.originalPrice || 0) * 0.9)) * (it.quantity || 0)), 0);
+              const invoiceDate = selectedInvoice.date ? new Date(selectedInvoice.date) : new Date();
               
               return (
               <div className="bg-[#FFFFFF] p-4 rounded-xl shadow-md border-r-4 border-r-[#DD6B20] mb-2 flex flex-col gap-3 relative animate-fade-in">
@@ -1435,7 +1549,7 @@ export default function ReportsTab({
                   <h4 className="font-bold text-[#1A365D] text-sm flex items-center gap-1.5">
                     العميل: <span className="text-[#DD6B20]">{customer ? customer.name : 'عميل غير مسجل'}</span>
                   </h4>
-                  <span className="text-xs text-slate-500 font-semibold">{invoiceDate.toLocaleDateString('ar-EG', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</span>
+                  <span className="text-xs text-slate-500 font-semibold">{!isNaN(invoiceDate.getTime()) ? invoiceDate.toLocaleDateString('ar-EG', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }) : 'تاريخ غير صالح'}</span>
                 </div>
                 
                 <div className="grid grid-cols-2 gap-2 mt-1">
@@ -1451,19 +1565,19 @@ export default function ReportsTab({
 
                 <div className="flex flex-col gap-1 mt-1 border-slate-100 max-h-40 overflow-y-auto">
                   <span className="text-[10px] font-bold text-slate-400 mb-1">تفاصيل البضاعة المباعة:</span>
-                  {selectedInvoice.items.map((it, i) => {
+                  {itemsList.map((it, i) => {
                     const prod = products.find(p => p.id === it.productId);
                     const weight = prod?.weights?.find(w => w.id === it.weightId);
                     const multiplier = weight?.unitsPerCarton || 12;
                     const cartonsText = formatCartonsAndPieces(it.quantity, multiplier);
-                    const cartonPrice = Number((it.finalPrice * multiplier).toFixed(2));
+                    const cartonPrice = Number(((it.finalPrice || 0) * multiplier).toFixed(2));
                     return (
                       <div key={i} className="flex justify-between items-center bg-[#F7FAFC] border border-slate-100 p-2 rounded-lg text-right">
                          <div className="flex flex-col">
                           <span className="font-bold text-xs text-[#1A365D]">{prod?.name || 'منتج محذوف'} (حجم {weight?.size || 'مجهول'})</span>
                           <span className="text-[10px] text-slate-500 font-extrabold" dir="rtl">{cartonsText} {formatNum(cartonPrice)} ج.م</span>
                         </div>
-                        <span className="text-xs font-black text-[#DD6B20]">+ {formatNum((it.finalPrice - (it.factoryPrice || it.originalPrice * 0.9)) * it.quantity)} ج</span>
+                        <span className="text-xs font-black text-[#DD6B20]">+ {formatNum(((it.finalPrice || 0) - (it.factoryPrice || (it.originalPrice || 0) * 0.9)) * (it.quantity || 0))} ج</span>
                       </div>
                     );
                   })}
@@ -1473,9 +1587,9 @@ export default function ReportsTab({
                   <button
                     onClick={() => {
                       setEditingInvoice(selectedInvoice);
-                      setEditItems([...selectedInvoice.items]);
+                      setEditItems([...itemsList]);
                       setEditPaid(selectedInvoice.paidAmount !== undefined ? selectedInvoice.paidAmount : selectedInvoice.totalAfterDiscount);
-                      setEditDate(selectedInvoice.date.substring(0, 16));
+                      setEditDate(selectedInvoice.date ? selectedInvoice.date.substring(0, 16) : '');
                       setEditNotes(selectedInvoice.notes || '');
                     }}
                     className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold py-2 px-3 rounded-lg text-xs transition-all active:scale-95 cursor-pointer text-center flex items-center justify-center gap-1 shadow-sm"
@@ -1511,15 +1625,20 @@ export default function ReportsTab({
                       </tr>
                     </thead>
                     <tbody>
-                      {currentFilteredData.invoices.sort((a,b)=>new Date(b.date).getTime() - new Date(a.date).getTime()).map(inv => {
+                      {[...currentFilteredData.invoices].sort((a,b)=> {
+                         const timeA = a.date ? new Date(a.date).getTime() : 0;
+                         const timeB = b.date ? new Date(b.date).getTime() : 0;
+                         return (isNaN(timeB) ? 0 : timeB) - (isNaN(timeA) ? 0 : timeA);
+                      }).map(inv => {
                         const customer = customers.find(c => c.id === inv.customerId);
-                        const discountValue = inv.totalBeforeDiscount - inv.totalAfterDiscount;
-                        const discountPerc = inv.totalBeforeDiscount > 0 ? (discountValue / inv.totalBeforeDiscount) * 100 : 0;
-                        const profit = inv.items.reduce((sum, item) => sum + ((item.finalPrice - (item.factoryPrice || item.originalPrice * 0.9)) * item.quantity), 0);
+                        const discountValue = (inv.totalBeforeDiscount || 0) - (inv.totalAfterDiscount || 0);
+                        const discountPerc = (inv.totalBeforeDiscount || 0) > 0 ? (discountValue / (inv.totalBeforeDiscount || 0)) * 100 : 0;
+                        const invItems = Array.isArray(inv.items) ? inv.items.filter(it => it) : [];
+                        const profit = invItems.reduce((sum, item) => sum + (((item.finalPrice || 0) - (item.factoryPrice || (item.originalPrice || 0) * 0.9)) * (item.quantity || 0)), 0);
                         return (
                           <tr key={inv.id} onClick={() => setSelectedInvoice(inv)} className="hover:bg-indigo-50 cursor-pointer transition-colors border-b border-slate-200">
                             <td className="p-2 font-bold text-[#1A365D]">#{inv.invoiceNumber}</td>
-                            <td className="p-2 font-mono text-gray-500">{new Date(inv.date).toLocaleDateString('ar-EG')}</td>
+                            <td className="p-2 font-mono text-gray-500">{inv.date && !isNaN(new Date(inv.date).getTime()) ? new Date(inv.date).toLocaleDateString('ar-EG') : 'بدون تاريخ'}</td>
                             <td className="p-2">{customer ? customer.name : 'مجهول'}</td>
                             <td className="p-2 text-center font-bold text-rose-600">{discountPerc > 0 ? formatNum(discountPerc) + '%' : '-'}</td>
                             <td className="p-2 text-center font-black text-[#1A365D]">{formatNum(inv.totalAfterDiscount)}</td>
@@ -1647,7 +1766,7 @@ export default function ReportsTab({
                               <div key={inv.id} className="bg-[#FFFFFF] border border-slate-200 p-2.5 rounded-xl flex items-center justify-between shadow-xs">
                                 <div className="flex flex-col gap-0.5">
                                   <span className="text-[11px] font-black text-[#1A365D]">{inv.invoiceNumber}</span>
-                                  <span className="text-[10px] text-[#2B6CB0]">{new Date(inv.date).toLocaleDateString('ar-EG')}</span>
+                                  <span className="text-[10px] text-[#2B6CB0]">{inv.date && !isNaN(new Date(inv.date).getTime()) ? new Date(inv.date).toLocaleDateString('ar-EG') : 'بدون تاريخ'}</span>
                                 </div>
                                 <div className="text-[11px] font-black text-[#1A365D]">
                                   {formatNum(inv.totalAfterDiscount)}ج.م
@@ -1670,7 +1789,7 @@ export default function ReportsTab({
         {activeSubTab === "inventory" && (() => {
           // Helper lists and functions for date calculation
           const getNormalizedDateKey = (dateStr: string): string => {
-            if (!dateStr) return 'تاريخ غير محدد';
+            if (!dateStr || typeof dateStr !== 'string') return 'تاريخ غير محدد';
             try {
               const parts = dateStr.split(/[ T]/);
               if (parts[0]) {
@@ -1694,7 +1813,8 @@ export default function ReportsTab({
 
           const getArabicDayName = (date: Date) => {
             const days = ['الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
-            return days[date.getDay()];
+            const day = date.getDay();
+            return isNaN(day) ? 'يوم غير محدد' : days[day];
           };
 
           const formatDateString = (dateStr: string) => {
@@ -1762,10 +1882,10 @@ export default function ReportsTab({
           // 1. Gather all activity dates
           const allDates = new Set<string>();
           factoryLoads.forEach(l => {
-            if (l.date) allDates.add(getNormalizedDateKey(l.date));
+            if (l && l.date) allDates.add(getNormalizedDateKey(l.date));
           });
           invoices.forEach(inv => {
-            if (inv.date) allDates.add(getNormalizedDateKey(inv.date));
+            if (inv && inv.date) allDates.add(getNormalizedDateKey(inv.date));
           });
 
           // 2. Map group values
@@ -1793,13 +1913,15 @@ export default function ReportsTab({
             if (!inv.date) return;
             const gKey = getGroupKey(inv.date);
             if (groupsMap[gKey]) {
-              inv.items.forEach(item => {
-                groupsMap[gKey].invItems.push({
-                  productId: item.productId,
-                  weightId: item.weightId,
-                  quantity: item.quantity
+              if (Array.isArray(inv.items)) {
+                inv.items.forEach(item => {
+                  if (item) groupsMap[gKey].invItems.push({
+                    productId: item.productId,
+                    weightId: item.weightId,
+                    quantity: item.quantity
+                  });
                 });
-              });
+              }
             }
           });
 
@@ -2039,11 +2161,23 @@ export default function ReportsTab({
 
               {/* Debtors List */}
               <div className="flex flex-col gap-3">
-                {debtorCustomers.filter(d => d.customer.name.toLowerCase().includes(debtorSearchQuery.toLowerCase())).length === 0 ? (
+                {debtorCustomers.filter(d => {
+                  try {
+                    return (d.customer?.name || '').toLowerCase().includes((debtorSearchQuery || '').toLowerCase());
+                  } catch {
+                    return false;
+                  }
+                }).length === 0 ? (
                   <p className="text-center text-slate-400 py-12 text-xs">لا يوجد عملاء مدينين حالياً تطابق البحث.</p>
                 ) : (
                   debtorCustomers
-                    .filter(d => d.customer.name.toLowerCase().includes(debtorSearchQuery.toLowerCase()))
+                    .filter(d => {
+                      try {
+                        return (d.customer?.name || '').toLowerCase().includes((debtorSearchQuery || '').toLowerCase());
+                      } catch {
+                        return false;
+                      }
+                    })
                     .map(({ customer, invoices: unpaidInvs, totalDebt }) => (
                       <div key={customer.id} className="border border-slate-200 rounded-xl bg-slate-50/50 p-3 flex flex-col gap-2.5">
                         
@@ -2072,14 +2206,14 @@ export default function ReportsTab({
                         {/* Unpaid invoices detail list for this customer */}
                         <div className="flex flex-col gap-2">
                           {unpaidInvs.map(inv => {
-                            const remaining = inv.totalAfterDiscount - (inv.paidAmount ?? 0);
+                            const remaining = (inv.totalAfterDiscount || 0) - (inv.paidAmount ?? 0);
                             return (
                               <div key={inv.id} className="bg-[#FFFFFF] border border-slate-150 p-2.5 rounded-lg flex items-center justify-between shadow-xs">
                                 <div className="flex flex-col gap-1 text-right">
                                   <div className="flex items-center gap-1.5 flex-row-reverse justify-end">
                                     <span className="text-[11px] font-bold text-[#1A365D]">فاتورة #{inv.invoiceNumber}</span>
                                     <span className="text-[9px] bg-slate-100 text-slate-650 font-bold px-1 rounded">
-                                      {new Date(inv.date).toLocaleDateString('ar-EG')}
+                                      {inv.date && !isNaN(new Date(inv.date).getTime()) ? new Date(inv.date).toLocaleDateString('ar-EG') : 'تاريخ مجهول'}
                                     </span>
                                   </div>
                                   <span className="text-[10px] text-slate-400 font-semibold">
@@ -2464,5 +2598,13 @@ export default function ReportsTab({
         );
       })()}
     </div>
+  );
+}
+
+export default function ReportsTab(props: ReportsTabProps) {
+  return (
+    <ReportsErrorBoundary>
+      <ReportsTabComponent {...props} />
+    </ReportsErrorBoundary>
   );
 }

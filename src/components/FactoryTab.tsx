@@ -8,7 +8,8 @@ import { jsPDF } from 'jspdf';
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { Product, FactoryLoad, CarBalance, ProductWeight, getProductWeightsFallback, Invoice, Trip, formatNum } from '../types';
-import { Truck, Plus, PackagePlus, ArrowRight, History, Trash2, AlertCircle, Edit, Save, HelpCircle, FileText, Image, Scale, CirclePercent, DollarSign, Box, Clock, CheckCircle2, ShieldMinus, Wallet, Printer, Calendar, MapPin, Download } from 'lucide-react';
+import { Truck, Plus, PackagePlus, ArrowRight, History, Trash2, AlertCircle, Edit, Save, HelpCircle, FileText, Image, Scale, CirclePercent, DollarSign, Box, Clock, CheckCircle2, ShieldMinus, Wallet, Printer, Calendar, MapPin, Download, ScanLine } from 'lucide-react';
+import { showToast } from '../utils/toast';
 
 interface FactoryTabProps {
   products: Product[];
@@ -28,6 +29,7 @@ interface FactoryTabProps {
   onClearAllData?: () => void;
   onGoBack: () => void;
   permittedSubTabs?: string[];
+  canEditPrices?: boolean;
 }
 
 export default function FactoryTab({
@@ -47,7 +49,8 @@ export default function FactoryTab({
   onDeleteTrip,
   onClearAllData,
   onGoBack,
-  permittedSubTabs
+  permittedSubTabs,
+  canEditPrices = true
 }: FactoryTabProps) {
   const [activeSubTab, setActiveSubTab] = useState<'loads' | 'products' | 'previous_loads' | 'factory_account' | 'trips'>(() => {
     if (permittedSubTabs && permittedSubTabs.length > 0) {
@@ -60,6 +63,16 @@ export default function FactoryTab({
     return 'loads';
   });
   const [reportTimeframe, setReportTimeframe] = useState<'daily' | 'weekly' | 'monthly'>('daily');
+
+  useEffect(() => {
+    if (permittedSubTabs && permittedSubTabs.length > 0 && !permittedSubTabs.includes(activeSubTab)) {
+      if (permittedSubTabs.includes('loads')) setActiveSubTab('loads');
+      else if (permittedSubTabs.includes('products')) setActiveSubTab('products');
+      else if (permittedSubTabs.includes('factory_account')) setActiveSubTab('factory_account');
+      else if (permittedSubTabs.includes('trips')) setActiveSubTab('trips');
+      else if (permittedSubTabs.includes('previous_loads')) setActiveSubTab('previous_loads');
+    }
+  }, [permittedSubTabs, activeSubTab]);
 
   React.useEffect(() => {
     window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
@@ -185,6 +198,7 @@ export default function FactoryTab({
   const [weightUnitsPerCarton, setWeightUnitsPerCarton] = useState('12'); // عبوات في الكرتونة
   const [weightAddedValue, setWeightAddedValue] = useState(''); // القيمة المضافة بالجنيه مباشرة على سعر العبوة من المصنع
   const [weightRetailPrice, setWeightRetailPrice] = useState(''); // سعر بيع العبوة الصافي للجمهور
+  const [weightBarcode, setWeightBarcode] = useState(''); // الباركود
 
   const [editingWeightId, setEditingWeightId] = useState<string | null>(null);
 
@@ -230,12 +244,12 @@ export default function FactoryTab({
 
   const handleAddWeightQtyToDraft = () => {
     if (!selectedLoadWeightId) {
-      alert('يرجى اختيار الوزن أو الحجم من القائمة أولاً.');
+      showToast('⚠️ يرجى اختيار الوزن أو الحجم من القائمة أولاً.');
       return;
     }
     const q = parseInt(loadQtyCartons) || 0;
     if (q <= 0) {
-      alert('يرجى تحديد كمية تحميل صحيحة أكبر من الصفر.');
+      showToast('⚠️ يرجى تحديد كمية تحميل صحيحة أكبر من الصفر.');
       return;
     }
 
@@ -324,7 +338,7 @@ export default function FactoryTab({
 
   const handleAddWeightToList = () => {
     if (!weightSize.trim()) {
-      alert('يرجى التوضيح أولاً الصنف الفرعي (سعة لترية / وزن / عدد) مثل 1 لتر أو 50 جرام.');
+      showToast('⚠️ يرجى التوضيح أولاً الصنف الفرعي (سعة لترية / وزن / عدد).');
       return;
     }
     const cartonPriceNum = parseFloat(weightCartonPrice) || 0;
@@ -333,11 +347,11 @@ export default function FactoryTab({
     const retailPriceNum = parseFloat(weightRetailPrice) || 0;
 
     if (cartonPriceNum <= 0) {
-      alert('الرجاء تعبئة السعر من المصنع بشكل صحيح.');
+      showToast('⚠️ الرجاء تعبئة السعر من المصنع بشكل صحيح.');
       return;
     }
     if (unitsCountNum <= 0) {
-      alert('الرجاء إدخال عدد العبوات بشكل صحيح.');
+      showToast('⚠️ الرجاء إدخال عدد العبوات بشكل صحيح.');
       return;
     }
 
@@ -349,7 +363,8 @@ export default function FactoryTab({
       factoryPricePerUnit: Number((cartonPriceNum / unitsCountNum).toFixed(3)),
       profitMarginPercent: 0, // Using flat added value instead
       addedValue: addedValueNum,
-      retailPricePerUnit: retailPriceNum
+      retailPricePerUnit: retailPriceNum,
+      barcode: weightBarcode.trim()
     };
 
     if (editingWeightId) {
@@ -365,6 +380,7 @@ export default function FactoryTab({
     setWeightUnitsPerCarton('12');
     setWeightAddedValue('');
     setWeightRetailPrice('');
+    setWeightBarcode('');
   };
 
   const handleEditWeightInList = (id: string) => {
@@ -375,6 +391,7 @@ export default function FactoryTab({
     setWeightUnitsPerCarton(w.unitsPerCarton.toString());
     setWeightAddedValue((w as any).addedValuePerCarton?.toString() || w.addedValue?.toString() || '');
     setWeightRetailPrice(w.retailPricePerUnit.toString());
+    setWeightBarcode(w.barcode || '');
     setEditingWeightId(id);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -388,7 +405,7 @@ export default function FactoryTab({
     if (!prodName.trim()) return;
 
     if (prodWeights.length === 0) {
-      alert('تنبيه: يجب إضافة وزن/سعة لترية واحدة على الأقل لهذا المنتج لاعتماده بجدول الأسعار وتحميل السيارات!');
+      showToast('⚠️ يجب إضافة وزن/سعة واحدة على الأقل لهذا المنتج!');
       return;
     }
 
@@ -407,7 +424,7 @@ export default function FactoryTab({
       });
       setEditingProdId(null);
       setIsAddingProduct(false);
-      alert('تم تحديث الصنف وأوزانه وحساباته بنجاح!');
+      showToast('✓ تم تحديث الصنف بنجاح!');
     } else {
       onAddProduct({
         name: prodName.trim(),
@@ -417,7 +434,7 @@ export default function FactoryTab({
         weights: prodWeights
       });
       setIsAddingProduct(false);
-      alert('تم تسجيل المنتج الجديد وحفظ أوزانه بنجاح!');
+      showToast('✓ تم تسجيل المنتج الجديد بنجاح!');
     }
 
     // Reset fields
@@ -445,7 +462,7 @@ export default function FactoryTab({
     e.preventDefault();
     
     if (groupedDraftItems.length === 0) {
-      alert('الرجاء إضافة كمية تحميل واحدة على الأقل بالكراتين لشريحة صنف واحدة أو أكثر.');
+      showToast('⚠️ الرجاء إضافة كمية تحميل واحدة على الأقل.');
       return;
     }
 
@@ -472,11 +489,11 @@ export default function FactoryTab({
     });
 
     if (!hasAddedAny) {
-      alert('الرجاء إدخال كمية تحميل واحدة على الأقل بالكراتين.');
+      showToast('⚠️ الرجاء إدخال كمية تحميل واحدة على الأقل.');
       return;
     }
 
-    alert('تم حفظ تحديد حمولة السيارة بنجاح وتوزيع السلع والكميات لجميع الأصناف المحددة!');
+    showToast('✓ تم حفظ حمولة السيارة بنجاح!');
     // Reset loading states
     setLoadProductId('');
     setLoadWeightsQty({});
@@ -594,7 +611,7 @@ export default function FactoryTab({
   const handlePrintCurrentLoads = () => {
     const list = factoryInvoiceSummary.itemsList;
     if (list.length === 0) {
-      alert('لا توجد شحنات تحميل سابقة لتنزيل بيان حمولتها كملف PDF.');
+      showToast('⚠️ لا توجد شحنات تحميل سابقة لتنزيل البيان.');
       return;
     }
 
@@ -753,7 +770,7 @@ export default function FactoryTab({
   const handleDownloadInvoiceImage = () => {
     const list = factoryInvoiceSummary.itemsList;
     if (list.length === 0) {
-      alert('لا توجد شحنات تحميل سابقة لتنزيل بيان حمولتها كصورة.');
+      showToast('⚠️ لا توجد شحنات تحميل سابقة لتنزيل البيان.');
       return;
     }
 
@@ -1314,7 +1331,7 @@ export default function FactoryTab({
   const exportPreviousLoadsToCanvas = (timeframe: 'daily' | 'weekly' | 'monthly') => {
     const list = getFilteredLoads();
     if (list.length === 0) {
-      alert('لا توجد شحنات تحميل مسجلة للتقرير في هذه الفترة المحددة!');
+      showToast('⚠️ لا توجد شحنات مسجلة للتقرير في هذه الفترة!');
       return;
     }
 
@@ -3082,12 +3099,12 @@ export default function FactoryTab({
               onSubmit={(e) => {
                 e.preventDefault();
                 const parsedPrice = tripPrice ? parseFloat(tripPrice) : 0;
-                if (!tripDescription.trim()) return alert('يرجى إدخال وصف المشوار!');
-                if (tripPrice && (isNaN(parsedPrice) || parsedPrice < 0)) return alert('يرجى إدخال سعر صحيح للمشوار أو أتركه فارغاً!');
+                if (!tripDescription.trim()) return showToast('⚠️ يرجى إدخال وصف المشوار!');
+                if (tripPrice && (isNaN(parsedPrice) || parsedPrice < 0)) return showToast('⚠️ يرجى إدخال سعر صحيح للمشوار!');
                 onAddTrip({ description: tripDescription.trim(), price: parsedPrice, date: tripDate, collected: false });
                 setTripDescription('');
                 setTripPrice('');
-                alert('تم تسجيل المشوار بنجاح!');
+                showToast('✓ تم تسجيل المشوار بنجاح!');
               }}
               className="bg-[#FFFFFF] p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col gap-3.5"
             >
@@ -3245,7 +3262,7 @@ export default function FactoryTab({
                                 if (endOdo >= trip.odometerStart!) {
                                   onEditTrip(trip.id, { odometerEnd: endOdo });
                                 } else {
-                                  alert('قراءة النهاية يجب أن تكون أكبر من قراءة البداية!');
+                                  showToast('⚠️ قراءة النهاية يجب أن تكون أكبر من البداية!');
                                 }
                               }
                             }} className="text-[10px] font-bold text-[#1A365D] bg-indigo-50 hover:bg-indigo-100 px-2 py-1 border border-indigo-200 rounded cursor-pointer transition-colors flex items-center gap-1">
@@ -3278,7 +3295,7 @@ export default function FactoryTab({
         {activeSubTab === 'products' && (
           <div className="flex flex-col gap-5">
             {/* Elegant Add Product Button */}
-            {!isAddingProduct && !editingProdId && (
+            {!isAddingProduct && !editingProdId && canEditPrices && (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <button
                   type="button"
@@ -3301,7 +3318,7 @@ export default function FactoryTab({
                     type="button"
                     onClick={async () => { if (await confirmDialog("هل أنت متأكد من تفريغ كافة المنتجات؟ سيتم مسح قائمة المنتجات بالكامل.")) {
                         onDeleteAllProducts();
-                        alert("تم تفريغ قائمة المنتجات بنجاح!");
+                        showToast("✓ تم تفريغ قائمة المنتجات بنجاح!");
                       }
                     }}
                     className="bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold py-3.5 px-5 rounded-2xl border border-rose-200 shadow-sm transition-all flex items-center justify-center gap-2 cursor-pointer text-sm font-sans"
@@ -3382,7 +3399,7 @@ export default function FactoryTab({
                       المنتج
                     </span>
 
-                    <div className="bg-[#FFFFFF] p-3 rounded-lg border border-slate-150 grid grid-cols-2 gap-2.5">
+                    <div className="bg-[#FFFFFF] p-3 rounded-lg border border-slate-150 grid grid-cols-2 sm:grid-cols-4 gap-2.5">
                       <div className="col-span-2">
                         <label className="inline-block bg-[#d5f7f0] text-[#1A365D] border border-slate-200 text-[10px] font-black px-1.5 py-0.5 rounded mb-1">الحجم</label>
                         <input
@@ -3418,10 +3435,21 @@ export default function FactoryTab({
                         />
                       </div>
 
+                      <div className="col-span-2">
+                        <label className="inline-block bg-[#fce4e4] text-[#1A365D] border border-rose-200 text-[10px] font-black px-1.5 py-0.5 rounded mb-1 flex items-center gap-1 w-max"><ScanLine className="h-3 w-3"/> الباركود (اختياري)</label>
+                        <input
+                          type="text"
+                          placeholder="امسح او اكتب الباركود..."
+                          value={weightBarcode}
+                          onChange={(e) => setWeightBarcode(e.target.value)}
+                          className="w-full bg-[#F7FAFC] border border-slate-200 rounded-md p-1.5 text-xs text-[#1A365D] font-mono font-bold text-left"
+                        />
+                      </div>
+
                       <button
                         type="button"
                         onClick={handleAddWeightToList}
-                        className={`col-span-2 bg-[#1b090f] hover:bg-opacity-80 text-white font-bold py-1.5 px-3 rounded-md text-xs border border-indigo-200 active:scale-95 transition-all text-center flex items-center justify-center gap-1 cursor-pointer mt-1`}
+                        className={`col-span-2 sm:col-span-4 bg-[#1b090f] hover:bg-opacity-80 text-white font-bold py-1.5 px-3 rounded-md text-xs border border-indigo-200 active:scale-95 transition-all text-center flex items-center justify-center gap-1 cursor-pointer mt-1`}
                       >
                         <Plus className="h-4 w-4" />
                         {editingWeightId ? 'تحديث الصنف' : 'إضافة'}
@@ -3439,7 +3467,10 @@ export default function FactoryTab({
                             <div key={w.id || index} className="bg-white border border-slate-200 p-2 rounded-lg flex items-center justify-between text-xs">
                               <div className="flex flex-col">
                                 <span className="font-bold text-[#1A365D]">{w.size}</span>
-                                <span className="text-[10px] text-gray-400 font-medium">سعر الكرتونة من المصنع: {w.cartonPriceFromFactory}ج.م • العدد بالكرتونة: {w.unitsPerCarton}</span>
+                                <span className="text-[10px] text-gray-500 font-medium">سعر الكرتونة من المصنع: {w.cartonPriceFromFactory}ج.م • العدد بالكرتونة: {w.unitsPerCarton}</span>
+                                {w.barcode && (
+                                  <span className="text-[9px] text-emerald-600 font-mono font-bold mt-0.5">باركود: {w.barcode}</span>
+                                )}
                               </div>
                               <div className="flex items-center gap-1">
                                 <button
@@ -3498,38 +3529,40 @@ export default function FactoryTab({
                             <span className="text-[10px] text-gray-400 font-bold">طريقة المحاسبة: {labelUnit}</span>
                           </div>
 
-                          <div className="flex items-center gap-1.5 self-center">
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setEditingProdId(p.id);
-                                setProdName(p.name);
-                                setAccountingUnit(p.accountingUnit || 'كرتونة');
-                                setProdMinAlert(p.minStockAlert ? p.minStockAlert.toString() : '20');
-                                setProdWeights(ws);
-                                setIsAddingProduct(false);
-                              }}
-                              className="p-1 px-2.5 bg-indigo-50 hover:bg-indigo-100 text-[#1A365D] rounded-lg text-xs font-bold flex items-center gap-1 transition-colors cursor-pointer"
-                              title="تعديل هذا المنتج"
-                            >
-                              <Edit className="h-3.5 w-3.5" />
-                              <span>تعديل</span>
-                            </button>
-                            <button
-                              type="button"
-                              onClick={async (e) => {
-                                e.stopPropagation();
-                                if (await confirmDialog(`هل أنت متأكد من حذف الصنف [${p.name}]؟ سيؤدي ذلك لحذف شحناته من الذاكرة.`)) {
-                                  onDeleteProduct(p.id);
-                                }
-                              }}
-                              className="p-1 px-2 text-rose-500 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
-                              title="حذف"
-                            >
-                              <Trash2 className="h-4.5 w-4.5" />
-                            </button>
-                          </div>
+                          {canEditPrices && (
+                            <div className="flex items-center gap-1.5 self-center">
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setEditingProdId(p.id);
+                                  setProdName(p.name);
+                                  setAccountingUnit(p.accountingUnit || 'كرتونة');
+                                  setProdMinAlert(p.minStockAlert ? p.minStockAlert.toString() : '20');
+                                  setProdWeights(ws);
+                                  setIsAddingProduct(false);
+                                }}
+                                className="p-1 px-2.5 bg-indigo-50 hover:bg-indigo-100 text-[#1A365D] rounded-lg text-xs font-bold flex items-center gap-1 transition-colors cursor-pointer"
+                                title="تعديل هذا المنتج"
+                              >
+                                <Edit className="h-3.5 w-3.5" />
+                                <span>تعديل</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={async (e) => {
+                                  e.stopPropagation();
+                                  if (await confirmDialog(`حذف الصنف [${p.name}] من النظام؟`)) {
+                                    onDeleteProduct(p.id);
+                                  }
+                                }}
+                                className="p-1 px-2 text-rose-500 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                                title="حذف"
+                              >
+                                <Trash2 className="h-4.5 w-4.5" />
+                              </button>
+                            </div>
+                          )}
                         </div>
 
                         {/* List nested weights of this category */}
@@ -3626,7 +3659,7 @@ export default function FactoryTab({
                     onClick={() => {
                       const amount = parseFloat(newPaymentAmount);
                       if (!amount || amount <= 0) {
-                        alert("يرجى إدخال قيمة صحيحة للدفعة المالية!");
+                        showToast("⚠️ يرجى إدخال قيمة صحيحة للدفعة المالية!");
                         return;
                       }
                       
@@ -3653,7 +3686,7 @@ export default function FactoryTab({
                       setExtraPayments(prev => [...prev, paymentItem]);
                       setNewPaymentAmount('');
                       setNewPaymentNotes('');
-                      alert(`تم تسجيل دفعة مالية للمصنع بقيمة ${amount}ج.م بنجاح!`);
+                      showToast(`✓ تم تسجيل دفعة مالية للمصنع بقيمة ${amount}ج.م بنجاح!`);
                     }}
                     className="bg-[#DD6B20] text-white hover:bg-[#C05621] text-white font-bold py-1.5 px-4 rounded-lg text-xs cursor-pointer transition-all active:scale-95 text-center mt-1"
                   >
@@ -3704,7 +3737,7 @@ export default function FactoryTab({
                           const existingCycles = JSON.parse(localStorage.getItem('factory_settled_cycles_archive_sys') || '[]');
                           localStorage.setItem('factory_settled_cycles_archive_sys', JSON.stringify([...existingCycles, cycleArchive]));
 
-                          alert("✓ تم تأكيد سداد كامل متبقي مديونية المصنع بالكامل، وانتقلت تفاصيل الموازنة للأرشيف المغلق بتسوية ناجحة!");
+                          showToast("✓ تم تصفية مديونية المصنع بنجاح ونقلها للأرشيف!");
                         }
                       }}
                       className="bg-[#10B981] hover:bg-[#10B981] text-white active:scale-95 text-xs font-black py-2 rounded-xl cursor-pointer transition-all text-center flex items-center justify-center gap-1.5 shadow-md"

@@ -298,7 +298,7 @@ export default function AuthGate({ usersList, customersList = [], onUpdateUsers,
         )}
 
         <div className="border-t border-slate-100 pt-2 flex items-center justify-center">
-          <span className="text-[10px] text-slate-400 font-bold">بوابة حماية الأخوة المتحدون</span>
+          <span className="text-[10px] text-slate-400 font-bold">بوابة حماية الاخوه EAGS لخدمات التوزيع</span>
         </div>
       </div>
     </div>

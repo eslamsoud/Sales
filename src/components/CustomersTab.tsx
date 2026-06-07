@@ -8,7 +8,7 @@ import { confirmDialog } from '../utils/confirm';
 import React, { useState } from 'react';
 import { Customer, AppSettings } from '../types';
 import { showToast } from '../utils/toast';
-import { Users, Plus, MapPin, Search, Phone, ExternalLink, Trash2, ArrowRight, Compass, Check, Loader2, Star, MessageSquare, Send, Copy, Sparkles, Printer, FileText } from 'lucide-react';
+import { Users, Plus, MapPin, Search, Phone, ExternalLink, Trash2, ArrowRight, Compass, Check, Loader2, Star, MessageSquare, Send, Copy, Sparkles, Printer, FileText, Download, ArrowUpDown } from 'lucide-react';
 import SecurePhoneDisplay from './SecurePhoneDisplay';
 import GmpMapEngine from './GmpMapEngine';
 
@@ -45,6 +45,17 @@ const getGovernorateForArea = (area: string): string => {
   return 'أخرى';
 };
 
+const formatWhatsAppLink = (phone: string, encodedText: string = '') => {
+  let cleaned = (phone || '').replace(/[^0-9]/g, '');
+  if (!cleaned) return `https://wa.me/${encodedText ? '?text=' + encodedText : ''}`;
+  if (cleaned.startsWith('0')) {
+    cleaned = '20' + cleaned.substring(1);
+  } else if (cleaned.length === 10 && cleaned.startsWith('1')) {
+    cleaned = '20' + cleaned;
+  }
+  return `https://wa.me/${cleaned}${encodedText ? '?text=' + encodedText : ''}`;
+};
+
 interface CustomersTabProps {
   customers: Customer[];
   onAddCustomer: (customer: Omit<Customer, 'id'>) => void;
@@ -70,6 +81,7 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
   const [area, setArea] = useState('');
   const [customArea, setCustomArea] = useState('');
   const [governorate, setGovernorate] = useState('');
+  const [salesManager, setSalesManager] = useState('');
   const [showAreaDropdown, setShowAreaDropdown] = useState(false);
   const [locationLink, setLocationLink] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
@@ -77,6 +89,9 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
   const [loadingGeo, setLoadingGeo] = useState(false);
   const [geoStatusMsg, setGeoStatusMsg] = useState('');
   const [waLoadingId, setWaLoadingId] = useState<string | null>(null);
+  const [discoveredGovFilter, setDiscoveredGovFilter] = useState('');
+  const [discoveredAreaFilter, setDiscoveredAreaFilter] = useState('');
+  const [sortBy, setSortBy] = useState<'none' | 'alpha' | 'purchases'>('none');
 
   React.useEffect(() => {
     window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
@@ -106,11 +121,7 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
 
       const data = await response.json();
       const messageText = encodeURIComponent(data.text);
-      let phone = customer.phone;
-      if (phone.startsWith('0')) {
-        phone = '20' + phone.substring(1);
-      }
-      window.open(`https://wa.me/${phone}?text=${messageText}`, '_blank');
+      window.open(formatWhatsAppLink(customer.phone, messageText), '_blank');
     } catch (err: any) {
       console.warn("Using premium local pitch message generator due to inactive Gemini API Key:", err.message);
       
@@ -118,14 +129,27 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
       const fallbackPitchMsg = `السلام عليكم ورحمة الله وبركاته يا فندم 🌸\nمعكم مندوب مبيعات زيوت وسمن "سوفانا" الممتازة لجودة الفنادق والمطاعم والبيوت.\n\nنتشرف بالتعاون معكم في [ ${customer.name} ] بمنطقة [ ${customer.area} ] ونود تقديم عروضنا الخاصة والحصرية لكم لتوفير أفضل سمن بلدي وزيوت مصفاة فائقة النقاوة، بهامش ربح ممتاز وتسهيلات سداد مريحة.\n\n(✨ هدفنا الاستراتيجي: ${guidelines})\n\nهل نتشرف بتحديد موعد قريب للزيارة وتجريب عيناتنا المجانية للتأكد من الجودة؟`;
       
       const messageText = encodeURIComponent(fallbackPitchMsg);
-      let phone = customer.phone;
-      if (phone.startsWith('0')) {
-        phone = '20' + phone.substring(1);
-      }
-      window.open(`https://wa.me/${phone}?text=${messageText}`, '_blank');
+      window.open(formatWhatsAppLink(customer.phone, messageText), '_blank');
     } finally {
       setWaLoadingId(null);
     }
+  };
+
+  // دالة تصدير البيانات إلى ملف CSV إكسيل
+  const exportToCSV = (data: any[], filename: string) => {
+    const BOM = '\uFEFF';
+    const csvRows = [];
+    const headers = Object.keys(data[0] || {});
+    csvRows.push(headers.join(','));
+    for (const row of data) {
+      const values = headers.map(header => `"${('' + (row[header] || '')).replace(/"/g, '""')}"`);
+      csvRows.push(values.join(','));
+    }
+    const blob = new Blob([BOM + csvRows.join('\n')], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = filename;
+    link.click();
   };
 
   // Watchlist/Staging for prospects generated from Google Maps finder
@@ -265,40 +289,59 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
   };
 
   const handleAddMapLeadToGoogleLeads = (lead: any) => {
-    // Add to googleLeads watchlist if not exists
-    const exists = googleLeads.some(g => g.phone === lead.phone || g.name.toLowerCase() === lead.name.toLowerCase());
-    if (exists) {
-      alert('تم إضافة هذا المحل بالفعل في مسودة العملاء المقترحين.');
+    // Check if it exists in actual customers
+    const existsInReal = customers.some(c => c.phone === lead.phone || c.name.toLowerCase() === lead.name.toLowerCase());
+    if (existsInReal) {
+      showToast(`⚠️ العميل "${lead.name}" موجود بالفعل في العملاء الفعليين!`);
       setAddedLeadIds(prev => [...prev, lead.id]);
       return;
     }
 
-    const updated = [...googleLeads, { ...lead, dateAdded: new Date().toLocaleDateString('ar-EG'), confirmed: false }];
+    // Add to googleLeads watchlist if not exists
+    const exists = googleLeads.some(g => g.phone === lead.phone || g.name.toLowerCase() === lead.name.toLowerCase());
+    if (exists) {
+      showToast(`⚠️ العميل "${lead.name}" موجود بالفعل في العملاء المكتشفين!`);
+      setAddedLeadIds(prev => [...prev, lead.id]);
+      return;
+    }
+
+    const finalArea = (lead.detailedAddress || lead.area || 'أخرى').trim();
+    const gov = getGovernorateForArea(finalArea);
+    const updated = [...googleLeads, { ...lead, governorate: gov, dateAdded: new Date().toLocaleDateString('ar-EG'), confirmed: false }];
     setGoogleLeads(updated);
     setAddedLeadIds(prev => [...prev, lead.id]);
   };
 
-  const handleConfirmGoogleLead = (lead: any) => {
+  const handleConfirmGoogleLead = async (lead: any) => {
     const finalArea = (lead.detailedAddress || lead.area || 'أخرى').trim();
+    const gov = lead.governorate || getGovernorateForArea(finalArea);
     
-    // Auto add immediately using onAddCustomer callback prop
+    const existsInReal = customers.find(c => c.phone === lead.phone || c.name.toLowerCase() === lead.name.toLowerCase());
+    if (existsInReal) {
+      const proceed = await confirmDialog(`العميل [${lead.name}] أو رقم هاتفه مسجل مسبقاً بقاعدة العملاء. هل تريد تأكيد إضافته وتجاهل التطابق؟`);
+      if (!proceed) return;
+    }
+
+    const smPrompt = window.prompt("اكتب اسم مدير البيع / المسؤول عن المحل (اختياري، للبحث لاحقاً):", "");
+    const salesManagerName = smPrompt !== null ? smPrompt.trim() : "";
+
     onAddCustomer({
       name: (lead.name || '').trim(),
       phone: (lead.phone || '').trim(),
       area: finalArea,
-      governorate: getGovernorateForArea(finalArea),
-      locationLink: lead.locationLink || `https://maps.google.com/?q=${encodeURIComponent((lead.name || '').trim() + ' ' + finalArea)}`
+      governorate: gov,
+      locationLink: lead.locationLink || `https://maps.google.com/?q=${encodeURIComponent((lead.name || '').trim() + ' ' + finalArea)}`,
+      salesManager: salesManagerName
     });
 
-    // Mark as confirmed in staging
-    setGoogleLeads(prev => prev.map(g => g.id === lead.id ? { ...g, confirmed: true } : g));
+    // حذف العميل من المكتشفين لكونه انتقل رسمياً إلى العملاء الفعليين
+    setGoogleLeads(prev => prev.filter(g => g.id !== lead.id));
     
-    // Switch view to actual customers list, filter for this newly active customer and scroll to top
     setSearchQuery((lead.name || '').trim());
     setActiveTab('list');
     window.scrollTo({ top: 0, left: 0, behavior: 'smooth' });
 
-    alert(`تم تأكيد العميل "${lead.name}" وإضافته بنجاح لقائمة عملائك الفعليين في منطقة [ ${finalArea} ]! 🎉`);
+    showToast(`✓ تم نقل العميل "${lead.name}" للعملاء الفعليين بنجاح!`);
   };
 
   const handleDeleteGoogleLead = (leadId: string) => {
@@ -311,11 +354,20 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
 
     const finalArea = area === 'أخرى' ? customArea.trim() : area.trim();
     if (!finalArea) {
-      alert('يرجى تحديد أو كتابة المنطقة السكنية.');
+      showToast('⚠️ يرجى تحديد أو كتابة المنطقة السكنية.');
       return;
     }
 
     const finalGov = governorate.trim() || getGovernorateForArea(finalArea);
+
+    const cleanPhone = phone.trim();
+    if (!editingCustomer && cleanPhone) {
+      const exists = customers.some(c => c.phone === cleanPhone || c.name.toLowerCase() === name.trim().toLowerCase());
+      if (exists) {
+        showToast('⚠️ بيانات العميل (الاسم أو رقم الهاتف) مسجلة بالفعل! يرجى المراجعة لمنع التكرار في قاعدة البيانات.');
+        return;
+      }
+    }
 
     if (editingCustomer) {
       onEditCustomer({
@@ -324,9 +376,11 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
         phone: phone.trim(),
         area: finalArea,
         governorate: finalGov,
+        salesManager: salesManager.trim(),
+        salesManager: salesManager.trim(),
         locationLink: locationLink.trim() || `https://maps.google.com/?q=${encodeURIComponent(name.trim() + ' ' + finalArea)}`
       });
-      alert('تم تعديل بيانات العميل بنجاح.');
+      showToast('✓ تم تعديل بيانات العميل بنجاح.');
     } else {
       onAddCustomer({
         name: name.trim(),
@@ -342,6 +396,7 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
     setArea('');
     setCustomArea('');
     setGovernorate('');
+    setSalesManager('');
     setLocationLink('');
     setGeoStatusMsg('');
     setShowAddForm(false);
@@ -430,7 +485,7 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
         <body>
           <div class="header">
             <h1>دليل عملاء التوزيع والمبيعات الميدانية</h1>
-            <p>سمن وزيت سوفانا الفاخر - شركة الأغذية المتحدون</p>
+            <p>سمن وزيت سوفانا الفاخر - الاخوه EAGS لخدمات التوزيع</p>
           </div>
           
           <div class="meta-box">
@@ -485,24 +540,48 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
   };
 
   // Filtering
-  const filteredCustomers = customers.filter(c => {
-    const q = searchQuery.trim().toLowerCase();
-    const gq = govSearchQuery.trim().toLowerCase();
+  const filteredCustomers = React.useMemo(() => {
+    let result = customers.filter(c => {
+      const q = searchQuery.trim().toLowerCase();
+      const gq = govSearchQuery.trim().toLowerCase();
+      
+      // Check general query
+      const matchesGeneral = !q || (
+        c.name.toLowerCase().includes(q) ||
+        c.phone.includes(q) ||
+        c.area.toLowerCase().includes(q) ||
+        (c.salesManager || '').toLowerCase().includes(q) ||
+        (c.governorate || getGovernorateForArea(c.area)).toLowerCase().includes(q)
+      );
+
+      // Check governorate query starting with letter or matching entirely
+      const customerGov = c.governorate || getGovernorateForArea(c.area);
+      const matchesGov = !gq || customerGov.toLowerCase().includes(gq);
+
+      return matchesGeneral && matchesGov;
+    });
     
-    // Check general query
-    const matchesGeneral = !q || (
-      c.name.toLowerCase().includes(q) ||
-      c.phone.includes(q) ||
-      c.area.toLowerCase().includes(q) ||
-      (c.governorate || getGovernorateForArea(c.area)).toLowerCase().includes(q)
-    );
+    if (sortBy === 'alpha') {
+      result.sort((a, b) => a.name.localeCompare(b.name, 'ar-EG'));
+    } else if (sortBy === 'purchases') {
+      result.sort((a, b) => {
+        const aPurchases = (a as any).totalSpent || a.purchasesCount || 0;
+        const bPurchases = (b as any).totalSpent || b.purchasesCount || 0;
+        return bPurchases - aPurchases;
+      });
+    }
+    return result;
+  }, [customers, searchQuery, govSearchQuery, sortBy]);
 
-    // Check governorate query starting with letter or matching entirely
-    const customerGov = c.governorate || getGovernorateForArea(c.area);
-    const matchesGov = !gq || customerGov.toLowerCase().includes(gq);
-
-    return matchesGeneral && matchesGov;
-  });
+  React.useEffect(() => {
+    if (permittedSubTabs && permittedSubTabs.length > 0) {
+      const currentPerm = activeTab === 'list' ? 'customers_list' : 'customers_maps_finder';
+      if (!permittedSubTabs.includes(currentPerm)) {
+        if (permittedSubTabs.includes('customers_list')) setActiveTab('list');
+        else if (permittedSubTabs.includes('customers_maps_finder')) setActiveTab('maps_finder');
+      }
+    }
+  }, [permittedSubTabs, activeTab]);
 
   return (
     <div className="bg-[#F7FAFC] min-h-screen pb-12 text-right animate-fade-in" dir="rtl" id="customers-tab-container">
@@ -566,7 +645,7 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                       <span className={`animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75 ${googleLeads.filter(g => !g.confirmed).length === 0 ? 'hidden' : ''}`}></span>
                       <span className={`relative inline-flex rounded-full h-2 w-2 bg-red-500 ${googleLeads.filter(g => !g.confirmed).length === 0 ? 'hidden' : ''}`}></span>
                     </span>
-                    <span>عملاء محتملين ({googleLeads.length})</span>
+                    <span>عملاء مكتشفين ({googleLeads.length})</span>
                   </button>
                 </>
               )}
@@ -608,7 +687,7 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                 </div>
 
                 <div className="grid grid-cols-1 gap-3">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                     <div>
                       <label className="inline-block bg-indigo-100 text-indigo-950 border border-indigo-200 text-xs font-black px-2.5 py-1 rounded-md mb-2 shadow-sm">اسم العميل</label>
                       <input
@@ -629,6 +708,16 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                         value={phone}
                         onChange={(e) => setPhone(e.target.value)}
                         className="w-full bg-[#F7FAFC] border border-slate-200 rounded-lg p-2.5 text-sm font-semibold focus:ring-2 focus:ring-indigo-500 text-center text-slate-800 font-mono"
+                      />
+                    </div>
+                    <div>
+                      <label className="inline-block bg-purple-100 text-purple-950 border border-purple-200 text-xs font-black px-2.5 py-1 rounded-md mb-2 shadow-sm">مدير البيع (مخفي)</label>
+                      <input
+                        type="text"
+                        placeholder="للبحث عند نسيان المحل"
+                        value={salesManager}
+                        onChange={(e) => setSalesManager(e.target.value)}
+                        className="w-full bg-[#F7FAFC] border border-slate-200 rounded-lg p-2.5 text-sm font-semibold focus:ring-2 focus:ring-indigo-500"
                       />
                     </div>
                   </div>
@@ -790,14 +879,39 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
               <div className="flex flex-col gap-3 border-b border-sky-200 pb-3">
                 <div className="flex justify-between items-center flex-wrap gap-2">
                   <h3 className="font-bold text-[#1A365D] text-base">دليل العملاء ({filteredCustomers.length})</h3>
-                  <button
-                    type="button"
-                    onClick={exportCustomersDirectoryAsPDF}
-                    className="bg-[#1A365D] hover:bg-[#2B6CB0] text-[#ffffff] font-extrabold text-[#ffffff] text-[11px] py-2 px-3 rounded-xl shadow-xs transition-colors flex items-center gap-1 cursor-pointer border-none"
-                  >
-                    <Printer className="h-3.5 w-3.5" />
-                    <span>طباعة الدليل المفلتر (PDF)</span>
-                  </button>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (sortBy === 'none') setSortBy('alpha');
+                        else if (sortBy === 'alpha') setSortBy('purchases');
+                        else setSortBy('none');
+                      }}
+                      className="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-extrabold text-[11px] py-2 px-3 rounded-xl shadow-xs transition-colors flex items-center gap-1 cursor-pointer border-none"
+                    >
+                      <ArrowUpDown className="h-3.5 w-3.5" />
+                      <span>{sortBy === 'none' ? 'ترتيب' : sortBy === 'alpha' ? 'أبجدياً' : 'الأكثر شراءً'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const exportData = filteredCustomers.map(c => ({ 'المعرف': c.id, 'المحافظة': c.governorate || '', 'المنطقة': c.area, 'اسم العميل': c.name, 'رقم الهاتف': c.phone, 'مدير البيع': c.salesManager || '', 'العنوان': c.detailedAddress || '', 'رابط جوجل ماب': c.locationLink }));
+                        exportToCSV(exportData, `العملاء_الفعليين_${new Date().toLocaleDateString('ar-EG')}.csv`);
+                      }}
+                      className="bg-emerald-600 hover:bg-emerald-700 text-[#ffffff] font-extrabold text-[11px] py-2 px-3 rounded-xl shadow-xs transition-colors flex items-center gap-1 cursor-pointer border-none"
+                    >
+                      <Download className="h-3.5 w-3.5" />
+                      <span>إكسيل (CSV)</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={exportCustomersDirectoryAsPDF}
+                      className="bg-[#1A365D] hover:bg-[#2B6CB0] text-[#ffffff] font-extrabold text-[11px] py-2 px-3 rounded-xl shadow-xs transition-colors flex items-center gap-1 cursor-pointer border-none"
+                    >
+                      <Printer className="h-3.5 w-3.5" />
+                      <span>طباعة الدليل (PDF)</span>
+                    </button>
+                  </div>
                 </div>
                 
                 {/* Two modern side-by-side search inputs */}
@@ -896,7 +1010,7 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                                 </a>
 
                                 <a
-                                  href={`https://wa.me/20${customer.phone.replace(/^0/, '')}`}
+                              href={formatWhatsAppLink(customer.phone)}
                                   target="_blank"
                                   rel="noopener noreferrer"
                                   className="flex-1 sm:flex-none px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100/85 text-[#DD6B20] border border-emerald-200 rounded-lg text-xs font-black flex items-center justify-center gap-1.5 transition-all active:scale-95 text-center"
@@ -918,6 +1032,16 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                               </div>
 
                               <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+                                <a
+                                  href={`https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(customer.area + ' ' + customer.name)}`}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="p-1.5 px-3 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-100 rounded-lg text-xs font-bold flex items-center gap-1 transition-colors"
+                                  title="المسار من موقعي الحالي"
+                                >
+                                  <MapPin className="h-3.5 w-3.5" />
+                                  <span>موقعي الحالي</span>
+                                </a>
                                 {customer.locationLink && (
                                   <a
                                     href={customer.locationLink}
@@ -935,6 +1059,7 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                                     setEditingCustomer(customer);
                                     setName(customer.name);
                                     setPhone(customer.phone);
+                                    setSalesManager(customer.salesManager || '');
                                     const areaExists = allAreas.includes(customer.area);
                                     if (areaExists) {
                                       setArea(customer.area);
@@ -959,7 +1084,7 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                                 </button>
                                 <button
                                   onClick={async () => {
-                                    if (await confirmDialog(`هل أنت متأكد من حذف العميل [${customer.name}]؟`)) {
+                                    if (await confirmDialog(`حذف العميل [${customer.name}] نهائياً؟`)) {
                                       onDeleteCustomer(customer.id);
                                     }
                                   }}
@@ -1034,9 +1159,9 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                       onChange={(e) => setBatchSize(Number(e.target.value))}
                       className="w-full bg-[#F7FAFC] border border-slate-200 rounded-lg p-2.5 text-xs font-bold focus:ring-2 focus:ring-indigo-500 text-[#1A365D] text-right"
                     >
-                      <option value={10}>تجزئة سريعة (سحب 10 محلات بالموقع)</option>
-                      <option value={20}>تجزئة متوسطة (سحب 20 محل لتغطية أوسع)</option>
-                      <option value={30}>تغطية شاملة للمنطقة كاملة (سحب 30 عميل دفعة واحدة)</option>
+                      <option value={10}>توسيع بسيط (بحث سريع لكل نشاط محدد)</option>
+                      <option value={20}>توسيع متوسط (تغطية أوسع لجميع الأنشطة المحددة)</option>
+                      <option value={30}>توسيع شامل (سحب الحد الأقصى لكل الأنشطة بالمكان)</option>
                     </select>
                   </div>
                 </div>
@@ -1073,7 +1198,7 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                         
                         {/* Interactive Header for Toggle */}
                         <div 
-                          onClick={() => setExpandedGoogleLeads(prev => ({ ...prev, [lead.id]: !prev[lead.id] }))}
+                          onClick={() => setExpandedGoogleLeads(prev => prev[lead.id] ? {} : { [lead.id]: true })}
                           className="p-4 bg-[#F7FAFC]/60 hover:bg-[#F7FAFC] flex items-center justify-between gap-4 cursor-pointer transition-colors"
                         >
                           <div className="flex flex-col gap-1.5 text-sm select-none">
@@ -1106,16 +1231,28 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                             {/* Location link and header row inside expanded details */}
                             <div className="flex justify-between items-center bg-[#F7FAFC] p-2.5 rounded-xl border border-slate-150">
                               <span className="text-xs font-bold text-slate-650">موقع العميل على الخرائط:</span>
-                              <a
-                                href={lead.locationLink}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="p-1 px-3 text-[11px] text-[#1A365D] hover:text-indigo-850 bg-[#FFFFFF] hover:bg-[#F7FAFC] border border-slate-200 rounded-lg font-black shrink-0 flex items-center gap-1 transition-all"
-                                title="افتح موقع العميل الفعلي على خرائط جوجل"
-                              >
-                                <ExternalLink className="h-3.5 w-3.5" />
-                                <span>فتح خريطة جوجل</span>
-                              </a>
+                              <div className="flex gap-2">
+                                <a
+                                  href={`https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(lead.detailedAddress || lead.name)}`}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="p-1 px-3 text-[11px] text-emerald-700 hover:text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg font-black shrink-0 flex items-center gap-1 transition-all"
+                                  title="رسم مسار من موقعي الحالي"
+                                >
+                                  <MapPin className="h-3.5 w-3.5" />
+                                  <span>موقعي الحالي</span>
+                                </a>
+                                <a
+                                  href={lead.locationLink}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="p-1 px-3 text-[11px] text-[#1A365D] hover:text-indigo-850 bg-[#FFFFFF] hover:bg-[#F7FAFC] border border-slate-200 rounded-lg font-black shrink-0 flex items-center gap-1 transition-all"
+                                  title="افتح موقع العميل الفعلي على خرائط جوجل"
+                                >
+                                  <ExternalLink className="h-3.5 w-3.5" />
+                                  <span>فتح خريطة جوجل</span>
+                                </a>
+                              </div>
                             </div>
 
                             {/* Contacts & Direct Action Buttons */}
@@ -1145,7 +1282,7 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
 
                                 {/* WhatsApp Button */}
                                 <a
-                                  href={`https://wa.me/20${lead.phone.replace(/^0/, '')}`}
+                                  href={formatWhatsAppLink(lead.phone)}
                                   target="_blank"
                                   rel="noopener noreferrer"
                                   className="px-3.5 py-2 bg-emerald-50 hover:bg-emerald-100 text-[#DD6B20] border border-emerald-200 rounded-xl text-xs font-black flex items-center justify-center gap-1.5 transition-colors active:scale-95 text-center"
@@ -1195,7 +1332,7 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                                       type="button"
                                       onClick={() => {
                                         navigator.clipboard.writeText(aiPitchText);
-                                        alert('تم نسخ عرض الـ AI الترويجي المكتمل لحافظتك بنجاح!');
+                                        showToast('✓ تم نسخ العرض الترويجي لحافظتك!');
                                       }}
                                       className="px-3 py-1.5 bg-[#FFFFFF] border border-slate-200 text-[#1A365D] rounded-lg font-bold flex items-center gap-1 hover:bg-[#F7FAFC] transition-colors"
                                     >
@@ -1203,7 +1340,7 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                                       <span>نسخ النص</span>
                                     </button>
                                     <a
-                                      href={`https://wa.me/20${lead.phone.replace(/^0/, '')}?text=${encodeURIComponent(aiPitchText)}`}
+                                      href={formatWhatsAppLink(lead.phone, encodeURIComponent(aiPitchText))}
                                       target="_blank"
                                       rel="noopener noreferrer"
                                       className="px-3 py-1.5 bg-[#DD6B20] text-white text-white rounded-lg font-bold flex items-center gap-1 hover:bg-[#C05621] transition-colors"
@@ -1277,31 +1414,92 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
           </div>
         )}
 
-        {/* 3. Google Leads Staging Tab - NEW */}
+        {/* 3. Discovered Leads Staging Tab */}
         {activeTab === 'google_leads' && (
           <div className="flex flex-col gap-4 animate-fade-in" id="google-leads-tab">
             <div className="bg-[#FFFFFF] p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col gap-4">
-              <div className="border-b border-slate-100 pb-3 flex justify-between items-center">
-                <div className="flex flex-col">
-                  <h3 className="font-bold text-[#1A365D] text-base">عملاء جوجل المستجلبين للمتابعة</h3>
-                  <p className="text-[10.5px] text-[#2B6CB0] font-bold mt-0.5">عملاء مقترحين تم سحبهم للاتصال والتحويل لعملاء دائمين</p>
+              <div className="border-b border-slate-100 pb-3 flex flex-col gap-2">
+                <div className="flex justify-between items-center">
+                  <div className="flex flex-col">
+                    <h3 className="font-bold text-[#1A365D] text-base">العملاء المكتشفين (ذاكرة مؤقتة)</h3>
+                    <p className="text-[10.5px] text-[#2B6CB0] font-bold mt-0.5">يتم الاحتفاظ بالعملاء هنا حتى بدون إنترنت للعودة إليهم</p>
+                  </div>
+                  <div className="flex gap-2 items-center">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const exportData = googleLeads.map(l => ({ 'المعرف': l.id, 'المحافظة': l.governorate || '', 'المنطقة': l.area || '', 'اسم العميل': l.name, 'رقم الهاتف': l.phone, 'العنوان': l.detailedAddress || '', 'النشاط': l.type || '', 'رابط جوجل ماب': l.locationLink }));
+                        exportToCSV(exportData, `العملاء_المكتشفين_${new Date().toLocaleDateString('ar-EG')}.csv`);
+                      }}
+                      className="text-[10px] bg-emerald-600 hover:bg-emerald-700 text-white font-black px-2 py-1.5 rounded-lg flex items-center gap-1 cursor-pointer shadow-sm transition-colors"
+                    >
+                      <Download className="h-3 w-3" />
+                      <span>تصدير CSV</span>
+                    </button>
+                    <span className="text-xs bg-indigo-50 text-indigo-750 font-black px-2.5 py-1.5 rounded-lg border border-indigo-150">
+                      {googleLeads.length} مكتشف
+                    </span>
+                  </div>
                 </div>
-                <span className="text-xs bg-indigo-50 text-indigo-750 font-black px-2.5 py-1 rounded-lg border border-indigo-150 animate-pulse">
-                  {googleLeads.length} عميل مقترح
-                </span>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 w-full mt-2">
+                  <div className="relative leading-none">
+                    <Search className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-teal-400" />
+                    <input
+                      type="text"
+                      list="search-discovered-gov-list"
+                      placeholder="تصفية بالمحافظة (الشرقية، القاهرة...)"
+                      value={discoveredGovFilter}
+                      onChange={(e) => setDiscoveredGovFilter(e.target.value)}
+                      className="w-full bg-[#F7FAFC] pr-9 pl-3 py-2 border border-slate-200 rounded-lg text-xs font-medium focus:ring-1 focus:ring-indigo-500 text-right font-bold text-[#1A365D]"
+                    />
+                    <datalist id="search-discovered-gov-list">
+                      {finalGovernorates.map(gov => (
+                        <option key={gov} value={gov}>{gov}</option>
+                      ))}
+                    </datalist>
+                  </div>
+
+                  <div className="relative leading-none">
+                    <Search className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-sky-400" />
+                    <input
+                      type="text"
+                      placeholder="تصفية بالمنطقة أو الاسم..."
+                      value={discoveredAreaFilter}
+                      onChange={(e) => setDiscoveredAreaFilter(e.target.value)}
+                      className="w-full bg-[#F7FAFC] pr-9 pl-3 py-2 border border-slate-200 rounded-lg text-xs font-medium focus:ring-1 focus:ring-indigo-500 text-right font-bold text-[#1A365D]"
+                    />
+                  </div>
+                </div>
               </div>
 
-              {googleLeads.length === 0 ? (
-                <div className="text-center py-10 flex flex-col items-center justify-center gap-2">
-                  <Compass className="h-8 w-8 text-indigo-300 animate-pulse" />
-                  <p className="text-gray-400 text-sm font-bold">لا يوجد عملاء مستجلبين من جوجل للمتابعة حالياً.</p>
-                  <p className="text-[11px] text-slate-450 leading-relaxed max-w-xs mt-1">
-                    يرجى الذهاب أولا لتبويب <span className="text-[#1A365D] font-bold">"استكشاف عملاء"</span> للبحث بالمدن وسحب المحلات، ثم الضغط على "حفظ بـ عملاء جوجل للمتابعة" لتظهر في مسودتك هنا!
-                  </p>
-                </div>
-              ) : (
-                <div className="flex flex-col gap-3.5">
-                  {googleLeads.map((lead) => {
+              {(() => {
+                const filteredGoogleLeads = googleLeads.filter(lead => {
+                  const gov = getGovernorateForArea(lead.area || '').toLowerCase();
+                  const qGov = discoveredGovFilter.trim().toLowerCase();
+                  const matchesGov = !qGov || gov.includes(qGov);
+
+                  const qArea = discoveredAreaFilter.trim().toLowerCase();
+                  const matchesArea = !qArea || (lead.area || '').toLowerCase().includes(qArea) || (lead.name || '').toLowerCase().includes(qArea);
+
+                  return matchesGov && matchesArea;
+                });
+
+                if (filteredGoogleLeads.length === 0) {
+                  return (
+                    <div className="text-center py-10 flex flex-col items-center justify-center gap-2">
+                      <Compass className="h-8 w-8 text-indigo-300 animate-pulse" />
+                      <p className="text-gray-400 text-sm font-bold">لا يوجد عملاء مكتشفين مطابقين حالياً.</p>
+                      <p className="text-[11px] text-slate-450 leading-relaxed max-w-xs mt-1">
+                        استخدم أداة "استكشاف عملاء" لإضافة عملاء إلى هذه الذاكرة المؤقتة.
+                      </p>
+                    </div>
+                  );
+                }
+
+                return (
+                  <div className="flex flex-col gap-3.5">
+                  {filteredGoogleLeads.map((lead) => {
                     const alreadyRealCustomer = customers.some(c => c.phone === lead.phone || c.name.toLowerCase() === lead.name.toLowerCase());
                     const showConfirmed = lead.confirmed || alreadyRealCustomer;
                     const isStagedExpanded = !!expandedStagedLeads[lead.id];
@@ -1335,15 +1533,15 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                                 </span>
                               )}
                               {showConfirmed && (
-                                <span className="text-[10px] text-[#DD6B20] font-extrabold bg-emerald-100/80 py-0.5 px-1.5 rounded border border-emerald-205">
-                                  شريك معتمد في قائمة المنطقة ✓
+                                <span className="text-[10px] text-emerald-800 font-extrabold bg-emerald-100/80 py-0.5 px-1.5 rounded border border-emerald-200">
+                                  مسجل مسبقاً بقاعدة العملاء ✓
                                 </span>
                               )}
                             </div>
                           </div>
 
                           <div className="flex items-center gap-2 font-black text-xs text-[#2B6CB0]">
-                            <span>{isStagedExpanded ? 'إخفاء ▲' : 'عرض التفاصيل والخيارات ▼'}</span>
+                            <span>{isStagedExpanded ? 'إخفاء التفاصيل ▲' : 'عرض التفاصيل ▼'}</span>
                           </div>
                         </div>
 
@@ -1408,7 +1606,7 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                                 </a>
 
                                 <a
-                                  href={`https://wa.me/20${lead.phone.replace(/^0/, '')}`}
+                                  href={formatWhatsAppLink(lead.phone)}
                                   target="_blank"
                                   rel="noopener noreferrer"
                                   className="px-3.5 py-1.5 bg-emerald-50 hover:bg-emerald-100/85 text-[#DD6B20] border border-emerald-200 rounded-lg text-xs font-black flex items-center justify-center gap-1.5 transition-colors active:scale-95 text-center"
@@ -1442,12 +1640,12 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                                 {showConfirmed ? (
                                   <>
                                     <Check className="h-4 w-4" />
-                                    <span>تم التأكيد والإضافة المعتمدة ✓ (الانتقال للعميل)</span>
+                                    <span>العميل متواجد بالفعل بالقاعدة (الذهاب للعميل)</span>
                                   </>
                                 ) : (
                                   <>
-                                    <Check className="h-4 w-4" />
-                                    <span>تأكيد وإضافته للعملاء الفعليين بالمنطقة</span>
+                                    <Plus className="h-4 w-4" />
+                                    <span>نقل وإضافة إلى قاعدة العملاء 👥</span>
                                   </>
                                 )}
                               </button>
@@ -1458,7 +1656,8 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                     );
                   })}
                 </div>
-              )}
+                );
+              })()}
             </div>
           </div>
         )}

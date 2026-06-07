@@ -12,6 +12,7 @@ export interface ProductWeight {
   profitMarginPercent: number; // نسبة البيع أو الربح للإدارة (مثال 10)
   addedValue?: number; // القيمة المضافة التي تسجل مباشرة فوق سعر المصنع
   retailPricePerUnit: number; // سعر بيع العبوة الصافي للجمهور بعد القيمة المضافة
+  barcode?: string; // الرمز الشريطي (الباركود) المرتبط بهذا الوزن
 }
 
 export interface Product {
@@ -47,6 +48,7 @@ export interface Customer {
   governorate?: string;
   detailedAddress?: string;
   purchasesCount?: number;
+  salesManager?: string; // مدير البيع (لغرض البحث فقط)
 }
 
 export interface InvoiceItem {
@@ -129,6 +131,7 @@ export interface UserAuth {
   customRoleName?: string; // المسمى الوظيفي المخصص (مثل مشرف، ليدر تيم، مندوب، زائر)
   lastActive?: string; // تاريخ ووقت آخر ظهور للمندوب
   lastSync?: string; // تاريخ ووقت آخر مزامنة تمت بنجاح للمندوب
+  canEditPrices?: boolean; // السماح بتعديل الأسعار (القراءة فقط)
   createdAt: string;
 }
 

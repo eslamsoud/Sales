@@ -1,7 +1,8 @@
 // @ts-nocheck
 import React, { useEffect, useState, useRef } from 'react';
 import { APIProvider, Map, AdvancedMarker, Pin, useMap, useMapsLibrary } from '@vis.gl/react-google-maps';
-import { Loader2, Search, MapPin } from 'lucide-react';
+import { Loader2, Search, MapPin, Navigation } from 'lucide-react';
+import { showToast } from '../utils/toast';
 
 const API_KEY =
   import.meta.env.VITE_GOOGLE_MAPS_PLATFORM_KEY ||
@@ -66,6 +67,7 @@ function MapSearchInner({ storeType, batchSize, onResults, isSearching, setIsSea
   const [searchAreaText, setSearchAreaText] = useState('');
   const [isReverseGeocoding, setIsReverseGeocoding] = useState(false);
   const [isLocating, setIsLocating] = useState(false);
+  const [isGpsLoading, setIsGpsLoading] = useState(false);
 
   // Sync isSearching prop with the button click inside or outside
   const handleStartSearch = async () => {
@@ -73,53 +75,68 @@ function MapSearchInner({ storeType, batchSize, onResults, isSearching, setIsSea
     setIsSearching(true);
     
     try {
-      const typeMap: Record<string, string> = {
-        'سوبر ماركت': 'supermarket',
-        'ميني ماركت': 'convenience_store',
-        'هايبر ماركت': 'supermarket',
-        'حلواني ومخبز': 'bakery',
-        'مطاعم': 'restaurant',
-        'بقالة تموينية': 'grocery_store',
-        'مواد تموينية': 'grocery_store',
-        'عطارة': 'spice_store',
-        'الكل': 'store'
-      };
-
       const finalArea = searchAreaText.trim() || 'القاهرة';
       const selectedTypesArray = Array.isArray(storeType) ? storeType : [storeType];
 
-      let searchTypes: string[] = [];
+      let queriesToRun: { typeLabel: string; query: string }[] = [];
+      
+      const buildQueries = (t: string) => {
+        if (t === 'سوبر ماركت') return { typeLabel: t, query: 'سوبر ماركت بقالة' };
+        if (t === 'هايبر ماركت') return { typeLabel: t, query: 'هايبر ماركت أسواق' };
+        if (t === 'ميني ماركت') return { typeLabel: t, query: 'ميني ماركت كشك' };
+        if (t === 'حلواني ومخبز') return { typeLabel: t, query: 'حلواني مخبز أفران' };
+        if (t === 'مطاعم') return { typeLabel: t, query: 'مطعم مأكولات مشويات' };
+        if (t === 'بقالة تموينية' || t === 'مواد تموينية') return { typeLabel: t, query: 'بدال تمويني جمعيتي مجمع استهلاكي' };
+        if (t === 'عطارة') return { typeLabel: t, query: 'عطارة توابل محمصة بن' };
+        return { typeLabel: 'نشاط تجاري', query: 'محلات تجارية' };
+      };
+
       if (selectedTypesArray.includes('الكل') || selectedTypesArray.length === 0) {
-        searchTypes = ['supermarket', 'convenience_store', 'bakery', 'restaurant', 'grocery_store', 'spice_store'];
+        queriesToRun = [
+          { typeLabel: 'سوبر ماركت', query: 'سوبر ماركت بقالة' },
+          { typeLabel: 'عطارة', query: 'عطارة توابل محمصة بن' },
+          { typeLabel: 'حلواني ومخبز', query: 'حلواني مخبز أفران' },
+          { typeLabel: 'بقالة تموينية', query: 'بدال تمويني جمعيتي مجمع استهلاكي' },
+          { typeLabel: 'مطاعم', query: 'مطعم مأكولات مشويات' }
+        ];
       } else {
-        searchTypes = selectedTypesArray.map(t => typeMap[t]).filter(Boolean);
-        searchTypes = Array.from(new Set(searchTypes)); // لمنع التكرار
-        if (searchTypes.length === 0) searchTypes = ['store'];
+        queriesToRun = selectedTypesArray.map(t => buildQueries(t));
       }
 
-      const response = await placesLib.Place.searchNearby({
-        fields: ['id', 'displayName', 'formattedAddress', 'location', 'internationalPhoneNumber', 'rating', 'userRatingCount', 'types'],
-        locationRestriction: {
-          center: center,
-          radius: mapRadius
-        },
-        includedTypes: searchTypes,
-        maxResultCount: batchSize > 20 ? 20 : batchSize,
-      });
+      const perQueryCount = Math.min(20, batchSize); // الحد الأقصى لكل استعلام للحصول على تغطية واسعة
+      const allPlaces = new Map(); // نستخدم Map لمنع تكرار المحلات
 
-      if (response && response.places) {
-        const mapped = response.places.map((p, idx) => {
+      await Promise.all(queriesToRun.map(async (qObj) => {
+        try {
+          const response = await placesLib.Place.searchByText({
+            textQuery: `${qObj.query} في ${finalArea}`,
+            fields: ['id', 'displayName', 'formattedAddress', 'location', 'internationalPhoneNumber', 'rating', 'userRatingCount', 'types'],
+            locationBias: {
+              center: center,
+              radius: mapRadius
+            },
+            maxResultCount: perQueryCount,
+          });
+          
+          if (response && response.places) {
+            response.places.forEach(p => {
+               if (!allPlaces.has(p.id)) {
+                 allPlaces.set(p.id, { place: p, typeLabel: qObj.typeLabel });
+               }
+            });
+          }
+        } catch (e) {
+           console.warn(`Query failed for: ${qObj.query}`, e);
+        }
+      }));
+
+      if (allPlaces.size > 0) {
+        let mapped = Array.from(allPlaces.values()).map((data, idx) => {
+          const p = data.place;
           let phone = p.internationalPhoneNumber || 'غير مسجل';
           let detailedAddress = p.formattedAddress || finalArea;
           let rating = p.rating ? parseFloat(p.rating.toFixed(1)) : null;
           let reviewsCount = p.userRatingCount || null;
-          
-          let type = selectedTypesArray.includes('الكل') ? 'نشاط غذائي' : selectedTypesArray.join(' و ');
-          if (p.types && p.types.length > 0) {
-              if (p.types.includes('supermarket')) type = 'سوبر ماركت';
-              else if (p.types.includes('bakery')) type = 'حلواني ومخبز';
-              else if (p.types.includes('restaurant')) type = 'مطعم';
-          }
           
           return {
             id: `gmp-lead-${p.id || Date.now()}-${idx}`,
@@ -130,10 +147,11 @@ function MapSearchInner({ storeType, batchSize, onResults, isSearching, setIsSea
             rating,
             reviewsCount,
             locationLink: `https://www.google.com/maps/search/?api=1&query=${p.location?.lat()},${p.location?.lng()}`,
-            type
+            type: data.typeLabel
           };
         });
         
+        // إلغاء تقييد النتائج الإجمالية لعرض كافة المحلات التي تم العثور عليها وتوسيع نطاق البحث
         onResults(mapped);
       } else {
         onResults([]);
@@ -150,7 +168,7 @@ function MapSearchInner({ storeType, batchSize, onResults, isSearching, setIsSea
           errorMessage = err.message;
       }
       
-      alert('حدث خطأ أثناء الاتصال بخوادم خرائط جوجل: ' + errorMessage);
+      showToast('⚠️ خطأ في خرائط جوجل: ' + errorMessage);
       onResults([]);
     } finally {
       setIsSearching(false);
@@ -195,6 +213,30 @@ function MapSearchInner({ storeType, batchSize, onResults, isSearching, setIsSea
     }
   };
 
+  const handleGetMyLocation = () => {
+    if (!navigator.geolocation) {
+      showToast('⚠️ متصفحك لا يدعم تحديد الموقع.');
+      return;
+    }
+    setIsGpsLoading(true);
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const { latitude, longitude } = position.coords;
+        const newCenter = { lat: latitude, lng: longitude };
+        setCenter(newCenter);
+        if (map) map.panTo(newCenter);
+        reverseGeocode(latitude, longitude);
+        setIsGpsLoading(false);
+      },
+      (error) => {
+        console.error(error);
+        showToast('⚠️ فشل في جلب موقعك الحالي. تأكد من إعطاء صلاحية الـ GPS.');
+        setIsGpsLoading(false);
+      },
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
+  };
+
   return (
     <>
       <div className="flex flex-col gap-2 mt-4 relative z-10">
@@ -213,9 +255,18 @@ function MapSearchInner({ storeType, batchSize, onResults, isSearching, setIsSea
             />
             <button
               type="button"
+              onClick={handleGetMyLocation}
+              disabled={isGpsLoading}
+              title="تحديد موقعي الحالي بالـ GPS"
+              className="bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 px-3 py-2.5 rounded-lg transition-colors disabled:opacity-50 flex items-center justify-center shrink-0 cursor-pointer"
+            >
+              {isGpsLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Navigation className="h-4 w-4" />}
+            </button>
+            <button
+              type="button"
               onClick={() => geocodeAndGo(searchAreaText)}
               disabled={isLocating}
-              className="bg-[#2B6CB0] hover:bg-[#2C5282] text-white px-4 py-2.5 rounded-lg text-xs font-bold flex items-center justify-center transition-colors disabled:opacity-50"
+              className="bg-[#2B6CB0] hover:bg-[#2C5282] text-white px-4 py-2.5 rounded-lg text-xs font-bold flex items-center justify-center transition-colors disabled:opacity-50 cursor-pointer shrink-0"
             >
               {isLocating ? <Loader2 className="h-4 w-4 animate-spin shrink-0" /> : <Search className="h-4 w-4 shrink-0" />}
             </button>
@@ -243,6 +294,10 @@ function MapSearchInner({ storeType, batchSize, onResults, isSearching, setIsSea
               defaultZoom={13}
               mapId="GMP_DEMO_MAP"
               minZoom={8}
+              gestureHandling="greedy"
+              mapTypeControl={false}
+              streetViewControl={false}
+              fullscreenControl={false}
               onDragend={(e) => {
                  if (map) {
                      const c = map.getCenter();

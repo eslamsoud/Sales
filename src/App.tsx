@@ -31,12 +31,23 @@ import ReportsTab from './components/ReportsTab';
 import InvoiceTab from './components/InvoiceTab';
 import AuthGate from './components/AuthGate';
 import AiChatAssistant from './components/AiChatAssistant';
-import { Lock, Fingerprint, Key, ShieldAlert, CheckCircle, RefreshCw, Save, LogOut, MessageCircle, Bell, Settings as SettingsIcon } from 'lucide-react';
+import { Lock, Fingerprint, Key, ShieldAlert, CheckCircle, RefreshCw, Save, LogOut, MessageCircle, Bell, Settings as SettingsIcon, HelpCircle, AlertCircle } from 'lucide-react';
+import { confirmEvents } from './utils/confirm';
+import { idbGet, idbSet } from './utils/idb';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<string>('dashboard');
   const [isChatOpen, setIsChatOpen] = useState<boolean>(false);
   const [customToast, setCustomToast] = useState<{message: string, id: number} | null>(null);
+  const [confirmState, setConfirmState] = useState<{message: string, isAlert: boolean, resolve: (val: boolean)=>void} | null>(null);
+
+  useEffect(() => {
+    const handleShowConfirm = (e: any) => {
+      setConfirmState(e.detail);
+    };
+    confirmEvents.addEventListener('show-confirm', handleShowConfirm);
+    return () => confirmEvents.removeEventListener('show-confirm', handleShowConfirm);
+  }, []);
 
   useEffect(() => {
     const handleShowToast = (e: any) => {
@@ -66,7 +77,7 @@ export default function App() {
       setIsLockedByTimeout(false);
       setLockPassword('');
       setLastActivity(Date.now());
-      alert(`مرحباً بك يا ${currentUser.name}`);
+      showToast(`مرحباً بك يا ${currentUser.name}`);
       return;
     }
 
@@ -79,7 +90,7 @@ export default function App() {
       setIsLockedByTimeout(false);
       setLockPassword('');
       setLastActivity(Date.now());
-      alert(`مرحباً بك يا ${currentUser.name}`);
+      showToast(`مرحباً بك يا ${currentUser.name}`);
     } else {
       setLockError('رمز المرور الشخصي غير صحيح!');
     }
@@ -90,7 +101,21 @@ export default function App() {
     const raw = localStorage.getItem('users_permissions_sys');
     if (raw) {
       try {
-        return JSON.parse(raw);
+        const parsed = JSON.parse(raw);
+        const unique = new Map();
+        parsed.forEach((u: UserAuth) => {
+          let p = String(u.phone).replace(/^'/, '').replace(/\s+/g, '').trim();
+          if (p.length === 10 && p.startsWith('1')) p = '0' + p;
+          u.phone = p;
+          if (!unique.has(u.phone) || u.role === 'owner') {
+            unique.set(u.phone, u);
+          }
+        });
+        const cleanList = Array.from(unique.values()) as UserAuth[];
+        if (cleanList.length !== parsed.length) {
+          localStorage.setItem('users_permissions_sys', JSON.stringify(cleanList));
+        }
+        return cleanList;
       } catch (e) {
         return [];
       }
@@ -120,7 +145,7 @@ export default function App() {
 
   const checkSimulationGuard = (): boolean => {
     if (simulatedDelegate) {
-      alert("⚠️ وضع المعاينة والمطالعة الميدانية مخصص للمشاهدة وتتبع التحركات فقط من طرف المدير العام لمنع حدوث أي تعارض أو تسجيل خاطئ للعمليات. الرجاء الخروج وتعديل صلاحيات المندوب أو البيانات من لوحة الإدارة العامة.");
+      showToast("⚠️ وضع المعاينة مخصص للمشاهدة فقط لمنع تعارض البيانات.");
       return true;
     }
     return false;
@@ -170,14 +195,15 @@ export default function App() {
   }, [currentUser?.phone]);
 
   // CORE STATE
-  const [products, setProducts] = useState<Product[]>(() => getStoredData('products_sys', DEFAULT_PRODUCTS));
-  const [factoryLoads, setFactoryLoads] = useState<FactoryLoad[]>(() => getStoredData('factory_sys', DEFAULT_FACTORY_LOADS));
-  const [customers, setCustomers] = useState<Customer[]>(() => getStoredData('customers_sys', DEFAULT_CUSTOMERS));
-  const [invoices, setInvoices] = useState<Invoice[]>(() => getStoredData('invoices_sys', DEFAULT_INVOICES));
-  const [expenses, setExpenses] = useState<Expense[]>(() => getStoredData('expenses_sys', DEFAULT_EXPENSES));
-  const [trips, setTrips] = useState<Trip[]>(() => getStoredData('trips_sys', []));
-  const [syncLogs, setSyncLogs] = useState<SyncLog[]>(() => getStoredData('sync_logs_sys', []));
-  const [settings, setSettings] = useState<AppSettings>(() => getStoredData('settings_sys', DEFAULT_SETTINGS));
+  const [isDbLoaded, setIsDbLoaded] = useState(false);
+  const [products, setProducts] = useState<Product[]>([]);
+  const [factoryLoads, setFactoryLoads] = useState<FactoryLoad[]>([]);
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [invoices, setInvoices] = useState<Invoice[]>([]);
+  const [expenses, setExpenses] = useState<Expense[]>([]);
+  const [trips, setTrips] = useState<Trip[]>([]);
+  const [syncLogs, setSyncLogs] = useState<SyncLog[]>([]);
+  const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
 
   const [showScrollTop, setShowScrollTop] = useState(false);
 
@@ -225,6 +251,48 @@ export default function App() {
     return () => window.removeEventListener('scroll', handleScroll);
   }, []);
 
+  // IndexedDB Loading and Auto-Cleanup
+  useEffect(() => {
+    async function loadData() {
+      try {
+        const [ prod, fact, cust, inv, exp, tr, logs, set ] = await Promise.all([
+          idbGet('products_sys'), idbGet('factory_sys'), idbGet('customers_sys'),
+          idbGet('invoices_sys'), idbGet('expenses_sys'), idbGet('trips_sys'),
+          idbGet('sync_logs_sys'), idbGet('settings_sys')
+        ]);
+
+        const migrate = (idbData: any, localKey: string, defaultData: any) => {
+          const local = localStorage.getItem(localKey);
+          if (local) {
+            localStorage.removeItem(localKey); // مسح الذاكرة القديمة فوراً لتوفير مساحة الهاتف
+          }
+          if (idbData) return idbData;
+          return local ? JSON.parse(local) : defaultData;
+        };
+
+        setProducts(migrate(prod, 'products_sys', DEFAULT_PRODUCTS));
+        setFactoryLoads(migrate(fact, 'factory_sys', DEFAULT_FACTORY_LOADS));
+        setCustomers(migrate(cust, 'customers_sys', DEFAULT_CUSTOMERS));
+        
+        const rawInvoices = migrate(inv, 'invoices_sys', DEFAULT_INVOICES);
+        const thirtyDaysAgo = new Date();
+        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+        const cleanedInvoices = rawInvoices.filter((i: any) => {
+          const invDate = new Date(i.date);
+          const isPaid = (i.paidAmount ?? i.totalAfterDiscount) >= i.totalAfterDiscount;
+          return !(invDate < thirtyDaysAgo && isPaid);
+        });
+
+        setInvoices(cleanedInvoices);
+        setExpenses(migrate(exp, 'expenses_sys', DEFAULT_EXPENSES));
+        setTrips(migrate(tr, 'trips_sys', []));
+        setSyncLogs(migrate(logs, 'sync_logs_sys', []));
+        setSettings(migrate(set, 'settings_sys', DEFAULT_SETTINGS));
+      } catch (e) { console.error("DB Load Error", e); } finally { setIsDbLoaded(true); }
+    }
+    loadData();
+  }, []);
+
   // التهيئة الصامتة (Silent Provisioning) من السيرفر للأجهزة الجديدة بدون تدخل المستخدم
   useEffect(() => {
     const envUrl = import.meta.env.VITE_GOOGLE_SHEETS_URL;
@@ -245,47 +313,26 @@ export default function App() {
 
   // Sync state changes with localStorage
   useEffect(() => {
-    setStoredData('products_sys', products);
-  }, [products]);
-
-  useEffect(() => {
-    setStoredData('factory_sys', factoryLoads);
-  }, [factoryLoads]);
-
-  useEffect(() => {
-    setStoredData('customers_sys', customers);
-  }, [customers]);
-
-  useEffect(() => {
-    setStoredData('invoices_sys', invoices);
-  }, [invoices]);
-
-  useEffect(() => {
-    setStoredData('expenses_sys', expenses);
-  }, [expenses]);
-
-  useEffect(() => {
-    setStoredData('trips_sys', trips);
-  }, [trips]);
-
-  useEffect(() => {
-    setStoredData('sync_logs_sys', syncLogs);
-  }, [syncLogs]);
-
-  useEffect(() => {
-    setStoredData('settings_sys', settings);
-  }, [settings]);
+    if (isDbLoaded) idbSet('products_sys', products);
+  }, [products, isDbLoaded]);
+  useEffect(() => { if (isDbLoaded) idbSet('factory_sys', factoryLoads); }, [factoryLoads, isDbLoaded]);
+  useEffect(() => { if (isDbLoaded) idbSet('customers_sys', customers); }, [customers, isDbLoaded]);
+  useEffect(() => { if (isDbLoaded) idbSet('invoices_sys', invoices); }, [invoices, isDbLoaded]);
+  useEffect(() => { if (isDbLoaded) idbSet('expenses_sys', expenses); }, [expenses, isDbLoaded]);
+  useEffect(() => { if (isDbLoaded) idbSet('trips_sys', trips); }, [trips, isDbLoaded]);
+  useEffect(() => { if (isDbLoaded) idbSet('sync_logs_sys', syncLogs); }, [syncLogs, isDbLoaded]);
+  useEffect(() => { if (isDbLoaded) idbSet('settings_sys', settings); }, [settings, isDbLoaded]);
 
   // Operations handlers
   const promptForSync = (actionDesc: string) => {
     if (!settings.googleSheetsUrl) return;
     setTimeout(async () => {
-      showToast(`☁️ جاري الرفع والنسخ الاحتياطي التلقائي (${actionDesc})...`);
+      showToast(`☁️ جاري الحفظ السحابي...`);
       const success = await syncAllDataToGoogle(true);
       if (success) {
-        showToast(`✓ تم الرفع والتخزين السحابي التلقائي مع Google Sheets بنجاح! ☁️`);
+        showToast(`✓ تم الحفظ السحابي بنجاح!`);
       } else {
-        showToast(`⚠️ فشل الرفع والترحيل السحابي تلقائياً! تأكد من الإنترنت ورابط جوجل.`);
+        showToast(`⚠️ فشل الحفظ السحابي، تأكد من اتصالك بالإنترنت.`);
       }
     }, 300);
   };
@@ -402,8 +449,35 @@ export default function App() {
     // We already do a full sync if they accept. If they reject, we don't spam Google. So I will just rely on the prompt.
   };
 
+  const handleUpdateInvoice = (updated: Invoice) => {
+    if (checkSimulationGuard()) return;
+    const oldInv = invoices.find(i => i.id === updated.id);
+    if (oldInv && oldInv.totalAfterDiscount !== updated.totalAfterDiscount) {
+      const diff = updated.totalAfterDiscount - oldInv.totalAfterDiscount;
+      setCustomers(prev => prev.map(c => 
+        c.id === updated.customerId
+          ? { ...c, totalSpent: Math.max(0, (c.totalSpent || 0) + diff) }
+          : c
+      ));
+    }
+    setInvoices(invoices.map(inv => inv.id === updated.id ? updated : inv));
+    promptForSync('تحديث فاتورة بيع');
+  };
+
   const handleDeleteInvoice = (id: string) => {
     if (checkSimulationGuard()) return;
+    const invToDelete = invoices.find(i => i.id === id);
+    if (invToDelete) {
+      setCustomers(prev => prev.map(c => 
+        c.id === invToDelete.customerId
+          ? { 
+              ...c, 
+              totalSpent: Math.max(0, (c.totalSpent || 0) - invToDelete.totalAfterDiscount),
+              purchasesCount: Math.max(0, (c.purchasesCount || 0) - 1)
+            }
+          : c
+      ));
+    }
     setInvoices(prev => prev.filter(inv => inv.id !== id));
     promptForSync('حذف فاتورة بيع');
   };
@@ -436,6 +510,17 @@ export default function App() {
       delegateName: currentUser?.name || 'مجهول',
       delegatePhone: currentUser?.phone || ''
     }]);
+
+    setCustomers(prev => prev.map(c => 
+      c.id === newInvoice.customerId 
+        ? { 
+            ...c, 
+            totalSpent: (c.totalSpent || 0) + newInvoice.totalAfterDiscount,
+            purchasesCount: (c.purchasesCount || 0) + 1,
+            lastPurchaseDate: newInvoice.date.split('T')[0]
+          }
+        : c
+    ));
     promptForSync('تسجيل مشوار/نقلية');
   };
 
@@ -497,6 +582,22 @@ export default function App() {
       const customersMap = new Map(customers.map(c => [c.id, c]));
       const productsMap = new Map(products.map(p => [p.id, p]));
 
+      const googleLeadsRaw = localStorage.getItem('google_leads_staging_sys');
+      const discoveredLeads = googleLeadsRaw ? JSON.parse(googleLeadsRaw) : [];
+
+      const invoicesByCustomer = new Map();
+      invoices.forEach(inv => {
+        if (!invoicesByCustomer.has(inv.customerId)) invoicesByCustomer.set(inv.customerId, []);
+        invoicesByCustomer.get(inv.customerId).push(inv);
+      });
+
+      // جلب أحدث قائمة مناديب من الذاكرة مباشرة لتجنب تأخير حالة React وعدم رفعهم
+      let freshUsersList = usersList;
+      try {
+        const localUsers = JSON.parse(localStorage.getItem('users_permissions_sys') || '[]');
+        if (localUsers && localUsers.length > 0) freshUsersList = localUsers;
+      } catch(e) {}
+
       const payload = {
         type: 'تقرير_كامل',
         metadata: {
@@ -517,6 +618,7 @@ export default function App() {
             total: inv.totalAfterDiscount,
             paidAmount: inv.paidAmount !== undefined ? inv.paidAmount : inv.totalAfterDiscount,
             delegateName: inv.delegateName || 'مجهول',
+            delegatePhone: inv.delegatePhone || '',
             notes: inv.notes,
             items: inv.items || []
           };
@@ -528,7 +630,8 @@ export default function App() {
           category: e.category,
           type: e.type || 'expense',
           description: e.description,
-          delegateName: e.delegateName || 'مجهول'
+          delegateName: e.delegateName || 'مجهول',
+          delegatePhone: e.delegatePhone || ''
         })),
         trips: (trips || []).map(t => ({
           id: t.id,
@@ -536,7 +639,8 @@ export default function App() {
           price: t.price,
           status: t.collected ? 'محصلة' : 'غير محصلة',
           date: t.date || new Date().toISOString(),
-          delegateName: t.delegateName || 'مجهول'
+          delegateName: t.delegateName || 'مجهول',
+          delegatePhone: t.delegatePhone || ''
         })),
         products: products.map(p => ({
           id: p.id,
@@ -545,17 +649,22 @@ export default function App() {
           count: p.weights ? p.weights.length : 0,
           weights: p.weights || []
         })),
-        customers: customers.map(c => ({
-          id: c.id,
-          name: c.name,
-          phone: c.phone,
-          governorate: c.governorate || 'القاهرة',
-          area: c.area,
-          detailedAddress: c.detailedAddress || '',
-          locationLink: c.locationLink || '',
-          purchasesCount: c.purchasesCount || 0
-        })),
-        users: usersList.map(u => ({
+        customers: customers.map(c => {
+          return {
+            id: c.id,
+            name: c.name,
+            phone: c.phone,
+            governorate: c.governorate || 'القاهرة',
+            area: c.area,
+            detailedAddress: c.detailedAddress || '',
+            locationLink: c.locationLink || '',
+            purchasesCount: c.purchasesCount || 0,
+            salesManager: c.salesManager || '',
+            totalSpent: c.totalSpent || 0,
+            lastPurchaseDate: c.lastPurchaseDate || ''
+          }
+        }),
+        users: freshUsersList.map(u => ({
           name: u.name,
           phone: u.phone,
           role: u.role,
@@ -563,7 +672,8 @@ export default function App() {
           password: u.password || '1234',
           customRoleName: u.customRoleName || '',
           permittedTabs: (u.permittedTabs || []).join(','),
-          permittedSubTabs: (u.permittedSubTabs || []).join(',')
+          permittedSubTabs: (u.permittedSubTabs || []).join(','),
+          canEditPrices: u.canEditPrices !== false
         })),
         factoryLoads: (factoryLoads || []).map(fl => {
           const prod = productsMap.get(fl.productId);
@@ -577,9 +687,20 @@ export default function App() {
             cartonsCount: fl.cartonsCount || 0,
             quantity: fl.quantity || 0,
             advanceAmount: fl.advanceAmount || 0,
-            warehouseKeeper: fl.warehouseKeeper || ''
+            warehouseKeeper: fl.warehouseKeeper || '',
+            delegateName: fl.delegateName || 'مجهول',
+            delegatePhone: fl.delegatePhone || ''
           };
-        })
+        }),
+        discoveredLeads: discoveredLeads.map((l: any) => ({
+          id: l.id,
+          governorate: l.governorate || 'القاهرة',
+          area: l.area,
+          name: l.name,
+          phone: l.phone,
+          detailedAddress: l.detailedAddress,
+          locationLink: l.locationLink
+        }))
       };
 
       await fetch(settings.googleSheetsUrl, {
@@ -665,6 +786,16 @@ export default function App() {
   }, [activeTab, lastBackPress]);
 
   // If the user is not authenticated or deactivated, enforce the AuthGate screen
+  if (!isDbLoaded) {
+    return (
+      <div className="min-h-screen bg-[#F0F4F8] flex flex-col items-center justify-center p-4 text-center" dir="rtl">
+        <div className="animate-spin h-12 w-12 border-4 border-[#1A365D] border-t-transparent rounded-full mb-4 mx-auto"></div>
+        <h2 className="text-[#1A365D] font-black text-lg">جاري تحميل قاعدة البيانات...</h2>
+        <p className="text-xs text-slate-500 font-bold mt-2">يتم الآن تجهيز مساحة التخزين اللامحدودة (IndexedDB)</p>
+      </div>
+    );
+  }
+
   if (!currentUser) {
     return (
       <AuthGate
@@ -767,14 +898,12 @@ export default function App() {
   }
 
   async function handleSecureExit() {
-    const confirm = window.confirm("هل تريد تسجيل الخروج الآمن؟ سيتم مزامنة وحفظ كافة البيانات المبيعات والمنتجات والعملاء إلى جوجل شيت السحابي لضمان عدم ضياع التعديلات.");
-    if (!confirm) return;
-
+    showToast("جاري الخروج الآمن والمزامنة السحابية...");
     const success = await syncAllDataToGoogle(true);
     if (success) {
-      alert("تم حفظ البيانات سحابياً بنجاح! جاري الخروج الآمن...");
+      showToast("✓ تم حفظ البيانات سحابياً بنجاح!");
     } else {
-      alert("تنبيه: تعذر إرسال النسخة السحابية لعدم تكوين الرابط، سيتم الخروج وحفظ البيانات محلياً.");
+      showToast("⚠️ تعذر الرفع السحابي، تم الحفظ محلياً فقط.");
     }
 
     localStorage.removeItem('authed_user_phone');
@@ -785,15 +914,14 @@ export default function App() {
   }
 
   async function handleManualSave() {
-    const confirm = window.confirm("هل تأمل في تأكيد حفظ وترحيل كامل قاعدة البيانات الحالية لـ Google Sheets السحابي منعاً للفقدان؟");
-    if (!confirm) return;
-
+    setIsHeaderSyncing(true);
     const success = await syncAllDataToGoogle(false);
     if (success) {
-      alert("✓ تم حفظ وتصدير البيانات السحابية بنجاح تام لمنع فقدان العمل.");
+      showToast("✓ تم الحفظ السحابي بنجاح");
     } else {
-      alert("❌ تعذر حفظ البيانات؛ يرجى التحقق من توفر الإنترنت أو صحة إعدادات رابط مزامنة جوجل شيت.");
+      showToast("❌ تعذر الحفظ السحابي، تحقق من الاتصال.");
     }
+    setIsHeaderSyncing(false);
   }
 
   async function handleUpdateData(isSilent = false) {
@@ -805,7 +933,6 @@ export default function App() {
       return;
     }
 
-    if (!isSilent) showToast("جاري الاتصال بـ Google Sheets لجلب آخر البيانات وصلاحيات المناديب والنائب... 📡");
 
     try {
       const response = await fetch(settings.googleSheetsUrl);
@@ -819,7 +946,7 @@ export default function App() {
         if (data.users && Array.isArray(data.users)) {
           const mappedUsers = data.users.map((u: any) => ({
             phone: (() => {
-              let p = String(u.phone).replace(/^'/, '').trim();
+              let p = String(u.phone).replace(/^'/, '').replace(/\s+/g, '').trim();
               if (p.length === 10 && p.startsWith('1')) return '0' + p;
               return p;
             })(),
@@ -832,19 +959,29 @@ export default function App() {
             permittedSubTabs: typeof u.permittedSubTabs === 'string' 
               ? u.permittedSubTabs.split(',').map((t: string) => t.trim()).filter(Boolean)
               : Array.isArray(u.permittedSubTabs) ? u.permittedSubTabs : [],
+            canEditPrices: u.canEditPrices !== false,
             password: String(u.password || '').replace(/^'/, ''),
             customRoleName: String(u.customRoleName || ''),
             createdAt: u.createdAt || new Date().toISOString()
           }));
 
+          // فلتر ذكي لمنع التكرار ودمج الحسابات المكررة برقم الهاتف
+          const uniqueUsersMap = new Map();
+          mappedUsers.forEach((u: any) => {
+            if (!uniqueUsersMap.has(u.phone) || u.role === 'owner') {
+              uniqueUsersMap.set(u.phone, u);
+            }
+          });
+          const uniqueMappedUsers = Array.from(uniqueUsersMap.values());
+
           // Ensure general manager (01228466613) remains correctly typed and authed at index if missing
-          const ownerExists = mappedUsers.some((u: any) => u.phone === '01228466613');
+          const ownerExists = uniqueMappedUsers.some((u: any) => u.phone === '01228466613');
           if (!ownerExists && usersList.some(u => u.phone === '01228466613')) {
             const currentOwner = usersList.find(u => u.phone === '01228466613')!;
-            mappedUsers.unshift(currentOwner);
+            uniqueMappedUsers.unshift(currentOwner);
           }
           
-          handleUpdateUsersList(mappedUsers);
+          handleUpdateUsersList(uniqueMappedUsers);
         }
 
         // 2. Update products and categories (النسخة المسطحة الجديدة المتوافقة مع التعديل اليدوي)
@@ -891,7 +1028,6 @@ export default function App() {
           
           const mappedProducts = Object.values(productGroups);
           setProducts(mappedProducts);
-          localStorage.setItem('products_sys', JSON.stringify(mappedProducts));
         } else if (data.products && Array.isArray(data.products)) {
           // التوافق الرجعي لو السيرفر لسه مبعتش النسخة المسطحة
           const mappedProducts = data.products.map((p: any) => ({
@@ -904,7 +1040,6 @@ export default function App() {
             weights: Array.isArray(p.weights) && p.weights.length > 0 ? p.weights : [{ id: '1', size: 'كرتونة', cartonPriceFromFactory: Number(p.price || 0)*12, unitsPerCarton: 12, factoryPricePerUnit: Number(p.price || 0), profitMarginPercent: 0, retailPricePerUnit: Number(p.price || 0) }]
           }));
           setProducts(mappedProducts);
-          localStorage.setItem('products_sys', JSON.stringify(mappedProducts));
         }
 
         // 3. Update customers list
@@ -920,11 +1055,13 @@ export default function App() {
             purchasesCount: Number(c.purchasesCount || 0)
           }));
           setCustomers(mappedCustomers);
-          localStorage.setItem('customers_sys', JSON.stringify(mappedCustomers));
         }
 
         // 4. Update operational tables (Invoices, Expenses, Trips, Factory loads)
         if (data.invoices && Array.isArray(data.invoices)) {
+          const thirtyDaysAgo = new Date();
+          thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
           const mappedInvoices = data.invoices.map((inv: any) => {
             const cust = customers.find(c => c.name === inv.customerName);
             return {
@@ -939,11 +1076,17 @@ export default function App() {
               paidAmount: inv.paidAmount !== undefined ? Number(inv.paidAmount) : Number(inv.total || 0),
               remainingAmount: inv.remainingAmount || 0,
               notes: inv.notes || '',
-              delegateName: inv.delegateName || 'مجهول'
+              delegateName: inv.delegateName || 'مجهول',
+              delegatePhone: inv.delegatePhone || ''
             };
+          }).filter((inv: any) => {
+            // تصفية الفواتير القديمة (أكثر من 30 يوم ومسددة بالكامل) لتوفير المساحة
+            const invDate = new Date(inv.date);
+            const isPaid = (inv.paidAmount ?? inv.totalAfterDiscount) >= inv.totalAfterDiscount;
+            return !(invDate < thirtyDaysAgo && isPaid);
           });
+          
           setInvoices(mappedInvoices);
-          localStorage.setItem('invoices_sys', JSON.stringify(mappedInvoices));
         }
 
         if (data.expenses && Array.isArray(data.expenses)) {
@@ -954,10 +1097,10 @@ export default function App() {
             category: e.category,
             type: e.type === 'revenue' ? 'revenue' : 'expense',
             description: e.description || '',
-            delegateName: e.delegateName || 'مجهول'
+            delegateName: e.delegateName || 'مجهول',
+            delegatePhone: e.delegatePhone || ''
           }));
           setExpenses(mappedExpenses);
-          localStorage.setItem('expenses_sys', JSON.stringify(mappedExpenses));
         }
 
         if (data.trips && Array.isArray(data.trips)) {
@@ -967,10 +1110,10 @@ export default function App() {
             description: t.description || t.area || '',
             price: Number(t.price || 0),
             collected: t.status === 'محصلة' || t.collected === true,
-            delegateName: t.delegateName || 'مجهول'
+            delegateName: t.delegateName || 'مجهول',
+            delegatePhone: t.delegatePhone || ''
           }));
           setTrips(mappedTrips);
-          localStorage.setItem('trips_sys', JSON.stringify(mappedTrips));
         }
 
         if (data.factoryLoads && Array.isArray(data.factoryLoads)) {
@@ -982,13 +1125,14 @@ export default function App() {
             cartonsCount: Number(fl.cartonsCount || 0),
             quantity: Number(fl.quantity || 0),
             advanceAmount: Number(fl.advanceAmount || 0),
-            warehouseKeeper: fl.warehouseKeeper || ''
+            warehouseKeeper: fl.warehouseKeeper || '',
+            delegateName: fl.delegateName || '',
+            delegatePhone: fl.delegatePhone || ''
           }));
           setFactoryLoads(mappedLoads);
-          localStorage.setItem('factory_sys', JSON.stringify(mappedLoads));
         }
 
-        if (!isSilent) showToast("✓ تم تحديث وسحب كامل البيانات وصلاحيات المناديب من Google Sheets بنجاح بنسبة 100%!");
+        if (!isSilent) showToast("✓ تم التحديث بنجاح!");
       } else {
         if (!isSilent) showToast("تنبيه: تم إرجاع بيانات فارغة ومخالفة للنموذج. جاري التحميل العادي...");
         setTimeout(() => {
@@ -1003,6 +1147,13 @@ export default function App() {
       }, 1500);
     }
   }
+
+  // Data Isolation Logic (عزل بيانات المناديب ما لم يكن المدير العام)
+  const isManager = effectiveUser?.role === 'owner' || effectiveUser?.phone === '01228466613';
+  const filteredFactoryLoads = isManager ? factoryLoads : factoryLoads.filter(l => l.delegatePhone === effectiveUser?.phone || (l.delegateName && effectiveUser?.name && l.delegateName.includes(effectiveUser.name.replace(/ \(.*?\)/, '').trim())));
+  const filteredInvoices = isManager ? invoices : invoices.filter(i => i.delegatePhone === effectiveUser?.phone || (i.delegateName && effectiveUser?.name && i.delegateName.includes(effectiveUser.name.replace(/ \(.*?\)/, '').trim())));
+  const filteredExpenses = isManager ? expenses : expenses.filter(e => e.delegatePhone === effectiveUser?.phone || (e.delegateName && effectiveUser?.name && e.delegateName.includes(effectiveUser.name.replace(/ \(.*?\)/, '').trim())));
+  const filteredTrips = isManager ? trips : trips.filter(t => t.delegatePhone === effectiveUser?.phone || (t.delegateName && effectiveUser?.name && t.delegateName.includes(effectiveUser.name.replace(/ \(.*?\)/, '').trim())));
 
   return (
     <div className="bg-[#F7FAFC] min-h-screen text-[#1A365D] transition-all font-sans antialiased flex flex-col justify-between animate-fade-in" id="app-root-wrapper">
@@ -1278,8 +1429,8 @@ export default function App() {
         {activeTab === 'dashboard' && effectiveUser && (
           <Dashboard
             products={products}
-            factoryLoads={factoryLoads}
-            invoices={invoices}
+            factoryLoads={filteredFactoryLoads}
+            invoices={filteredInvoices}
             permittedTabs={effectiveUser.permittedTabs}
             onNavigate={setActiveTab}
             currentUserPhone={effectiveUser.phone}
@@ -1290,9 +1441,9 @@ export default function App() {
         {activeTab === 'factory' && effectiveUser && effectiveUser.permittedTabs.includes('factory') && (
           <FactoryTab
             products={products}
-            factoryLoads={factoryLoads}
-            invoices={invoices}
-            trips={trips}
+            factoryLoads={filteredFactoryLoads}
+            invoices={filteredInvoices}
+            trips={filteredTrips}
             onAddProduct={handleAddProduct}
             onEditProduct={handleEditProduct}
             onDeleteProduct={handleDeleteProduct}
@@ -1308,6 +1459,7 @@ export default function App() {
             }}
             onGoBack={() => setActiveTab('dashboard')}
             permittedSubTabs={effectiveUser.permittedSubTabs}
+            canEditPrices={effectiveUser.canEditPrices !== false}
           />
         )}
 
@@ -1327,13 +1479,10 @@ export default function App() {
           <InvoiceTab
             customers={customers}
             products={products}
-            factoryLoads={factoryLoads}
-            invoices={invoices}
+            factoryLoads={filteredFactoryLoads}
+            invoices={filteredInvoices}
             onAddInvoice={handleAddInvoice}
-            onUpdateInvoice={(updated) => {
-              setInvoices(invoices.map(inv => inv.id === updated.id ? updated : inv));
-              promptForSync('تحديث فاتورة بيع');
-            }}
+            onUpdateInvoice={handleUpdateInvoice}
             onDeleteInvoice={handleDeleteInvoice}
             onGoBack={() => setActiveTab('dashboard')}
             permittedSubTabs={effectiveUser.permittedSubTabs}
@@ -1350,6 +1499,7 @@ export default function App() {
         {activeTab === 'expenses' && effectiveUser && effectiveUser.permittedTabs.includes('expenses') && (
           <ExpensesTab
             expenses={expenses}
+            expenses={filteredExpenses}
             onAddExpense={handleAddExpense}
             onDeleteExpense={handleDeleteExpense}
             onGoBack={() => setActiveTab('dashboard')}
@@ -1389,18 +1539,15 @@ export default function App() {
 
         {activeTab === 'reports' && effectiveUser && effectiveUser.permittedTabs.includes('reports') && (
           <ReportsTab
-            invoices={invoices}
-            expenses={expenses}
+            invoices={filteredInvoices}
+            expenses={filteredExpenses}
             products={products}
             customers={customers}
-            trips={trips}
-            factoryLoads={factoryLoads}
+            trips={filteredTrips}
+            factoryLoads={filteredFactoryLoads}
             settings={settings}
             usersList={usersList}
-            onUpdateInvoice={(updated) => {
-              setInvoices(invoices.map(inv => inv.id === updated.id ? updated : inv));
-              promptForSync('تحديث وسداد فاتورة آجلة (التقارير)');
-            }}
+            onUpdateInvoice={handleUpdateInvoice}
             onGoBack={() => setActiveTab('dashboard')}
             permittedSubTabs={effectiveUser.permittedSubTabs}
           />
@@ -1435,11 +1582,11 @@ export default function App() {
         isOpen={isChatOpen} 
         setIsOpen={setIsChatOpen}
         products={products}
-        factoryLoads={factoryLoads}
+        factoryLoads={filteredFactoryLoads}
         customers={customers}
-        invoices={invoices}
-        expenses={expenses}
-        trips={trips}
+        invoices={filteredInvoices}
+        expenses={filteredExpenses}
+        trips={filteredTrips}
         currentUser={currentUser}
       />
 
@@ -1457,6 +1604,43 @@ export default function App() {
             <Bell className="w-6 h-6 text-amber-400 shrink-0 animate-pulse" />
             <span className="text-sm leading-relaxed whitespace-pre-line text-right w-full">{customToast.message}</span>
           </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Global Elegant Confirm Dialog */}
+      <AnimatePresence>
+        {confirmState && (
+          <div className="fixed inset-0 z-[99999] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in" dir="rtl">
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0, y: 20 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.9, opacity: 0, y: 20 }}
+              className="bg-white rounded-3xl p-6 w-full max-w-sm shadow-2xl flex flex-col gap-4 text-center border border-slate-100"
+            >
+              <div className="mx-auto w-16 h-16 bg-indigo-50 rounded-full flex items-center justify-center text-indigo-600 mb-2 shadow-inner">
+                {confirmState.isAlert ? <AlertCircle className="h-8 w-8 text-amber-500" /> : <HelpCircle className="h-8 w-8 text-indigo-500" />}
+              </div>
+              <h3 className="text-[#1A365D] font-black text-base whitespace-pre-wrap leading-relaxed">
+                {confirmState.message}
+              </h3>
+              <div className="flex gap-3 mt-4">
+                <button
+                  onClick={() => { confirmState.resolve(true); setConfirmState(null); }}
+                  className="flex-1 bg-[#1A365D] hover:bg-indigo-900 text-white py-3 rounded-xl font-bold active:scale-95 transition-all shadow-md text-sm cursor-pointer"
+                >
+                  {confirmState.isAlert ? 'حسناً' : 'تأكيد ومتابعة'}
+                </button>
+                {!confirmState.isAlert && (
+                  <button
+                    onClick={() => { confirmState.resolve(false); setConfirmState(null); }}
+                    className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 py-3 rounded-xl font-bold active:scale-95 transition-all shadow-sm text-sm cursor-pointer"
+                  >
+                    إلغاء
+                  </button>
+                )}
+              </div>
+            </motion.div>
+          </div>
         )}
       </AnimatePresence>
     </div>

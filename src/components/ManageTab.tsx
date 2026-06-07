@@ -34,7 +34,9 @@ import {
   Download,
   Cloud
 } from 'lucide-react';
+import { showToast } from '../utils/toast';
 import html2canvas from 'html2canvas';
+import { idbSet } from '../utils/idb';
 const generateAppsScriptCode = () => {
   return `// 1. استقبال طلب الجلب والتحديث الميداني ثنائي الاتجاه (زر التحديث في التطبيق)
 function doGet(e) {
@@ -59,8 +61,9 @@ function doGet(e) {
           total: row[5], 
           paidAmount: row[6], 
           delegateName: row[7], 
-          notes: row[8], 
-          items: items 
+          notes: row[8],
+          items: items,
+          delegatePhone: String(row[10] || '')
         };
       });
     }
@@ -77,8 +80,9 @@ function doGet(e) {
           category: row[2], 
           type: row[3],
           amount: row[4], 
-          description: row[5], 
-          delegateName: row[6] 
+          description: row[5],
+          delegateName: row[6],
+          delegatePhone: String(row[7] || '')
         };
       });
     }
@@ -94,8 +98,9 @@ function doGet(e) {
           date: row[1], 
           description: row[2], 
           price: row[3], 
-          status: row[4], 
-          delegateName: row[5] 
+          status: row[4],
+          delegateName: row[5],
+          delegatePhone: String(row[6] || '')
         };
       });
     }
@@ -114,7 +119,10 @@ function doGet(e) {
           phone: String(row[4] || ''), 
           detailedAddress: row[5], 
           locationLink: row[6], 
-          purchasesCount: row[7] 
+          purchasesCount: row[7],
+          salesManager: row[8],
+          totalSpent: row[9],
+          lastPurchaseDate: row[10]
         };
       });
     }
@@ -134,7 +142,8 @@ function doGet(e) {
           unitsPerCarton: row[5],
           factoryPricePerUnit: row[6],
           addedValue: row[7],
-          retailPricePerUnit: row[8]
+          retailPricePerUnit: row[8],
+          barcode: String(row[9] || '')
         };
       });
     }
@@ -170,8 +179,10 @@ function doGet(e) {
           weightSize: row[3], 
           cartonsCount: row[4], 
           quantity: row[5], 
-          advanceAmount: row[6], 
-          warehouseKeeper: row[7] 
+          advanceAmount: row[6],
+          warehouseKeeper: row[7],
+          delegateName: row[8] || '',
+          delegatePhone: String(row[9] || '')
         };
       });
     }
@@ -192,7 +203,26 @@ function doGet(e) {
           password: String(row[4] || '').replace(/^'/, ''), 
           customRoleName: row[5], 
           permittedTabs: row[6], 
-          permittedSubTabs: row[7] 
+          permittedSubTabs: row[7],
+          canEditPrices: row[8] === 'لا' ? false : true
+        };
+      });
+    }
+
+    // ط. جلب العملاء المكتشفين
+    var discoveredSheet = ss.getSheetByName('عملاء_مكتشفين');
+    result.discoveredLeads = [];
+    if (discoveredSheet && discoveredSheet.getLastRow() > 1) {
+      var data = discoveredSheet.getRange(2, 1, discoveredSheet.getLastRow() - 1, discoveredSheet.getLastColumn()).getValues();
+      result.discoveredLeads = data.filter(function(row) { return row[0] && String(row[0]).trim() !== ''; }).map(function(row) {
+        return { 
+          id: row[0], 
+          governorate: row[1], 
+          area: row[2], 
+          name: row[3], 
+          phone: String(row[4] || ''), 
+          detailedAddress: row[5], 
+          locationLink: row[6]
         };
       });
     }
@@ -252,6 +282,11 @@ function doPost(e) {
       if (newRows.length > 0) {
         sheet.getRange(sheet.getLastRow() + 1, 1, newRows.length, newRows[0].length).setValues(newRows);
       }
+      
+      // تفعيل فلتر جوجل التلقائي لسهولة فرز مناديب المبيعات
+      if (sheet.getFilter() === null) {
+        sheet.getDataRange().createFilter();
+      }
     }
 
     if (data.type === 'تقرير_كامل') {
@@ -267,11 +302,16 @@ function doPost(e) {
           inv.total, 
           inv.paidAmount, 
           inv.delegateName, 
-          inv.notes || '', 
-          JSON.stringify(inv.items || [])
+          inv.notes || '',
+          JSON.stringify(inv.items || []),
+          "'" + String(inv.delegatePhone || '')
         ]; 
       });
-      upsertData('الفواتير', ['المعرف', 'التاريخ', 'رقم الفاتورة', 'العميل', 'المنطقة', 'إجمالي الفاتورة', 'المدفوع', 'المندوب', 'الملاحظات', 'التفاصيل (JSON)'], invRows, "#cfe2f3");
+      upsertData('الفواتير', ['المعرف', 'التاريخ', 'رقم الفاتورة', 'العميل', 'المنطقة', 'إجمالي الفاتورة', 'المدفوع', 'المندوب', 'الملاحظات', 'التفاصيل (JSON)', 'هاتف المندوب'], invRows, "#cfe2f3");
+      var invSheet = ss.getSheetByName('الفواتير');
+      if (invSheet && invSheet.getLastRow() > 1) {
+        invSheet.getRange(2, 1, invSheet.getLastRow() - 1, invSheet.getLastColumn()).sort([{column: 8, ascending: true}, {column: 2, ascending: false}]);
+      }
       
       // 2. الماليات والمصروفات
       var expRows = (data.expenses || []).map(function(exp) { 
@@ -281,11 +321,16 @@ function doPost(e) {
           exp.category, 
           exp.type || 'expense',
           exp.amount, 
-          exp.description || '', 
-          exp.delegateName || ''
+          exp.description || '',
+          exp.delegateName || '',
+          "'" + String(exp.delegatePhone || '')
         ]; 
       });
-      upsertData('الماليات', ['المعرف', 'التاريخ', 'الفئة', 'النوع', 'المبلغ', 'البيان', 'المندوب'], expRows, "#e0e0e0");
+      upsertData('الماليات', ['المعرف', 'التاريخ', 'الفئة', 'النوع', 'المبلغ', 'البيان', 'المندوب', 'هاتف المندوب'], expRows, "#e0e0e0");
+      var expSheet = ss.getSheetByName('الماليات');
+      if (expSheet && expSheet.getLastRow() > 1) {
+        expSheet.getRange(2, 1, expSheet.getLastRow() - 1, expSheet.getLastColumn()).sort([{column: 7, ascending: true}, {column: 2, ascending: false}]);
+      }
 
       // 3. المشاوير
       var tripRows = (data.trips || []).map(function(t) { 
@@ -294,11 +339,16 @@ function doPost(e) {
           t.date, 
           t.description || '', 
           t.price, 
-          t.status, 
-          t.delegateName || ''
+          t.status,
+          t.delegateName || '',
+          "'" + String(t.delegatePhone || '')
         ]; 
       });
-      upsertData('المشاوير', ['المعرف', 'التاريخ', 'البيان', 'الأجرة', 'الحالة', 'المندوب'], tripRows, "#ffe599");
+      upsertData('المشاوير', ['المعرف', 'التاريخ', 'البيان', 'الأجرة', 'الحالة', 'المندوب', 'هاتف المندوب'], tripRows, "#ffe599");
+      var tripSheet = ss.getSheetByName('المشاوير');
+      if (tripSheet && tripSheet.getLastRow() > 1) {
+        tripSheet.getRange(2, 1, tripSheet.getLastRow() - 1, tripSheet.getLastColumn()).sort([{column: 6, ascending: true}, {column: 2, ascending: false}]);
+      }
 
       // 4. العملاء 
       var custRows = (data.customers || []).map(function(c) { 
@@ -307,14 +357,54 @@ function doPost(e) {
           c.governorate || '', 
           c.area || '', 
           c.name || '', 
-          String(c.phone || ''), 
+          "'" + String(c.phone || ''), 
           c.detailedAddress || '', 
           c.locationLink || '', 
-          c.purchasesCount || 0
+          c.purchasesCount || 0,
+          c.salesManager || '',
+          c.totalSpent || 0,
+          c.lastPurchaseDate || ''
         ]; 
       });
-      upsertData('العملاء', ['المعرف', 'المحافظة', 'المنطقة', 'اسم العميل', 'رقم الهاتف', 'العنوان', 'رابط جوجل ماب', 'عدد المشتريات'], custRows, "#d9ead3");
+      upsertData('العملاء', ['المعرف', 'المحافظة', 'المنطقة', 'اسم العميل', 'رقم الهاتف', 'العنوان', 'رابط جوجل ماب', 'عدد المشتريات', 'مدير البيع', 'إجمالي المسحوبات', 'آخر شراء'], custRows, "#d9ead3");
 
+      // خوارزمية تلوين صفوف العملاء بناءً على نشاطهم وحجم مسحوباتهم
+      var custSheet = ss.getSheetByName('العملاء');
+      if (custSheet && custSheet.getLastRow() > 1) {
+        var custData = custSheet.getRange(2, 1, custSheet.getLastRow() - 1, custSheet.getLastColumn()).getValues();
+        var bgColors = [];
+        var today = new Date();
+
+        for (var i = 0; i < custData.length; i++) {
+          var totalSpent = Number(custData[i][9]) || 0; // العمود العاشر: إجمالي المسحوبات
+          var lastPurchaseStr = custData[i][10];       // العمود الحادي عشر: آخر شراء
+          var color = "#ffffff";
+
+          if (totalSpent > 0 && lastPurchaseStr) {
+            var lastDate = new Date(lastPurchaseStr);
+            var diffTime = Math.abs(today - lastDate);
+            var diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+            if (diffDays >= 14) {
+              color = "#f8cecc"; // أحمر (لم يشتري من أسبوعين فأكثر)
+            } else if (diffDays < 14 && totalSpent > 1000) {
+              color = "#d5e8d4"; // أخضر (عميل نشط ومسحوباته عالية)
+            } else {
+              color = "#ffe6cc"; // برتقالي (عميل نشط ولكن مسحوباته قليلة)
+            }
+          } else {
+             color = "#f8cecc"; // أحمر (لم يشتري أبداً)
+          }
+
+          var rowColors = [];
+          for (var c = 0; c < custSheet.getLastColumn(); c++) {
+            rowColors.push(color);
+          }
+          bgColors.push(rowColors);
+        }
+        custSheet.getRange(2, 1, bgColors.length, custSheet.getLastColumn()).setBackgrounds(bgColors);
+      }
+      
       // 5. المنتجات والأسعار (تم تعديلها لتكون مفصلة ومقروءة بدون كود JSON)
       var prodRows = [];
       (data.products || []).forEach(function(p) { 
@@ -329,18 +419,19 @@ function doPost(e) {
               w.unitsPerCarton || 1,              // العدد بالكرتونة
               w.factoryPricePerUnit || 0,         // سعر العبوة مصنع
               w.addedValue || 0,                  // القيمة المضافة
-              w.retailPricePerUnit || 0           // سعر البيع للجمهور
+              w.retailPricePerUnit || 0,          // سعر البيع للجمهور
+              "'" + String(w.barcode || '')       // الباركود
             ]);
           });
         } else {
           // صنف بدون أوزان محددة
           prodRows.push([
-              p.id + "_default", p.id, p.name, 'كرتونة', 0, 1, 0, 0, p.price || 0
+              p.id + "_default", p.id, p.name, 'كرتونة', 0, 1, 0, 0, p.price || 0, ''
           ]);
         }
       });
       // استخدام الشيت الجديد المفصل
-      upsertData('الأصناف_والأوزان', ['معرف الوزن (لا تحذفه)', 'معرف الصنف', 'اسم الصنف', 'الحجم/الوزن', 'سعر الكرتونة', 'العدد بالكرتونة', 'سعر العبوة (مصنع)', 'القيمة المضافة', 'سعر البيع'], prodRows, "#cfe2f3");
+      upsertData('الأصناف_والأوزان', ['معرف الوزن (لا تحذفه)', 'معرف الصنف', 'اسم الصنف', 'الحجم/الوزن', 'سعر الكرتونة', 'العدد بالكرتونة', 'سعر العبوة (مصنع)', 'القيمة المضافة', 'سعر البيع', 'الباركود'], prodRows, "#cfe2f3");
       
       // 6. المصنع 
       var factoryRows = (data.factoryLoads || []).map(function(fl) { 
@@ -351,11 +442,17 @@ function doPost(e) {
           fl.weightSize || 'كرتونة', 
           fl.cartonsCount || 0, 
           fl.quantity || 0, 
-          fl.advanceAmount || 0, 
-          fl.warehouseKeeper || ''
+          fl.advanceAmount || 0,
+          fl.warehouseKeeper || '',
+          fl.delegateName || '',
+          "'" + String(fl.delegatePhone || '')
         ]; 
       });
-      upsertData('المصنع', ['المعرف', 'التاريخ', 'اسم الصنف', 'الحجم/الوزن', 'الكمية (كرتونة)', 'إجمالي الوحدات', 'مقدم المصنع', 'أمين المخزن'], factoryRows, "#fce5cd");
+      upsertData('المصنع', ['المعرف', 'التاريخ', 'اسم الصنف', 'الحجم/الوزن', 'الكمية (كرتونة)', 'إجمالي الوحدات', 'مقدم المصنع', 'أمين المخزن', 'اسم المندوب', 'هاتف المندوب'], factoryRows, "#fce5cd");
+      var factorySheetObj = ss.getSheetByName('المصنع');
+      if (factorySheetObj && factorySheetObj.getLastRow() > 1) {
+        factorySheetObj.getRange(2, 1, factorySheetObj.getLastRow() - 1, factorySheetObj.getLastColumn()).sort([{column: 9, ascending: true}, {column: 2, ascending: false}]);
+      }
 
       // 7. صلاحيات المستخدمين والمناديب
       var userRows = (data.users || []).map(function(u) { 
@@ -367,10 +464,25 @@ function doPost(e) {
           "'" + String(u.password || ''), 
           u.customRoleName || '', 
           u.permittedTabs || '', 
-          u.permittedSubTabs || ''
+          u.permittedSubTabs || '',
+          u.canEditPrices === false ? 'لا' : 'نعم'
         ]; 
       });
-      upsertData('صلاحيات_المستخدمين', ['رقم الهاتف', 'الاسم', 'الدور/الوظيفة', 'الحالة', 'الرمز السري', 'المسمى الوظيفي', 'الصلاحيات المفعّلة', 'الصلاحيات الفرعية'], userRows, "#ead1dc");
+      upsertData('صلاحيات_المستخدمين', ['رقم الهاتف', 'الاسم', 'الدور/الوظيفة', 'الحالة', 'الرمز السري', 'المسمى الوظيفي', 'الصلاحيات المفعّلة', 'الصلاحيات الفرعية', 'تعديل الأسعار'], userRows, "#ead1dc");
+
+      // 9. العملاء المكتشفين
+      var discoveredRows = (data.discoveredLeads || []).map(function(l) { 
+        return [
+          l.id, 
+          l.governorate || '', 
+          l.area || '', 
+          l.name || '', 
+          "'" + String(l.phone || ''), 
+          l.detailedAddress || '', 
+          l.locationLink || ''
+        ]; 
+      });
+      upsertData('عملاء_مكتشفين', ['المعرف', 'المحافظة', 'المنطقة', 'اسم العميل', 'رقم الهاتف', 'العنوان', 'رابط جوجل ماب'], discoveredRows, "#fff2cc");
 
       // 8. الملخص
       var summarySheet = ss.getSheetByName('الملخص');
@@ -507,7 +619,7 @@ export default function ManageTab({
   const [retentionGuidelines, setRetentionGuidelines] = useState(settings.aiRetentionGuidelines || '');
   const [repName, setRepName] = useState(settings.representativeName || '');
   const [repPhone, setRepPhone] = useState(settings.representativePhone || '01228466613');
-  const [invoiceAppName, setInvoiceAppName] = useState(settings.appName || 'الأخوة المتحدون EAG');
+  const [invoiceAppName, setInvoiceAppName] = useState(settings.appName || 'الاخوه EAGS لخدمات التوزيع');
   const [googlePassword, setGooglePassword] = useState('');
   // Delegate live tracking state
   const [trackedUserPhone, setTrackedUserPhone] = useState<string>('');
@@ -520,6 +632,7 @@ export default function ManageTab({
   
   // Local state for modified role names before hitting confirmation button
   const [localRoleNames, setLocalRoleNames] = useState<Record<string, string>>({});
+  const [localPasswords, setLocalPasswords] = useState<Record<string, string>>({});
   const [delegateLogTabs, setDelegateLogTabs] = useState<Record<string, 'all' | 'invoices' | 'expenses' | 'loads' | 'trips'>>({});
   
   // Dynamic work areas settings state
@@ -705,7 +818,7 @@ export default function ManageTab({
       
       if (promptLower.includes('سلام') || promptLower.includes('مرحب') || promptLower.includes('أهلاً') || promptLower.includes('اهل')) {
         responseText = "أهلاً بك يا بطل المبيعات الميداني لمصنع سوفانا! 👋\n\n" +
-          "أنا المساعد الذكي الاحتياطي لمبيعات مصنع \"الأخوة المتحدون\" تحت تصرفك دائمًا لتسريع جلب مبيعاتك.\n\n" +
+          "أنا المساعد الذكي الاحتياطي لمبيعات مصنع \"الاخوه EAGS لخدمات التوزيع\" تحت تصرفك دائمًا لتسريع جلب مبيعاتك.\n\n" +
           "العميل المستهدف المحدد لديك هو من فئة: **[ " + aiChatCategory + " ]**.\n" +
           "السياسة المعتمدة لمدير المبيعات هي: *\"" + pitchGuidelines + "\"*\n\n" +
           "كيف يمكنني مساعدتك اليوم في ترويج وتوريد الطلبيات؟ يمكنك سؤالي عن نصائح إقناع أو صياغة رسائل!";
@@ -725,7 +838,7 @@ export default function ManageTab({
           "حاول التركيز على تسليم عينتين مجانيتين صغار لربات البيوت لعرض جودة المنتج لسرعة سحبه بالمنطقة!";
       } else {
         responseText = "مرحباً بك يا بطل! لقد استلمت استفسارك بخصوص: *\" " + userMessage + " \"*\n\n" +
-          "بصفتي خبير المبيعات الاحتياطي لمصنع الإخوة المتحدون (سوفانا)، وبناءً على فئة العميل **[ " + aiChatCategory + " ]** والسياسة الإرشادية لمدير المبيعات: *\"" + pitchGuidelines + "\"*، إليك التكتيك الأمثل:\n\n" +
+          "بصفتي خبير المبيعات الاحتياطي لمصنع الاخوه EAGS لخدمات التوزيع (سوفانا)، وبناءً على فئة العميل **[ " + aiChatCategory + " ]** والسياسة الإرشادية لمدير المبيعات: *\"" + pitchGuidelines + "\"*، إليك التكتيك الأمثل:\n\n" +
           "1. **التعامل مع الاعتراضات السعرية**: إذا اشتكى عملاؤك من تذبذب الأسعار، أخبرهم فوراً أن زيت وسمن سوفانا يتميز باستقرار سعري وضمان توفير هامش ربح فوري يبلغ 15% مقارنة بباقي السلع بالسوق.\n" +
           "2. **الاعتماد على العينات**: قدم عينات مجانية صغيرة لزيادة حركة سحب الصنف بالرفوف. فإقناع الطباخ أو ربة المنزل يمثل 90% من قرار الشراء.\n" +
           "3. **العلاقة الودية المباشرة**: الالتزام بزيارتهم دورياً في نفس اليوم من كل أسبوع لكسب ثقتهم وتثبيت موعد سحب مرتجع الكرتون مسبقاً.\n\n" +
@@ -806,6 +919,11 @@ export default function ManageTab({
     });
     setSaveSuccessMsg('تم حفظ الإعدادات بنجاح!');
     setTimeout(() => setSaveSuccessMsg(''), 3000);
+    
+    // الرفع التلقائي للسحابة لكي يراها المدير في المتصفحات والأجهزة الأخرى
+    setTimeout(() => {
+      onTriggerSync?.('تحديث وتسعير الأصناف');
+    }, 500);
   };
   const salesStats = React.useMemo(() => {
     const totalSales = invoices.reduce((sum, inv) => sum + inv.totalAfterDiscount, 0);
@@ -823,16 +941,30 @@ export default function ManageTab({
   const handleBulkSyncToGoogleSheets = async () => {
     if (!googleUrl) {
       setSyncStatus('fail');
-      setSyncMsg('خطأ: لم يتم وضع رابط مزامنة جوجل.');
+      showToast('⚠️ خطأ: لم يتم وضع رابط مزامنة جوجل.');
       return;
     }
-    const isConfirmed = await confirmDialog("هل أنت متأكد من رغبتك في رفع ومزامنة كل البيانات الحالية مع جوجل شيت (Google Sheets) السحابي؟ هذه العملية قد تستغرق بعض الوقت.", false);
-    if (!isConfirmed) return;
     setSyncStatus('syncing');
-    setSyncMsg('جاري تحضير وتصدير حزم السجلات للقاعدة السحابية...');
+    showToast('☁️ جاري الرفع والمزامنة السحابية...');
     try {
       const customersMap = new Map(customers.map(c => [c.id, c]));
       const productsMap = new Map(products.map(p => [p.id, p]));
+
+      const googleLeadsRaw = localStorage.getItem('google_leads_staging_sys');
+      const discoveredLeads = googleLeadsRaw ? JSON.parse(googleLeadsRaw) : [];
+
+      const invoicesByCustomer = new Map();
+      invoices.forEach(inv => {
+        if (!invoicesByCustomer.has(inv.customerId)) invoicesByCustomer.set(inv.customerId, []);
+        invoicesByCustomer.get(inv.customerId).push(inv);
+      });
+
+      // جلب أحدث قائمة مناديب من الذاكرة مباشرة لتجنب تأخير حالة React وعدم رفعهم
+      let freshUsersList = usersList;
+      try {
+        const localUsers = JSON.parse(localStorage.getItem('users_permissions_sys') || '[]');
+        if (localUsers && localUsers.length > 0) freshUsersList = localUsers;
+      } catch(e) {}
 
       const payload = {
         type: 'تقرير_كامل',
@@ -854,6 +986,7 @@ export default function ManageTab({
             total: inv.totalAfterDiscount,
             paidAmount: inv.paidAmount !== undefined ? inv.paidAmount : inv.totalAfterDiscount,
             delegateName: inv.delegateName || 'مجهول',
+            delegatePhone: inv.delegatePhone || '',
             notes: inv.notes,
             items: inv.items || []
           };
@@ -865,7 +998,8 @@ export default function ManageTab({
           category: e.category,
           type: e.type || 'expense',
           description: e.description,
-          delegateName: e.delegateName || 'مجهول'
+          delegateName: e.delegateName || 'مجهول',
+          delegatePhone: e.delegatePhone || ''
         })),
         trips: (trips || []).map(t => ({
           id: t.id,
@@ -873,7 +1007,8 @@ export default function ManageTab({
           price: t.price,
           status: t.collected ? 'محصلة' : 'غير محصلة',
           date: t.date || new Date().toISOString(),
-          delegateName: t.delegateName || 'مجهول'
+          delegateName: t.delegateName || 'مجهول',
+          delegatePhone: t.delegatePhone || ''
         })),
         products: products.map(p => ({
           id: p.id,
@@ -882,17 +1017,22 @@ export default function ManageTab({
           count: p.weights ? p.weights.length : 0,
           weights: p.weights || []
         })),
-        customers: customers.map(c => ({
-          id: c.id,
-          name: c.name,
-          phone: c.phone,
-          governorate: c.governorate || 'القاهرة',
-          area: c.area,
-          detailedAddress: c.detailedAddress || '',
-          locationLink: c.locationLink || '',
-          purchasesCount: c.purchasesCount || 0
-        })),
-        users: usersList.map(u => ({
+        customers: customers.map(c => {
+          return {
+            id: c.id,
+            name: c.name,
+            phone: c.phone,
+            governorate: c.governorate || 'القاهرة',
+            area: c.area,
+            detailedAddress: c.detailedAddress || '',
+            locationLink: c.locationLink || '',
+            purchasesCount: c.purchasesCount || 0,
+            salesManager: c.salesManager || '',
+            totalSpent: c.totalSpent || 0,
+            lastPurchaseDate: c.lastPurchaseDate || ''
+          }
+        }),
+        users: freshUsersList.map(u => ({
           name: u.name,
           phone: u.phone,
           role: u.role,
@@ -900,7 +1040,8 @@ export default function ManageTab({
           password: u.password || '1234',
           customRoleName: u.customRoleName || '',
           permittedTabs: (u.permittedTabs || []).join(','),
-          permittedSubTabs: (u.permittedSubTabs || []).join(',')
+          permittedSubTabs: (u.permittedSubTabs || []).join(','),
+          canEditPrices: u.canEditPrices !== false
         })),
         factoryLoads: (factoryLoads || []).map(fl => {
           const prod = productsMap.get(fl.productId);
@@ -914,9 +1055,20 @@ export default function ManageTab({
             cartonsCount: fl.cartonsCount || 0,
             quantity: fl.quantity || 0,
             advanceAmount: fl.advanceAmount || 0,
-            warehouseKeeper: fl.warehouseKeeper || ''
+            warehouseKeeper: fl.warehouseKeeper || '',
+            delegateName: fl.delegateName || 'مجهول',
+            delegatePhone: fl.delegatePhone || ''
           };
-        })
+        }),
+        discoveredLeads: discoveredLeads.map((l: any) => ({
+          id: l.id,
+          governorate: l.governorate || 'القاهرة',
+          area: l.area,
+          name: l.name,
+          phone: l.phone,
+          detailedAddress: l.detailedAddress,
+          locationLink: l.locationLink
+        }))
       };
       const resp = await fetch(googleUrl, {
         method: 'POST',
@@ -927,7 +1079,7 @@ export default function ManageTab({
         body: JSON.stringify(payload)
       });
       setSyncStatus('done');
-      setSyncMsg('تم ترحيل البيانات السحابية بنجاح تام! تم إرسال كافة الفواتير المصدرة والماليات.');
+      showToast('✓ تم الحفظ والمزامنة السحابية بنجاح!');
       
       onAddSyncLog({
         delegateName: currentUser?.name || 'مجهول',
@@ -936,7 +1088,7 @@ export default function ManageTab({
       });
     } catch (err: any) {
       setSyncStatus('fail');
-      setSyncMsg("فشل الاتصال بسبب مشكلة بالشبكة. تفاصيل: " + (err.message || err));
+      showToast("⚠️ فشل الحفظ: تأكد من الاتصال بالإنترنت.");
       
       onAddSyncLog({
         delegateName: currentUser?.name || 'مجهول',
@@ -998,16 +1150,16 @@ export default function ManageTab({
   const inactiveCount = customerAnalytics.filter(c => !c.isActive).length;
   const handleAddNewUser = () => {
     if (!newUserName.trim() || !newUserPhone.trim()) {
-      alert('يرجى كتابة الاسم ورقم الهاتف بالكامل لترخيص الحساب!');
+      showToast('⚠️ يرجى كتابة الاسم ورقم الهاتف بالكامل لترخيص الحساب!');
       return;
     }
     const exists = usersList.some(u => u.phone === newUserPhone.trim());
     if (exists) {
-      alert('رقم الهاتف هذا مسجل بالفعل لمستخدم آخر!');
+      showToast('⚠️ رقم الهاتف هذا مسجل بالفعل لمستخدم آخر!');
       return;
     }
     if (newUserType !== 'visitor' && !newUserPassword.trim()) {
-      alert('لا يمكن ترك حقل الرمز السري فارغاً للمندوب أو المشرف. يرجى إدخال باسورد للتحقق.');
+      showToast('⚠️ لا يمكن ترك حقل الرمز السري فارغاً للمندوب أو المشرف.');
       return;
     }
     let suffix = ' (مندوب)';
@@ -1034,6 +1186,7 @@ export default function ManageTab({
       status: 'active',
       permittedTabs,
       customRoleName,
+      canEditPrices: newUserType === 'visitor' ? false : true,
       permittedSubTabs: [
         'loads', 'products', 'previous_loads', 'factory_account', 'trips',
         'customers_list', 'invoice_create', 'invoice_balance',
@@ -1048,10 +1201,11 @@ export default function ManageTab({
     setNewUserName('');
     setNewUserPhone('');
     setNewUserPassword('');
-    alert("تم بنجاح تسجيل الحساب بصفة \"" + customRoleName + "\" وتفعيل صلاحياته لـ \"" + newUserName + "\"!");
+    showToast("✓ تم بنجاح تسجيل الحساب بصفة \"" + customRoleName + "\" وتفعيل صلاحياته!");
     onTriggerSync?.('إضافة مستخدم جديد وصلاحياته');
   };
   const isOwner = currentUser?.phone === '01228466613';
+  const canEditPrices = currentUser?.canEditPrices !== false || isOwner;
   const isDelegateLockRequired = !isOwner && !isDelegateUnlocked;
   if (isDelegateLockRequired) {
     return (
@@ -1599,11 +1753,11 @@ export default function ManageTab({
                         onClick={() => {
                           const correct = localStorage.getItem('owner_passcode_sys') || '1987';
                           if (currentOwnerPassword !== correct) {
-                            alert('الرمز السري الحالي غير صحيح!');
+                            showToast('⚠️ الرمز السري الحالي غير صحيح!');
                             return;
                           }
                           if (!newOwnerPassword.trim()) {
-                            alert('يرجى إدخال رمز سري جديد!');
+                            showToast('⚠️ يرجى إدخال رمز سري جديد!');
                             return;
                           }
                           localStorage.setItem('owner_passcode_sys', newOwnerPassword.trim());
@@ -1613,7 +1767,7 @@ export default function ManageTab({
                           onUpdateUsersList(updatedList);
                           setCurrentOwnerPassword('');
                           setNewOwnerPassword('');
-                          alert('تم تغيير الرمز السري للمدير العام بنجاح! ✓');
+                          showToast('✓ تم تغيير الرمز السري للمدير العام بنجاح!');
                           onTriggerSync?.('تغيير الرمز السري للإدارة');
                         }}
                         className="bg-amber-600 hover:bg-amber-700 text-white rounded-xl py-2 text-xs font-black transition-all active:scale-95 cursor-pointer flex items-center justify-center gap-1.5"
@@ -1720,7 +1874,7 @@ export default function ManageTab({
                                   type="button"
                                   onClick={() => {
                                     if (isSelf) {
-                                      alert('لا يمكنك تعطيل صلاحية حسابك النشط حالياً!');
+                                      showToast('⚠️ لا يمكنك تعطيل صلاحية حسابك النشط حالياً!');
                                       return;
                                     }
                                     const updated = usersList.map(u => 
@@ -1740,7 +1894,7 @@ export default function ManageTab({
                                   type="button"
                                   onClick={async () => {
                                     if (isSelf) {
-                                      alert('حسابك الحالي قيد الاستخدام ولا يمكن حذفه.');
+                                      showToast('⚠️ حسابك الحالي قيد الاستخدام ولا يمكن حذفه.');
                                       return;
                                     }
                                     if (window.confirm(`هل أنت متأكد من حذف حساب المندوب "${user.name}" وسحب كامل صلاحياته؟`)) {
@@ -1766,21 +1920,44 @@ export default function ManageTab({
                                     <span className="text-sm">🔑</span>
                                     <span>رمز المرور (الباسورد) الحالي للمندوب:</span>
                                   </div>
-                                  <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
-                                    <input
-                                      type="text"
-                                      value={user.password || '1234'}
-                                      onChange={(e) => {
-                                        const newPass = e.target.value;
-                                        const updated = usersList.map(u => 
-                                          u.phone === user.phone ? { ...u, password: newPass } : u
-                                        );
-                                        onUpdateUsersList(updated);
-                                        localStorage.setItem('users_permissions_sys', JSON.stringify(updated));
-                                      }}
-                                      className="bg-white border border-slate-300 focus:outline-none focus:border-[#DD6B20] focus:ring-1 focus:ring-[#DD6B20] rounded-lg px-2.5 py-1.5 text-xs text-[#1A365D] font-extrabold w-full sm:w-48 text-center"
-                                      placeholder="مثال: 1234"
-                                    />
+                                  <div className="flex flex-col gap-2">
+                                    <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
+                                      <input
+                                        type="text"
+                                        value={localPasswords[user.phone] !== undefined ? localPasswords[user.phone] : (user.password || '1234')}
+                                        onChange={(e) => {
+                                          const newPass = e.target.value;
+                                          setLocalPasswords(prev => ({ ...prev, [user.phone]: newPass }));
+                                        }}
+                                        className="bg-white border border-slate-300 focus:outline-none focus:border-[#DD6B20] focus:ring-1 focus:ring-[#DD6B20] rounded-lg px-2.5 py-1.5 text-xs text-[#1A365D] font-extrabold w-full sm:w-48 text-center"
+                                        placeholder="مثال: 1234"
+                                      />
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          const targetVal = localPasswords[user.phone] !== undefined ? localPasswords[user.phone] : (user.password || '1234');
+                                          if (window.confirm(`هل أنت متأكد من تغيير رمز المرور للمندوب "${user.name}"؟`)) {
+                                            const updated = usersList.map(u => 
+                                              u.phone === user.phone ? { ...u, password: targetVal } : u
+                                            );
+                                            onUpdateUsersList(updated);
+                                            localStorage.setItem('users_permissions_sys', JSON.stringify(updated));
+                                            showToast('✓ تم تعديل وحفظ رمز المرور بنجاح!');
+                                            onTriggerSync?.('تغيير رمز مرور مندوب');
+                                          }
+                                        }}
+                                        className="bg-amber-600 hover:bg-amber-700 text-white rounded-lg px-3 py-1.5 text-xs font-black tracking-wide transition-all cursor-pointer shadow-sm active:scale-95 shrink-0 flex items-center justify-center gap-1"
+                                      >
+                                        <span>💾</span>
+                                        <span>تأكيد وحفظ الباسورد</span>
+                                      </button>
+                                    </div>
+                                    {localPasswords[user.phone] !== undefined && localPasswords[user.phone] !== (user.password || '1234') && (
+                                      <div className="text-[10px] text-amber-600 font-extrabold flex items-center gap-1 bg-amber-50 border border-amber-200 rounded-lg p-1.5 animate-pulse">
+                                        <span>⚠️</span>
+                                        <span>تنبيه: التغييرات التي أجريتها بالمسودّة لم تُحفظ بعد. اضغط على زر "تأكيد وحفظ الباسورد".</span>
+                                      </div>
+                                    )}
                                   </div>
                                 </div>
                                 {/* Custom Job Role Title (تعديل المسميات) */}
@@ -1812,7 +1989,7 @@ export default function ManageTab({
                                             );
                                             onUpdateUsersList(updated);
                                             localStorage.setItem('users_permissions_sys', JSON.stringify(updated));
-                                            alert('تم تعديل وحفظ المسمى الوظيفي بنجاح! ✓');
+                                            showToast('✓ تم تعديل وحفظ المسمى الوظيفي بنجاح!');
                                             onTriggerSync?.('تعديل المسمى الوظيفي');
                                           }
                                         }}
@@ -1866,13 +2043,14 @@ export default function ManageTab({
                                                 ...u, 
                                                 customRoleName: 'زائر للعرض فقط 👀', 
                                                 permittedTabs: ['dashboard', 'prices'],
-                                                permittedSubTabs: []
+                                                permittedSubTabs: [],
+                                                canEditPrices: false
                                               } 
                                             : u
                                         );
                                         onUpdateUsersList(updated);
                                         localStorage.setItem('users_permissions_sys', JSON.stringify(updated));
-                                        alert('تم تطبيق قالب (الزائر): تفعيل عرض المنتجات والأسعار فقط.');
+                                        showToast('✓ تم تطبيق قالب (الزائر)');
                                         onTriggerSync?.('تطبيق قالب الزائر');
                                       }}
                                       className="p-2 text-center rounded-xl bg-white border border-slate-200 hover:bg-amber-50 hover:border-amber-300 transition-all cursor-pointer shadow-sm active:scale-95 flex items-center justify-center min-h-[55px]"
@@ -1891,13 +2069,14 @@ export default function ManageTab({
                                                 ...u, 
                                                 customRoleName: 'مندوب توزيع ومبيعات 🚚', 
                                                 permittedTabs: ['dashboard', 'invoice', 'customers'],
-                                                permittedSubTabs: ['invoice_create', 'customers_list']
+                                                permittedSubTabs: ['invoice_create', 'customers_list'],
+                                                canEditPrices: false
                                               } 
                                             : u
                                         );
                                         onUpdateUsersList(updated);
                                         localStorage.setItem('users_permissions_sys', JSON.stringify(updated));
-                                        alert('تم تطبيق قالب (مندوب): تفعيل الفواتير، العملاء، والرئيسية للمبيعات الميدانية.');
+                                        showToast('✓ تم تطبيق قالب (مندوب مبيعات)');
                                         onTriggerSync?.('تطبيق قالب مندوب مبيعات');
                                       }}
                                       className="p-2 text-center rounded-xl bg-white border border-slate-200 hover:bg-blue-50 hover:border-blue-300 transition-all cursor-pointer shadow-sm active:scale-95 flex items-center justify-center min-h-[55px]"
@@ -1922,7 +2101,7 @@ export default function ManageTab({
                                         );
                                         onUpdateUsersList(updated);
                                         localStorage.setItem('users_permissions_sys', JSON.stringify(updated));
-                                        alert('تم تطبيق قالب (ليدر تيم): تفعيل المبيعات مع التقارير بلمسات مرنة.');
+                                        showToast('✓ تم تطبيق قالب (ليدر تيم)');
                                         onTriggerSync?.('تطبيق قالب ليدر مبيعات');
                                       }}
                                       className="p-2 text-center rounded-xl bg-white border border-slate-200 hover:bg-[#DEEAF6] hover:border-indigo-300 transition-all cursor-pointer shadow-sm active:scale-95 flex items-center justify-center min-h-[55px]"
@@ -1951,7 +2130,7 @@ export default function ManageTab({
                                         );
                                         onUpdateUsersList(updated);
                                         localStorage.setItem('users_permissions_sys', JSON.stringify(updated));
-                                        alert('تم تطبيق قالب (مشرف عام): تفعيل كافة التبويبات للمتابعة وللاشراف دون المالك.');
+                                        showToast('✓ تم تطبيق قالب (مشرف عام)');
                                         onTriggerSync?.('تطبيق قالب مشرف عام');
                                       }}
                                       className="p-2 text-center rounded-xl bg-white border border-slate-200 hover:bg-[#E2F0D9] hover:border-emerald-300 transition-all cursor-pointer shadow-sm active:scale-95 flex items-center justify-center min-h-[55px]"
@@ -1989,7 +2168,7 @@ export default function ManageTab({
                                           onChange={() => {
                                             if (tab.id === 'dashboard') return;
                                             if (isSelf && tab.id === 'administrative') {
-                                              alert('لا تلغِ وصولك لصفحة الإداريات لتفادي غلق لوحة التحكم عن نفسك!');
+                                              showToast('⚠️ لا يمكنك إلغاء وصولك لصفحة الإداريات!');
                                               return;
                                             }
                                             let newTabs = [...user.permittedTabs];
@@ -2055,6 +2234,53 @@ export default function ManageTab({
                                   );
                                 })}
                               </div>
+
+                              {/* Read Only Prices Toggle */}
+                              <div className="mt-3 bg-slate-50 p-3 rounded-xl border border-slate-200 flex flex-col gap-2">
+                                <span className="text-[11px] font-black text-slate-700">👁️ صلاحية تعديل وتسعير الأصناف:</span>
+                                <div className="flex bg-white p-1 rounded-lg border border-slate-200">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const updated = usersList.map(u => 
+                                        u.phone === user.phone 
+                                          ? { ...u, canEditPrices: true } 
+                                          : u
+                                      );
+                                      onUpdateUsersList(updated);
+                                      localStorage.setItem('users_permissions_sys', JSON.stringify(updated));
+                                      onTriggerSync?.('تفعيل صلاحية تعديل الأسعار');
+                                    }}
+                                    className={`flex-1 py-1.5 px-2 text-[10px] sm:text-xs font-black rounded-md transition-all cursor-pointer ${
+                                      user.canEditPrices !== false ? 'bg-emerald-100 text-emerald-800 shadow-sm' : 'text-slate-400 hover:text-slate-700'
+                                    }`}
+                                  >
+                                    السماح بالتعديل ✏️
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const updated = usersList.map(u => 
+                                        u.phone === user.phone 
+                                          ? { ...u, canEditPrices: false } 
+                                          : u
+                                      );
+                                      onUpdateUsersList(updated);
+                                      localStorage.setItem('users_permissions_sys', JSON.stringify(updated));
+                                      onTriggerSync?.('تفعيل وضع القراءة فقط');
+                                    }}
+                                    className={`flex-1 py-1.5 px-2 text-[10px] sm:text-xs font-black rounded-md transition-all cursor-pointer ${
+                                      user.canEditPrices === false ? 'bg-rose-100 text-rose-800 shadow-sm' : 'text-slate-400 hover:text-slate-700'
+                                    }`}
+                                  >
+                                    وضع القراءة فقط 👀
+                                  </button>
+                                </div>
+                                <p className="text-[9px] text-slate-500 font-bold">
+                                  وضع القراءة فقط يمنع المندوب من تعديل الأسعار، مما يتيح له عرض شاشات التطبيق للعملاء بأمان.
+                                </p>
+                              </div>
+
                               {/* 📊 لوحة مراقبة وتتبع العمليات المالية والميدانية للمندوب */}
                               {(() => {
                                 const cleanUserName = user.name.replace(/ \(.*?\)/, '').trim();
@@ -2248,7 +2474,7 @@ export default function ManageTab({
                                     );
                                     onUpdateUsersList(updated);
                                     localStorage.setItem('users_permissions_sys', JSON.stringify(updated));
-                                    alert("تم بنجاح حفظ وتثبيت وتعميد صلاحيات ولقب والرمز السري بنظام الإدارة للمندوب \"" + user.name + "\"! ✓");
+                                    showToast("✓ تم حفظ صلاحيات المندوب بنجاح!");
                                     setExpandedUserPhone(null);
                                     onTriggerSync?.('حفظ وتعميد جميع التعديلات والصلاحيات');
                                   }}
@@ -2295,7 +2521,7 @@ export default function ManageTab({
                         if (googlePassword === '1987') {
                           setIsGooglePasswordValid(true);
                         } else {
-                          alert('كلمة المرور غير صحيحة!');
+                          showToast('⚠️ كلمة المرور غير صحيحة!');
                         }
                       }}
                       className="w-full bg-[#DD6B20] text-white rounded-lg py-2.5 text-xs font-bold hover:bg-[#C05621] active:scale-95 transition-all cursor-pointer"
@@ -2496,25 +2722,25 @@ export default function ManageTab({
                         try {
                           const data = JSON.parse(event.target?.result as string);
                           if (data.products || data.invoices || data.customers) {
-                            if (await confirmDialog('تنبيه خطير: سيتم مسح واستبدال كافة البيانات الحالية في التطبيق بالبيانات الموجودة في ملف النسخة الاحتياطية. هل أنت متأكد من المتابعة والاسترجاع؟', false)) {
-                              if (data.products) localStorage.setItem('products_sys', JSON.stringify(data.products));
-                              if (data.customers) localStorage.setItem('customers_sys', JSON.stringify(data.customers));
-                              if (data.invoices) localStorage.setItem('invoices_sys', JSON.stringify(data.invoices));
-                              if (data.expenses) localStorage.setItem('expenses_sys', JSON.stringify(data.expenses));
-                              if (data.trips) localStorage.setItem('trips_sys', JSON.stringify(data.trips));
-                              if (data.factoryLoads) localStorage.setItem('factory_sys', JSON.stringify(data.factoryLoads));
-                              if (data.settings) localStorage.setItem('settings_sys', JSON.stringify(data.settings));
+                            if (await confirmDialog('استعادة النسخة الاحتياطية؟ (سيتم استبدال البيانات الحالية)', false)) {
+                              if (data.products) await idbSet('products_sys', data.products);
+                              if (data.customers) await idbSet('customers_sys', data.customers);
+                              if (data.invoices) await idbSet('invoices_sys', data.invoices);
+                              if (data.expenses) await idbSet('expenses_sys', data.expenses);
+                              if (data.trips) await idbSet('trips_sys', data.trips);
+                              if (data.factoryLoads) await idbSet('factory_sys', data.factoryLoads);
+                              if (data.settings) await idbSet('settings_sys', data.settings);
+                              if (data.syncLogs) await idbSet('sync_logs_sys', data.syncLogs);
                               if (data.usersList) localStorage.setItem('users_permissions_sys', JSON.stringify(data.usersList));
-                              if (data.syncLogs) localStorage.setItem('sync_logs_sys', JSON.stringify(data.syncLogs));
 
-                              alert('تم استعادة البيانات بنجاح! سيتم إعادة تحميل النظام لتطبيق التغييرات.');
+                              showToast('✓ تم استعادة البيانات بنجاح! جاري إعادة التشغيل...');
                               window.location.reload();
                             }
                           } else {
-                            alert('ملف النسخة الاحتياطية لا يحتوي على بيانات صالحة للنظام.');
+                            showToast('⚠️ ملف النسخة الاحتياطية غير صالح.');
                           }
                         } catch (error) {
-                          alert('عذراً، الملف المحدد غير صالح أو تالف.');
+                          showToast('⚠️ الملف المحدد غير صالح أو تالف.');
                         }
                       };
                       reader.readAsText(file);
@@ -2545,9 +2771,9 @@ export default function ManageTab({
                     <span>تصدير نسخة احتياطية (Export JSON)</span>
                   </button>
                   <button
-                    onClick={async () => { if (await confirmDialog('تنبيه: هل أنت متأكد من حذف كافة البيانات والمبيعات وتهيئة النظام مجدداً بالبيانات التجريبية؟')) {
+                    onClick={async () => { if (await confirmDialog('تهيئة النظام بالبيانات التجريبية؟')) {
                         onResetDatabase(true);
-                        alert('تم إعادة ضبط النظام ببيانات المصنع الافتراضية بنجاح!');
+                        showToast('✓ تم إعادة ضبط النظام بالبيانات الافتراضية!');
                       }
                     }}
                     className="bg-[#F7FAFC] hover:bg-slate-200 active:scale-95 border border-slate-300 text-[#1A365D] p-3.5 rounded-xl text-center text-xs font-bold transition-all cursor-pointer flex flex-col items-center justify-center gap-1.5"
@@ -2556,9 +2782,9 @@ export default function ManageTab({
                     <span>تحميل البيانات التجريبية</span>
                   </button>
                   <button
-                    onClick={async () => { if (await confirmDialog('تمويه خطير: سيقوم هذا الخيار بمسح كامل العملاء، الفواتير، المصرفات والأصناف كلياً. هل تريد المتابعة؟')) {
+                    onClick={async () => { if (await confirmDialog('تحذير: سيتم مسح قاعدة البيانات بالكامل. متابعة؟')) {
                         onResetDatabase(false);
-                        alert('تم مسح وإفراغ قاعدة البيانات بالكامل بنجاح!');
+                        showToast('✓ تم مسح وإفراغ قاعدة البيانات بالكامل!');
                       }
                     }}
                     className="bg-rose-50 hover:bg-rose-100 active:scale-95 border border-rose-200 text-rose-700 p-3.5 rounded-xl text-center text-xs font-bold transition-all cursor-pointer flex flex-col items-center justify-center gap-1.5"
@@ -2617,6 +2843,7 @@ export default function ManageTab({
                                       type="number"
                                       min="0"
                                       step="0.01"
+                                      disabled={!canEditPrices}
                                       value={weight.cartonPriceFromFactory}
                                       onChange={(e) => handleWeightFieldChange(p.id, weight.id, 'cartonPriceFromFactory', e.target.value)}
                                       className="w-full bg-[#FFFFFF] border border-slate-200 rounded-lg py-1 px-1.5 text-xs text-center font-bold text-[#1A365D] focus:outline-none focus:ring-1 focus:ring-indigo-400"
@@ -2627,6 +2854,7 @@ export default function ManageTab({
                                     <input
                                       type="number"
                                       min="1"
+                                      disabled={!canEditPrices}
                                       value={weight.unitsPerCarton}
                                       onChange={(e) => handleWeightFieldChange(p.id, weight.id, 'unitsPerCarton', e.target.value)}
                                       className="w-full bg-[#FFFFFF] border border-slate-200 rounded-lg py-1 px-1.5 text-xs text-center font-bold text-[#1A365D] focus:outline-none focus:ring-1 focus:ring-indigo-400"
@@ -2638,6 +2866,7 @@ export default function ManageTab({
                                       type="number"
                                       min="0"
                                       step="0.01"
+                                      disabled={!canEditPrices}
                                       value={weight.addedValue === undefined || weight.addedValue === 0 ? '' : weight.addedValue}
                                       onChange={(e) => handleWeightFieldChange(p.id, weight.id, 'addedValue', e.target.value)}
                                       className="w-full bg-[#FFFFFF] border border-slate-200 rounded-lg py-1 px-1.5 text-xs text-center font-bold text-[#1A365D] focus:outline-none focus:ring-1 focus:ring-indigo-400"
@@ -2692,7 +2921,7 @@ export default function ManageTab({
                     );
                   })
               )}
-              {editedProducts.length > 0 && (
+              {editedProducts.length > 0 && canEditPrices && (
                 <div className="flex flex-col gap-2 bg-[#FFFFFF] p-3 rounded-2xl border border-slate-200 mt-2">
                   {saveSuccessMsg && (
                     <div className="bg-emerald-50 text-emerald-800 text-[11px] font-bold py-1.5 px-3 rounded-lg flex items-center gap-1.5 animate-in fade-in">
@@ -3080,12 +3309,12 @@ export default function ManageTab({
                   onClick={() => {
                     const cleanArea = newAreaName.trim();
                     if (!cleanArea) {
-                      alert('يرجى كتابة اسم المنطقة أولاً!');
+                      showToast('⚠️ يرجى كتابة اسم المنطقة أولاً!');
                       return;
                     }
                     const exists = localWorkAreas.some(w => w.governorate === newAreaGov && w.area.toLowerCase() === cleanArea.toLowerCase());
                     if (exists) {
-                      alert('هذه المنطقة مسجلة بالفعل تحت هذه المحافظة!');
+                      showToast('⚠️ هذه المنطقة مسجلة بالفعل!');
                       return;
                     }
                     setLocalWorkAreas([...localWorkAreas, { governorate: newAreaGov, area: cleanArea }]);
@@ -3203,7 +3432,7 @@ export default function ManageTab({
                     ...settings,
                     workAreas: localWorkAreas
                   });
-                  alert('✅ تم حفظ كافة تغييرات مناطق العمل ومستودع المحافظات بنجاح!');
+                  showToast('✓ تم حفظ مناطق العمل بنجاح!');
                 }}
                 className="bg-[#DD6B20] hover:bg-[#C05621] text-white font-black py-2.5 px-6 rounded-xl text-xs shadow-md transition-all active:scale-95 cursor-pointer border-transparent flex items-center gap-1.5"
               >
