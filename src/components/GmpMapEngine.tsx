@@ -121,7 +121,6 @@ function MapSearchInner({ storeType, batchSize, onResults, isSearching, setIsSea
           const response = await placesLib.Place.searchByText({
             textQuery: `${qObj.query} في ${finalArea}`,
             fields: ['id', 'displayName', 'formattedAddress', 'location', 'internationalPhoneNumber', 'rating', 'userRatingCount', 'types'],
-            locationBias: center,
             maxResultCount: perQueryCount,
           });
           
@@ -394,7 +393,7 @@ const MAPS_LIBRARIES: any[] = ['places', 'geocoding', 'geometry', 'marker'];
 export default function GmpMapEngine(props: GmpMapEngineProps) {
 
   return (
-    <APIProvider apiKey={API_KEY} version="quarterly" libraries={MAPS_LIBRARIES}>
+    <APIProvider apiKey={API_KEY} version="beta" libraries={MAPS_LIBRARIES}>
       <MapSearchInner {...props} />
     </APIProvider>
   );
