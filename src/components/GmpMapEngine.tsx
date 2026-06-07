@@ -23,9 +23,10 @@ interface GmpMapEngineProps {
 function MapCircle({ center, radius }: { center: any, radius: number }) {
   const map = useMap();
   const circleRef = useRef<any>(null);
+  const geometryLib = useMapsLibrary('geometry'); // إجبار انتظار تحميل مكتبة الهندسة
 
   useEffect(() => {
-    if (!map || !window.google || !window.google.maps || !window.google.maps.Circle) return;
+    if (!map || !window.google || !window.google.maps || !window.google.maps.Circle || !geometryLib) return;
 
     circleRef.current = new window.google.maps.Circle({
       strokeColor: '#DD6B20',
@@ -61,6 +62,8 @@ function MapSearchInner({ storeType, batchSize, onResults, isSearching, setIsSea
   const map = useMap();
   const placesLib = useMapsLibrary('places');
   const geocodingLib = useMapsLibrary('geocoding');
+  const geometryLib = useMapsLibrary('geometry'); // تأمين محرك البحث
+  const markerLib = useMapsLibrary('marker'); // تأمين الدبوس
   
   const [center, setCenter] = useState({ lat: 30.0444, lng: 31.2357 }); // Cairo
   const [mapRadius, setMapRadius] = useState(1500);
@@ -71,7 +74,7 @@ function MapSearchInner({ storeType, batchSize, onResults, isSearching, setIsSea
 
   // Sync isSearching prop with the button click inside or outside
   const handleStartSearch = async () => {
-    if (!placesLib || !map) return;
+    if (!placesLib || !map || !geometryLib || !markerLib) return;
     setIsSearching(true);
     
     try {
@@ -393,7 +396,7 @@ const MAPS_LIBRARIES: any[] = ['places', 'geocoding', 'geometry', 'marker'];
 export default function GmpMapEngine(props: GmpMapEngineProps) {
 
   return (
-    <APIProvider apiKey={API_KEY} version="beta" libraries={MAPS_LIBRARIES}>
+    <APIProvider apiKey={API_KEY} version="weekly" libraries={MAPS_LIBRARIES}>
       <MapSearchInner {...props} />
     </APIProvider>
   );

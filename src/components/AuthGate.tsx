@@ -212,7 +212,7 @@ export default function AuthGate({ usersList, customersList = [], onUpdateUsers,
     );
   }
 
-  const isSystemEmpty = usersList.length === 0;
+  const isSystemEmpty = usersList.length <= 1;
   const isCustomerPhone = customersList.some(c => c.phone.trim() === phone.trim());
 
   return (

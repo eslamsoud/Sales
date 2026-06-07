@@ -98,6 +98,23 @@ export default function App() {
 
   // Authentication & Security State
   const [usersList, setUsersList] = useState<UserAuth[]>(() => {
+    const defaultOwner: UserAuth = {
+      phone: '01228466613',
+      name: 'المدير العام',
+      role: 'owner',
+      status: 'active',
+      permittedTabs: ['dashboard', 'factory', 'customers', 'invoice', 'prices', 'expenses', 'administrative', 'reports'],
+      permittedSubTabs: [
+        'loads', 'products', 'previous_loads', 'factory_account', 'trips',
+        'customers_list', 'customers_maps_finder', 'invoice_create', 'invoice_balance',
+        'expenses_list', 'reports_finance', 'reports_stats', 'reports_areas', 'reports_invoices', 'reports_inventory'
+      ],
+      canEditPrices: true,
+      password: btoa(encodeURIComponent(localStorage.getItem('owner_passcode_sys') || '1987')),
+      customRoleName: 'المدير العام 👑',
+      createdAt: new Date().toISOString()
+    };
+
     const raw = localStorage.getItem('users_permissions_sys');
     if (raw) {
       try {
@@ -112,15 +129,18 @@ export default function App() {
           }
         });
         const cleanList = Array.from(unique.values()) as UserAuth[];
+        if (!cleanList.some(u => u.phone === '01228466613')) {
+          cleanList.unshift(defaultOwner);
+        }
         if (cleanList.length !== parsed.length) {
           localStorage.setItem('users_permissions_sys', JSON.stringify(cleanList));
         }
         return cleanList;
       } catch (e) {
-        return [];
+        return [defaultOwner];
       }
     }
-    return [];
+    return [defaultOwner];
   });
 
   const [currentUser, setCurrentUser] = useState<UserAuth | null>(() => {
@@ -301,7 +321,7 @@ export default function App() {
       setSettings(updatedSettings);
       localStorage.setItem('settings_sys', JSON.stringify(updatedSettings));
       
-      if (usersList.length === 0) {
+      if (usersList.length <= 1) {
         handleUpdateData(true); // جلب البيانات صامتاً في الخلفية
       }
     }
