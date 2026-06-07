@@ -1,0 +1,11 @@
+{
+  "name": "Remix: Remix: Remix: Remix: تطبيق البيع ",
+  "description": "نظام دقيق لإدارة المخزون، التحميل من المصنع، وتوزيع المبيعات للعملاء مع الفواتير والتقارير والمصروفات.",
+  "requestFramePermissions": [
+    "geolocation",
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
