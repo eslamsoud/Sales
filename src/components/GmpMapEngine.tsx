@@ -117,9 +117,9 @@ function MapSearchInner({ storeType, batchSize, onResults, isSearching, setIsSea
       }
 
       const perQueryCount = Math.min(20, batchSize); // الحد الأقصى لكل استعلام للحصول على تغطية واسعة
-      const allPlaces = new Map(); // نستخدم Map لمنع تكرار المحلات
+      const allPlaces: Record<string, any> = {}; // التعديل 1: استخدام كائن جافاسكربت بسيط لمنع تعارض Vercel نهائياً
 
-      await Promise.all(queriesToRun.map(async (qObj) => {
+      for (const qObj of queriesToRun) {
         try {
           const response = await placesLib.Place.searchByText({
             textQuery: `${qObj.query} في ${finalArea}`,
@@ -129,18 +129,18 @@ function MapSearchInner({ storeType, batchSize, onResults, isSearching, setIsSea
           
           if (response && response.places) {
             response.places.forEach(p => {
-               if (!allPlaces.has(p.id)) {
-                 allPlaces.set(p.id, { place: p, typeLabel: qObj.typeLabel });
+               if (!allPlaces[p.id]) { // التعديل 2: تغيير طريقة التحقق
+                 allPlaces[p.id] = { place: p, typeLabel: qObj.typeLabel }; // التعديل 3: تغيير طريقة الإضافة
                }
             });
           }
         } catch (e) {
            console.warn(`Query failed for: ${qObj.query}`, e);
         }
-      }));
+      }
 
-      if (allPlaces.size > 0) {
-        let mapped = Array.from(allPlaces.values()).map((data, idx) => {
+      if (Object.keys(allPlaces).length > 0) { // التعديل 4: تغيير طريقة حساب العدد
+        let mapped = Object.values(allPlaces).map((data: any, idx) => {
           const p = data.place;
           let phone = p.internationalPhoneNumber || 'غير مسجل';
           let detailedAddress = p.formattedAddress || finalArea;
@@ -396,7 +396,7 @@ const MAPS_LIBRARIES: any[] = ['places', 'geocoding', 'geometry', 'marker'];
 export default function GmpMapEngine(props: GmpMapEngineProps) {
 
   return (
-    <APIProvider apiKey={API_KEY} version="weekly" libraries={MAPS_LIBRARIES}>
+    <APIProvider apiKey={API_KEY} version="beta" libraries={MAPS_LIBRARIES}>
       <MapSearchInner {...props} />
     </APIProvider>
   );
