@@ -392,10 +392,12 @@ function MapSearchInner({ storeType, batchSize, onResults, isSearching, setIsSea
   );
 }
 
+const MAPS_LIBRARIES: any[] = ['places', 'geocoding', 'marker'];
+
 export default function GmpMapEngine(props: GmpMapEngineProps) {
 
   return (
-    <APIProvider apiKey={API_KEY} version="quarterly">
+    <APIProvider apiKey={API_KEY} version="quarterly" libraries={MAPS_LIBRARIES}>
       <MapSearchInner {...props} />
     </APIProvider>
   );
