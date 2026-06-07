@@ -390,7 +390,7 @@ function MapSearchInner({ storeType, batchSize, onResults, isSearching, setIsSea
   );
 }
 
-const MAPS_LIBRARIES: any[] = ['places', 'geocoding'];
+const MAPS_LIBRARIES: any[] = ['places', 'geocoding', 'geometry', 'marker'];
 
 export default function GmpMapEngine(props: GmpMapEngineProps) {
 
