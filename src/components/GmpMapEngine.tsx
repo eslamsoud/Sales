@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React, { useEffect, useState, useRef } from 'react';
-import { APIProvider, Map, AdvancedMarker, Pin, useMap, useMapsLibrary } from '@vis.gl/react-google-maps';
+import { APIProvider, Map, Marker, useMap, useMapsLibrary } from '@vis.gl/react-google-maps';
 import { Loader2, Search, MapPin, Navigation } from 'lucide-react';
 import { showToast } from '../utils/toast';
 
@@ -320,7 +320,7 @@ function MapSearchInner({ storeType, batchSize, onResults, isSearching, setIsSea
               style={{ width: '100%', height: '100%' }}
               internalUsageAttributionIds={['gmp_mcp_codeassist_v1_aistudio']}
             >
-                <AdvancedMarker position={center} draggable onDragEnd={(e) => {
+                <Marker position={center} draggable={true} onDragEnd={(e) => {
                     const lat = e.latLng?.lat();
                     const lng = e.latLng?.lng();
                     if (lat && lng) {
@@ -328,9 +328,7 @@ function MapSearchInner({ storeType, batchSize, onResults, isSearching, setIsSea
                         reverseGeocode(lat, lng);
                         if (map) map.panTo({lat, lng});
                     }
-                }}>
-                    <Pin background="#E11D48" glyphColor="#fff" borderColor="#BE123C" />
-                </AdvancedMarker>
+                }} />
                 <MapCircle center={center} radius={mapRadius} />
             </Map>
           </div>
@@ -392,7 +390,7 @@ function MapSearchInner({ storeType, batchSize, onResults, isSearching, setIsSea
   );
 }
 
-const MAPS_LIBRARIES: any[] = ['places', 'geocoding', 'marker'];
+const MAPS_LIBRARIES: any[] = ['places', 'geocoding'];
 
 export default function GmpMapEngine(props: GmpMapEngineProps) {
 
