@@ -849,6 +849,8 @@ export default function ManageTab({
         const localUsers = JSON.parse(localStorage.getItem('users_permissions_sys') || '[]');
         if (localUsers && localUsers.length > 0) freshUsersList = localUsers;
       } catch(e) {}
+      
+      const deletedIds = JSON.parse(localStorage.getItem('deleted_records_sys') || '[]');
 
       const payload = {
         type: 'تقرير_كامل',
