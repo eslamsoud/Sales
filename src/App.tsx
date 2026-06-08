@@ -630,12 +630,19 @@ export default function App() {
       const extraRevenues = expenses.filter(e => e.type === 'revenue').reduce((sum, exp) => sum + (exp.amount || 0), 0);
       const netProfit = totalSales + extraRevenues - totalSpent;
 
-      const deletedIds = JSON.parse(localStorage.getItem('deleted_records_sys') || '[]');
+      let deletedIds: string[] = [];
+      try {
+        deletedIds = JSON.parse(localStorage.getItem('deleted_records_sys') || '[]');
+      } catch(e) {}
+
       const customersMap = new Map(customers.map(c => [c.id, c]));
       const productsMap = new Map(products.map(p => [p.id, p]));
 
-      const googleLeadsRaw = localStorage.getItem('google_leads_staging_sys');
-      const discoveredLeads = googleLeadsRaw ? JSON.parse(googleLeadsRaw) : [];
+      let discoveredLeads: any[] = [];
+      try {
+        const googleLeadsRaw = localStorage.getItem('google_leads_staging_sys');
+        discoveredLeads = googleLeadsRaw ? JSON.parse(googleLeadsRaw) : [];
+      } catch (e) {}
 
       const invoicesByCustomer = new Map();
       invoices.forEach(inv => {
@@ -652,6 +659,8 @@ export default function App() {
 
       const payload = {
         type: 'تقرير_كامل',
+        syncPhone: currentUser?.phone || '01228466613',
+        syncRole: currentUser?.role || 'owner',
         deletedIds: deletedIds,
         metadata: {
           syncedAt: new Date().toISOString(),
@@ -765,7 +774,7 @@ export default function App() {
         }))
       };
 
-      await fetch(settings.googleSheetsUrl, {
+      await fetch(settings.googleSheetsUrl.trim(), {
         method: 'POST',
         mode: 'no-cors',
         headers: {

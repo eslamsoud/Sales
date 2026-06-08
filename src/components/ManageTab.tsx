@@ -834,8 +834,11 @@ export default function ManageTab({
       const customersMap = new Map(customers.map(c => [c.id, c]));
       const productsMap = new Map(products.map(p => [p.id, p]));
 
-      const googleLeadsRaw = localStorage.getItem('google_leads_staging_sys');
-      const discoveredLeads = googleLeadsRaw ? JSON.parse(googleLeadsRaw) : [];
+      let discoveredLeads = [];
+      try {
+        const googleLeadsRaw = localStorage.getItem('google_leads_staging_sys');
+        discoveredLeads = googleLeadsRaw ? JSON.parse(googleLeadsRaw) : [];
+      } catch(e) {}
 
       const invoicesByCustomer = new Map();
       invoices.forEach(inv => {
@@ -850,10 +853,15 @@ export default function ManageTab({
         if (localUsers && localUsers.length > 0) freshUsersList = localUsers;
       } catch(e) {}
       
-      const deletedIds = JSON.parse(localStorage.getItem('deleted_records_sys') || '[]');
+      let deletedIds = [];
+      try {
+        deletedIds = JSON.parse(localStorage.getItem('deleted_records_sys') || '[]');
+      } catch(e) {}
 
       const payload = {
         type: 'تقرير_كامل',
+        syncPhone: currentUser?.phone || '01228466613',
+        syncRole: currentUser?.role || 'owner',
         deletedIds: deletedIds,
         metadata: {
           syncedAt: new Date().toISOString(),
@@ -966,7 +974,7 @@ export default function ManageTab({
           dateAdded: l.dateAdded || ''
         }))
       };
-      const resp = await fetch(googleUrl, {
+      const resp = await fetch(googleUrl.trim(), {
         method: 'POST',
         mode: 'no-cors',
         headers: {
