@@ -304,7 +304,27 @@ export default function App() {
         });
 
         setInvoices(cleanedInvoices);
-        setExpenses(migrate(exp, 'expenses_sys', DEFAULT_EXPENSES));
+        
+        let rawExpenses = migrate(exp, 'expenses_sys', DEFAULT_EXPENSES);
+        // 🚨 نظام التنظيف الذاتي والإصلاح المحلي (Auto-Healing) للبيانات المرحلة بشكل خاطئ قديماً
+        const cleanedExpenses = rawExpenses.map((e: any) => {
+          const isShifted = e.date === 'مصروف' || e.date === 'إيراد' || e.date === 'expense' || e.date === 'revenue' || !e.date || !String(e.date).includes('-');
+          if (isShifted) {
+            return {
+              id: `exp-fix-${Math.floor(Math.random() * 10000)}`,
+              date: (e.id && String(e.id).includes('-')) ? e.id : new Date().toISOString(), // استعادة التاريخ الحقيقي
+              category: (e.category && e.category !== 'expense' && e.category !== 'revenue') ? e.category : (e.date !== 'مصروف' && e.date !== 'إيراد' && e.date ? e.date : 'أخرى'),
+              type: (e.type === 'revenue' || e.date === 'إيراد') ? 'revenue' : 'expense',
+              amount: Number(e.amount) || 0,
+              description: e.description || 'مصروف مسترد',
+              delegateName: e.delegateName || 'مجهول',
+              delegatePhone: e.delegatePhone || ''
+            };
+          }
+          return e;
+        }).filter((e: any) => e.amount > 0 && e.description);
+        setExpenses(cleanedExpenses);
+
         setTrips(migrate(tr, 'trips_sys', []));
         setSyncLogs(migrate(logs, 'sync_logs_sys', []));
         setSettings(migrate(set, 'settings_sys', DEFAULT_SETTINGS));
@@ -1112,16 +1132,31 @@ export default function App() {
         }
 
         if (data.expenses && Array.isArray(data.expenses)) {
-          const mappedExpenses = data.expenses.map((e: any) => ({
-            id: String(e.id || Math.random()).replace(/^'/, ''),
-            date: e.date,
-            amount: Number(e.amount || 0),
-            category: e.category,
-            type: e.type === 'revenue' ? 'revenue' : 'expense',
-            description: e.description || '',
-            delegateName: e.delegateName || 'مجهول',
-            delegatePhone: e.delegatePhone || ''
-          }));
+          const mappedExpenses = data.expenses.map((e: any) => {
+            const isShifted = e.date === 'مصروف' || e.date === 'إيراد' || e.date === 'expense' || e.date === 'revenue' || !e.date || !String(e.date).includes('-');
+            if (isShifted) {
+              return {
+                id: `exp-fix-${Math.floor(Math.random() * 10000)}`,
+                date: (e.id && String(e.id).includes('-')) ? e.id : new Date().toISOString(),
+                category: (e.category && e.category !== 'expense' && e.category !== 'revenue') ? e.category : (e.date !== 'مصروف' && e.date !== 'إيراد' && e.date ? e.date : 'أخرى'),
+                type: (e.type === 'revenue' || e.date === 'إيراد') ? 'revenue' : 'expense',
+                amount: Number(e.amount) || 0,
+                description: e.description || 'مصروف مسترد',
+                delegateName: e.delegateName || 'مجهول',
+                delegatePhone: e.delegatePhone || ''
+              };
+            }
+            return {
+              id: String(e.id || Math.random()).replace(/^'/, ''),
+              date: e.date,
+              amount: Number(e.amount || 0),
+              category: e.category,
+              type: e.type === 'revenue' ? 'revenue' : 'expense',
+              description: e.description || '',
+              delegateName: e.delegateName || 'مجهول',
+              delegatePhone: e.delegatePhone || ''
+            };
+          }).filter((e: any) => e.amount > 0 && e.description);
           setExpenses(mappedExpenses);
         }
 

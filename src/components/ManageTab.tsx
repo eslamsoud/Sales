@@ -186,62 +186,53 @@ function doPost(e) {
       
       var existingRange = sheet.getDataRange();
       var existingData = existingRange.getValues();
-      var idMap = {};
       
-      // قراءة المعرفات للصفوف القديمة لتحديثها إن وجدت
-      if (existingData.length > 0 && existingData[0].length > 0) {
-        for (var i = 1; i < existingData.length; i++) {
-          if (existingData[i] && existingData[i][0]) {
-            var rowId = String(existingData[i][0]).replace(/^'/, '').trim();
-            if (rowId.length === 10 && rowId.indexOf('1') === 0) rowId = '0' + rowId;
-            if (rowId) {
-              idMap[rowId] = i; 
-            }
+      var dataMap = {}; // الحل الجذري: قاموس المعرفات لمنع تداخل الصفوف تماماً
+      
+      if (existingData.length > 1) {
+        for (var k = 1; k < existingData.length; k++) {
+          var r = existingData[k];
+          
+          // 🚨 تنظيف ذاتي أعمق وتجاهل كامل للأسطر التالفة والفارغة
+          if (!r || r.length === 0 || String(r[0]).trim() === '') continue; 
+          if (sheetName === 'الماليات' && (isNaN(Number(r[4])) || Number(r[4]) <= 0)) continue; 
+          if (sheetName === 'الفواتير' && (isNaN(Number(r[5])) || Number(r[5]) <= 0)) continue; 
+          if (sheetName === 'المصنع' && (isNaN(Number(r[7])) || Number(r[7]) <= 0)) continue; 
+          
+          var rowId = String(r[0]).replace(/^'/, '').trim();
+          if (rowId.length === 10 && rowId.indexOf('1') === 0) rowId = '0' + rowId;
+          
+          // ضمان تساوي طول المصفوفة لحماية سيرفر جوجل من الانهيار (Jagged Array)
+          var paddedRow = [];
+          for (var c = 0; c < headers.length; c++) {
+            paddedRow.push(r[c] !== undefined ? r[c] : '');
           }
+          dataMap[rowId] = paddedRow;
         }
-      }
-      
-      var newRows = [];
-      var updatedData = [];
-      
-      // توحيد المصفوفات وتجنب خطأ Jagged Array + التنظيف الذاتي (Auto-Healing)
-      for (var k = 0; k < existingData.length; k++) {
-        if (k === 0) {
-          updatedData.push(headers); // دائماً نضع العناوين الجديدة في الصف الأول
-          continue;
-        }
-        
-        var r = existingData[k].slice();
-        
-        // 🚨 نظام التنظيف الذاتي: طرد أي صفوف فارغة، يدوية خاطئة، أو تالفة من الشيت فوراً
-        if (!r[0] || String(r[0]).trim() === '') continue; // تجاهل الصف بدون معرف (ID)
-        if (sheetName === 'الماليات' && (isNaN(Number(r[4])) || Number(r[4]) <= 0)) continue; // تجاهل مصروف بدون مبلغ
-        if (sheetName === 'الفواتير' && (isNaN(Number(r[5])) || Number(r[5]) <= 0)) continue; // تجاهل فاتورة بدون إجمالي
-        if (sheetName === 'المصنع' && (isNaN(Number(r[7])) || Number(r[7]) <= 0)) continue; // تجاهل حمولة بدون كمية
-        
-        while (r.length < headers.length) r.push(''); // تزويد العواميد الناقصة بخلايا فارغة
-        if (r.length > headers.length) r = r.slice(0, headers.length); // قص العواميد الزائدة
-        updatedData.push(r);
-      }
-      
-      if (updatedData.length === 0) {
-        updatedData.push(headers);
       }
       
       for (var j = 0; j < dataRows.length; j++) {
         var row = dataRows[j];
+        if (!row || row.length === 0 || String(row[0]).trim() === '') continue;
+
         var incomingId = String(row[0]).replace(/^'/, '').trim(); 
         if (incomingId.length === 10 && incomingId.indexOf('1') === 0) incomingId = '0' + incomingId;
         
-        if (idMap[incomingId] !== undefined && idMap[incomingId] < updatedData.length) {
-          updatedData[idMap[incomingId]] = row;
-        } else {
-          newRows.push(row);
+        // توحيد طول الصف القادم من التطبيق لسد الثغرات
+        var paddedNewRow = [];
+        for (var col = 0; col < headers.length; col++) {
+          paddedNewRow.push(row[col] !== undefined ? row[col] : '');
         }
+        dataMap[incomingId] = paddedNewRow;
       }
       
-      var finalData = updatedData.concat(newRows);
-      
+      var finalData = [headers];
+      for (var key in dataMap) {
+        if (dataMap.hasOwnProperty(key)) {
+          finalData.push(dataMap[key]);
+        }
+      }
+
       if (sheet.getMaxColumns() < headers.length) {
         sheet.insertColumnsAfter(sheet.getMaxColumns(), headers.length - sheet.getMaxColumns());
       }
