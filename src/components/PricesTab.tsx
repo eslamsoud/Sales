@@ -352,8 +352,8 @@ export default function PricesTab({ products: rawProducts, onGoBack }: PricesTab
 
   const handleShareAllWhatsApp = () => {
     const text = buildAllPricesText();
-    const url = `https://api.whatsapp.com/send?text=${encodeURIComponent(text)}`;
-    window.open(url, '_blank');
+    const url = `whatsapp://send?text=${encodeURIComponent(text)}`;
+    window.location.href = url;
   };
 
   const handleCopyAllPricesText = () => {
@@ -393,8 +393,8 @@ export default function PricesTab({ products: rawProducts, onGoBack }: PricesTab
 
   const handleShareProductWhatsApp = (prod: any) => {
     const text = buildProductPricesText(prod);
-    const url = `https://api.whatsapp.com/send?text=${encodeURIComponent(text)}`;
-    window.open(url, '_blank');
+    const url = `whatsapp://send?text=${encodeURIComponent(text)}`;
+    window.location.href = url;
   };
 
   const handleCopyProductPricesText = (prod: any) => {

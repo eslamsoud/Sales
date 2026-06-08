@@ -211,7 +211,7 @@ export default function FactoryTab({
     if (cartonP > 0 && unitsPerC > 0) {
       const retailCarton = cartonP + addedV;
       const computedRetail = retailCarton / unitsPerC;
-      setWeightRetailPrice(computedRetail.toFixed(3));
+      setWeightRetailPrice(computedRetail.toString()); // الحفاظ على الدقة العشرية لضمان تطابق حسابات الجملة
     } else {
       setWeightRetailPrice('');
     }

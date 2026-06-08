@@ -47,13 +47,13 @@ const getGovernorateForArea = (area: string): string => {
 
 const formatWhatsAppLink = (phone: string, encodedText: string = '') => {
   let cleaned = (phone || '').replace(/[^0-9]/g, '');
-  if (!cleaned) return `https://wa.me/${encodedText ? '?text=' + encodedText : ''}`;
+  if (!cleaned) return `whatsapp://send?text=${encodedText}`;
   if (cleaned.startsWith('0')) {
     cleaned = '20' + cleaned.substring(1);
   } else if (cleaned.length === 10 && cleaned.startsWith('1')) {
     cleaned = '20' + cleaned;
   }
-  return `https://wa.me/${cleaned}${encodedText ? '?text=' + encodedText : ''}`;
+  return `whatsapp://send?phone=${cleaned}${encodedText ? '&text=' + encodedText : ''}`;
 };
 
 interface CustomersTabProps {
@@ -121,7 +121,7 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
 
       const data = await response.json();
       const messageText = encodeURIComponent(data.text);
-      window.open(formatWhatsAppLink(customer.phone, messageText), '_blank');
+      window.location.href = formatWhatsAppLink(customer.phone, messageText);
     } catch (err: any) {
       console.warn("Using premium local pitch message generator due to inactive Gemini API Key:", err.message);
       
@@ -129,7 +129,7 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
       const fallbackPitchMsg = `السلام عليكم ورحمة الله وبركاته يا فندم 🌸\nمعكم مندوب مبيعات زيوت وسمن "سوفانا" الممتازة لجودة الفنادق والمطاعم والبيوت.\n\nنتشرف بالتعاون معكم في [ ${customer.name} ] بمنطقة [ ${customer.area} ] ونود تقديم عروضنا الخاصة والحصرية لكم لتوفير أفضل سمن بلدي وزيوت مصفاة فائقة النقاوة، بهامش ربح ممتاز وتسهيلات سداد مريحة.\n\n(✨ هدفنا الاستراتيجي: ${guidelines})\n\nهل نتشرف بتحديد موعد قريب للزيارة وتجريب عيناتنا المجانية للتأكد من الجودة؟`;
       
       const messageText = encodeURIComponent(fallbackPitchMsg);
-      window.open(formatWhatsAppLink(customer.phone, messageText), '_blank');
+      window.location.href = formatWhatsAppLink(customer.phone, messageText);
     } finally {
       setWaLoadingId(null);
     }
@@ -190,6 +190,44 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
   const [expandedRealCustomers, setExpandedRealCustomers] = useState<Record<string, boolean>>({});
   const [expandedGoogleLeads, setExpandedGoogleLeads] = useState<Record<string, boolean>>({});
   const [expandedStagedLeads, setExpandedStagedLeads] = useState<Record<string, boolean>>({});
+
+  const handleBulkAddMapLeads = () => {
+    const newLeads = [...googleLeads];
+    const newAddedIds = [...addedLeadIds];
+    let addedCount = 0;
+
+    mapsResults.forEach(lead => {
+      if (newAddedIds.includes(lead.id)) return;
+      
+      const existsInReal = customers.some(c => c.phone === lead.phone || c.name.toLowerCase() === lead.name.toLowerCase());
+      if (existsInReal) {
+        newAddedIds.push(lead.id);
+        return;
+      }
+      
+      const exists = newLeads.some(g => g.phone === lead.phone || g.name.toLowerCase() === lead.name.toLowerCase());
+      if (exists) {
+        newAddedIds.push(lead.id);
+        return;
+      }
+
+      const finalArea = (lead.detailedAddress || lead.area || 'أخرى').trim();
+      const gov = getGovernorateForArea(finalArea);
+      newLeads.push({ ...lead, governorate: gov, dateAdded: new Date().toLocaleDateString('ar-EG'), confirmed: false });
+      newAddedIds.push(lead.id);
+      addedCount++;
+    });
+
+    if (addedCount > 0) {
+      setGoogleLeads(newLeads);
+      setAddedLeadIds(newAddedIds);
+      showToast(`✓ تم إضافة ${addedCount} عميل جديد للمسودة دفعة واحدة بنجاح!`);
+      setActiveTab('google_leads');
+      window.scrollTo({ top: 0, left: 0, behavior: 'smooth' });
+    } else {
+      showToast(`⚠️ جميع النتائج الحالية مضافة مسبقاً بقواعد البيانات!`);
+    }
+  };
 
   // Advanced AI Advisor Database & Copywriters
   const getAdviceForStoreType = (type: string) => {
@@ -1208,9 +1246,18 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                     <h4 className="font-bold text-[#1A365D] text-sm">المحلات والعملاء المكتشفين ({mapsResults.length})</h4>
                     <p className="text-[10.5px] text-slate-450 font-bold mt-0.5">سجل المحل بمسودة "العملاء المقترحين" لمتابعته والاتصال به.</p>
                   </div>
-                  <span className="text-[10px] bg-emerald-50 text-[#DD6B20] font-extrabold px-2 py-0.5 rounded border border-emerald-150">
-                    نشط بخرائط جوجل
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handleBulkAddMapLeads}
+                      className="text-[10px] bg-[#1A365D] text-white hover:bg-indigo-900 font-extrabold px-3 py-1.5 rounded-lg shadow-sm transition-colors cursor-pointer flex items-center gap-1 active:scale-95"
+                    >
+                      <Plus className="h-3 w-3" /> حفظ الكل دفعة واحدة
+                    </button>
+                    <span className="hidden sm:inline-block text-[10px] bg-emerald-50 text-[#DD6B20] font-extrabold px-2 py-0.5 rounded border border-emerald-150">
+                      نشط بخريطة جوجل
+                    </span>
+                  </div>
                 </div>
 
                 <div className="flex flex-col gap-5">

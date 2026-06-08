@@ -700,6 +700,8 @@ export default function App() {
           return {
             id: fl.id,
             date: fl.date,
+            productId: fl.productId,
+            weightId: fl.weightId,
             productName: prod?.name || 'صنف مجهول',
             weightSize: wt?.size || 'عبوة',
             cartonsCount: fl.cartonsCount || 0,

@@ -131,8 +131,13 @@ function doGet(e) {
     var newProductsSheet = ss.getSheetByName('الأصناف_والأوزان');
     result.flatProducts = [];
     if (newProductsSheet && newProductsSheet.getLastRow() > 1) {
+      var headers = newProductsSheet.getRange(1, 1, 1, newProductsSheet.getLastColumn()).getValues()[0];
+      var hasRetailCarton = headers.indexOf('سعر بيع الكرتونة') !== -1;
+      
       var data = newProductsSheet.getRange(2, 1, newProductsSheet.getLastRow() - 1, newProductsSheet.getLastColumn()).getValues();
       result.flatProducts = data.filter(function(row) { return row[0] && String(row[0]).trim() !== ''; }).map(function(row) {
+        var rUnit = hasRetailCarton ? row[9] : row[8];
+        var bCode = hasRetailCarton ? String(row[10] || '') : String(row[9] || '');
         return { 
           weightId: row[0],
           productId: row[1],
@@ -142,8 +147,8 @@ function doGet(e) {
           unitsPerCarton: row[5],
           factoryPricePerUnit: row[6],
           addedValue: row[7],
-          retailPricePerUnit: row[8],
-          barcode: String(row[9] || '')
+          retailPricePerUnit: rUnit,
+          barcode: bCode
         };
       });
     }
@@ -170,20 +175,39 @@ function doGet(e) {
     var factorySheet = ss.getSheetByName('المصنع');
     result.factoryLoads = [];
     if (factorySheet && factorySheet.getLastRow() > 1) {
+      var headers = factorySheet.getRange(1, 1, 1, factorySheet.getLastColumn()).getValues()[0];
+      var hasIds = headers.indexOf('معرف الصنف') !== -1;
       var data = factorySheet.getRange(2, 1, factorySheet.getLastRow() - 1, factorySheet.getLastColumn()).getValues();
       result.factoryLoads = data.filter(function(row) { return row[0] && String(row[0]).trim() !== ''; }).map(function(row) {
-        return { 
-          id: row[0], 
-          date: row[1], 
-          productName: row[2], 
-          weightSize: row[3], 
-          cartonsCount: row[4], 
-          quantity: row[5], 
-          advanceAmount: row[6],
-          warehouseKeeper: row[7],
-          delegateName: row[8] || '',
-          delegatePhone: String(row[9] || '')
-        };
+        if (hasIds) {
+          return { 
+            id: row[0], 
+            date: row[1], 
+            productId: String(row[2] || ''),
+            weightId: String(row[3] || ''),
+            productName: row[4], 
+            weightSize: row[5], 
+            cartonsCount: row[6], 
+            quantity: row[7], 
+            advanceAmount: row[8],
+            warehouseKeeper: row[9],
+            delegateName: row[10] || '',
+            delegatePhone: String(row[11] || '')
+          };
+        } else {
+          return { 
+            id: row[0], 
+            date: row[1], 
+            productName: row[2], 
+            weightSize: row[3], 
+            cartonsCount: row[4], 
+            quantity: row[5], 
+            advanceAmount: row[6],
+            warehouseKeeper: row[7],
+            delegateName: row[8] || '',
+            delegatePhone: String(row[9] || '')
+          };
+        }
       });
     }
 
@@ -251,7 +275,8 @@ function doPost(e) {
       }
       if (!dataRows || dataRows.length === 0) return;
       
-      var existingData = sheet.getDataRange().getValues();
+      var existingRange = sheet.getDataRange();
+      var existingData = existingRange.getValues();
       var idMap = {};
       
       // حفظ رقم الصف بناءً على المعرف (ID) لتحديثه لاحقاً بدلاً من مسحه
@@ -259,29 +284,50 @@ function doPost(e) {
         var rowId = String(existingData[i][0]).replace(/^'/, '').trim();
         if (rowId.length === 10 && rowId.indexOf('1') === 0) rowId = '0' + rowId;
         if (rowId) {
-          idMap[rowId] = i + 1; 
+          idMap[rowId] = i; 
         }
       }
       
       var newRows = [];
+      var updatedData = [];
+      
+      // 🚨 التعديل السحري: توحيد طول الصفوف القديمة مع الجديدة لتجنب انهيار جوجل سكريبت (Jagged Array Fix)
+      for (var k = 0; k < existingData.length; k++) {
+        var r = existingData[k].slice();
+        while (r.length < headers.length) r.push(''); // تزويد العواميد الناقصة بخلايا فارغة
+        if (r.length > headers.length) r = r.slice(0, headers.length); // قص العواميد الزائدة
+        updatedData.push(r);
+      }
+      
+      // تحديث رأس الجدول ليتطابق دائماً مع التحديثات الجديدة
+      if (updatedData.length > 0) {
+        updatedData[0] = headers;
+      }
+      
       for (var j = 0; j < dataRows.length; j++) {
         var row = dataRows[j];
         var incomingId = String(row[0]).replace(/^'/, '').trim(); 
         if (incomingId.length === 10 && incomingId.indexOf('1') === 0) incomingId = '0' + incomingId;
         
-        if (idMap[incomingId]) {
-          // إذا كان السجل موجوداً مسبقاً، قم بتحديث صفه فقط
-          sheet.getRange(idMap[incomingId], 1, 1, row.length).setValues([row]);
+        if (idMap[incomingId] !== undefined) {
+          // تحديث السجل سريعاً داخل الذاكرة (بدون الاتصال بالشيت لتوفير الوقت)
+          updatedData[idMap[incomingId]] = row;
         } else {
-          // إذا كان السجل جديداً، أضفه لمصفوفة السجلات الجديدة
           newRows.push(row);
         }
       }
       
-      // صب السجلات الجديدة دفعة واحدة في أسفل الشيت
-      if (newRows.length > 0) {
-        sheet.getRange(sheet.getLastRow() + 1, 1, newRows.length, newRows[0].length).setValues(newRows);
+      // صب كافة البيانات (القديمة المحدثة + الجديدة) في الشيت بطلب واحد فائق السرعة
+      var finalData = updatedData.concat(newRows);
+      
+      // التأكد من أن الشيت يستوعب عدد العواميد المطلوبة لتجنب خطأ (Out of bounds)
+      if (sheet.getMaxColumns() < headers.length) {
+        sheet.insertColumnsAfter(sheet.getMaxColumns(), headers.length - sheet.getMaxColumns());
       }
+
+      sheet.clearContents();
+      sheet.getRange(1, 1, finalData.length, headers.length).setValues(finalData);
+      sheet.getRange(1, 1, 1, headers.length).setFontWeight("bold").setBackground(headerColor || "#cfe2f3");
       
       // تفعيل فلتر جوجل التلقائي لسهولة فرز مناديب المبيعات
       if (sheet.getFilter() === null) {
@@ -410,6 +456,7 @@ function doPost(e) {
       (data.products || []).forEach(function(p) { 
         if (p.weights && p.weights.length > 0) {
           p.weights.forEach(function(w) {
+            var retailCarton = (Number(w.cartonPriceFromFactory) || 0) + (Number(w.addedValue) || 0);
             prodRows.push([
               w.id,                               // معرف الوزن (مهم للتطبيق)
               p.id,                               // معرف الصنف
@@ -419,25 +466,28 @@ function doPost(e) {
               w.unitsPerCarton || 1,              // العدد بالكرتونة
               w.factoryPricePerUnit || 0,         // سعر العبوة مصنع
               w.addedValue || 0,                  // القيمة المضافة
-              w.retailPricePerUnit || 0,          // سعر البيع للجمهور
-              "'" + String(w.barcode || '')       // الباركود
+              retailCarton,                       // سعر بيع الكرتونة
+              w.retailPricePerUnit || 0,          // سعر بيع العبوة
+              "'" + String(w.barcode || '')
             ]);
           });
         } else {
           // صنف بدون أوزان محددة
           prodRows.push([
-              p.id + "_default", p.id, p.name, 'كرتونة', 0, 1, 0, 0, p.price || 0, ''
+              p.id + "_default", p.id, p.name, 'كرتونة', 0, 1, 0, 0, p.price || 0, p.price || 0, ''
           ]);
         }
       });
       // استخدام الشيت الجديد المفصل
-      upsertData('الأصناف_والأوزان', ['معرف الوزن (لا تحذفه)', 'معرف الصنف', 'اسم الصنف', 'الحجم/الوزن', 'سعر الكرتونة', 'العدد بالكرتونة', 'سعر العبوة (مصنع)', 'القيمة المضافة', 'سعر البيع', 'الباركود'], prodRows, "#cfe2f3");
+      upsertData('الأصناف_والأوزان', ['معرف الوزن (لا تحذفه)', 'معرف الصنف', 'اسم الصنف', 'الحجم/الوزن', 'سعر الكرتونة', 'العدد بالكرتونة', 'سعر العبوة (مصنع)', 'القيمة المضافة', 'سعر بيع الكرتونة', 'سعر بيع العبوة', 'الباركود'], prodRows, "#cfe2f3");
       
       // 6. المصنع 
       var factoryRows = (data.factoryLoads || []).map(function(fl) { 
         return [
           fl.id, 
           fl.date, 
+          fl.productId || '',
+          fl.weightId || '',
           fl.productName, 
           fl.weightSize || 'كرتونة', 
           fl.cartonsCount || 0, 
@@ -448,7 +498,7 @@ function doPost(e) {
           "'" + String(fl.delegatePhone || '')
         ]; 
       });
-      upsertData('المصنع', ['المعرف', 'التاريخ', 'اسم الصنف', 'الحجم/الوزن', 'الكمية (كرتونة)', 'إجمالي الوحدات', 'مقدم المصنع', 'أمين المخزن', 'اسم المندوب', 'هاتف المندوب'], factoryRows, "#fce5cd");
+      upsertData('المصنع', ['المعرف', 'التاريخ', 'معرف الصنف', 'معرف الوزن', 'اسم الصنف', 'الحجم/الوزن', 'الكمية (كرتونة)', 'إجمالي الوحدات', 'مقدم المصنع', 'أمين المخزن', 'اسم المندوب', 'هاتف المندوب'], factoryRows, "#fce5cd");
       var factorySheetObj = ss.getSheetByName('المصنع');
       if (factorySheetObj && factorySheetObj.getLastRow() > 1) {
         factorySheetObj.getRange(2, 1, factorySheetObj.getLastRow() - 1, factorySheetObj.getLastColumn()).sort([{column: 9, ascending: true}, {column: 2, ascending: false}]);
@@ -883,7 +933,7 @@ export default function ManageTab({
         const retailCarton = activeCartonPrice + activeAddedValue;
         const computedRetail = retailCarton / updatedWeight.unitsPerCarton;
         
-        updatedWeight.retailPricePerUnit = Number(computedRetail.toFixed(3));
+        updatedWeight.retailPricePerUnit = computedRetail; // حفظ السعر بدقة كاملة لضمان دقة حسابات الجملة والكرتونة
         return updatedWeight;
       });
       
@@ -1050,6 +1100,8 @@ export default function ManageTab({
           return {
             id: fl.id,
             date: fl.date,
+            productId: fl.productId,
+            weightId: fl.weightId,
             productName: prod?.name || 'صنف مجهول',
             weightSize: wt?.size || 'عبوة',
             cartonsCount: fl.cartonsCount || 0,

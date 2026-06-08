@@ -329,17 +329,19 @@ export default function InvoiceTab({
 
     // Add item (removed merging to avoid confusion where users think items are deleted on same-product addition)
     setBillItems(prevList => {
-      const origPrice = weight.retailPricePerUnit;
-      const finalPr = origPrice * (1 - discountPerc / 100);
+      // الاعتماد المطلق على سعر الكرتونة كمرجع للحسابات لضمان الدقة في الجملة
+      const retailCartonPrice = weight.cartonPriceFromFactory + (weight.addedValue || 0);
+      const exactOrigPrice = retailCartonPrice / multiplier;
+      const exactFinalPr = exactOrigPrice * (1 - discountPerc / 100);
 
       const newItem: InvoiceItem = {
         productId: currentProductId,
         weightId: currentWeightId,
         quantity: qty,
-        originalPrice: origPrice,
+        originalPrice: exactOrigPrice,
         factoryPrice: weight.factoryPricePerUnit,
         discountPercent: discountPerc,
-        finalPrice: Number(finalPr.toFixed(3))
+        finalPrice: exactFinalPr
       };
       
       return [...prevList, newItem];
@@ -1049,7 +1051,7 @@ export default function InvoiceTab({
       finalPhone = '20' + cleanPhone;
     }
     
-    window.open(`https://api.whatsapp.com/send?phone=${finalPhone}&text=${encodedText}`, '_blank');
+    window.location.href = `whatsapp://send?phone=${finalPhone}&text=${encodedText}`;
   };
 
   const filteredInvoices = invoices.filter(inv => {
