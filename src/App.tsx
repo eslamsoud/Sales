@@ -719,7 +719,9 @@ export default function App() {
           name: l.name,
           phone: l.phone,
           detailedAddress: l.detailedAddress,
-          locationLink: l.locationLink
+          locationLink: l.locationLink,
+          type: l.type || '',
+          dateAdded: l.dateAdded || ''
         }))
       };
 
