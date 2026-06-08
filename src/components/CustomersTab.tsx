@@ -91,6 +91,7 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
   const [waLoadingId, setWaLoadingId] = useState<string | null>(null);
   const [discoveredGovFilter, setDiscoveredGovFilter] = useState('');
   const [discoveredAreaFilter, setDiscoveredAreaFilter] = useState('');
+  const [selectedLeads, setSelectedLeads] = useState<string[]>([]);
   const [sortBy, setSortBy] = useState<'none' | 'alpha' | 'purchases'>('none');
 
   React.useEffect(() => {
@@ -226,6 +227,16 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
       window.scrollTo({ top: 0, left: 0, behavior: 'smooth' });
     } else {
       showToast(`⚠️ جميع النتائج الحالية مضافة مسبقاً بقواعد البيانات!`);
+    }
+  };
+
+  const handleBulkDeleteAllGoogleLeads = async () => {
+    if (googleLeads.length === 0) return;
+    const proceed = await confirmDialog('هل أنت متأكد من مسح جميع العملاء المكتشفين من الذاكرة المؤقتة نهائياً؟');
+    if (proceed) {
+      setGoogleLeads([]);
+      setSelectedLeads([]);
+      showToast('✓ تم مسح جميع العملاء المكتشفين بنجاح!');
     }
   };
 
@@ -1497,6 +1508,32 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                     <p className="text-[10.5px] text-[#2B6CB0] font-bold mt-0.5">يتم الاحتفاظ بالعملاء هنا حتى بدون إنترنت للعودة إليهم</p>
                   </div>
                   <div className="flex gap-2 items-center">
+                    {selectedLeads.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          const proceed = await confirmDialog(`هل أنت متأكد من مسح ${selectedLeads.length} عميل محدد؟`);
+                          if (proceed) {
+                            setGoogleLeads(prev => prev.filter(g => !selectedLeads.includes(g.id)));
+                            setSelectedLeads([]);
+                            showToast('✓ تم مسح العملاء المحددين بنجاح!');
+                          }
+                        }}
+                        className="text-[10px] bg-rose-100 hover:bg-rose-200 text-rose-800 font-black px-2 py-1.5 rounded-lg flex items-center gap-1 cursor-pointer shadow-xs transition-colors border border-rose-300"
+                      >
+                        <Trash2 className="h-3 w-3" />
+                        <span className="hidden sm:inline-block">مسح المحدد ({selectedLeads.length})</span>
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={handleBulkDeleteAllGoogleLeads}
+                      className="text-[10px] bg-rose-50 hover:bg-rose-100 text-rose-700 font-black px-2 py-1.5 rounded-lg flex items-center gap-1 cursor-pointer shadow-xs transition-colors border border-rose-200"
+                      title="مسح جميع العملاء المكتشفين"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                      <span className="hidden sm:inline-block">مسح الكل</span>
+                    </button>
                     <button
                       type="button"
                       onClick={() => {
@@ -1571,6 +1608,23 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
 
                 return (
                   <div className="flex flex-col gap-3.5">
+                    <div className="flex items-center justify-between px-2 pb-1 border-b border-slate-100">
+                      <label className="flex items-center gap-2 text-xs font-bold text-[#1A365D] cursor-pointer">
+                        <input 
+                          type="checkbox"
+                          checked={filteredGoogleLeads.length > 0 && selectedLeads.length === filteredGoogleLeads.length}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setSelectedLeads(filteredGoogleLeads.map(l => l.id));
+                            } else {
+                              setSelectedLeads([]);
+                            }
+                          }}
+                          className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                        />
+                        تحديد الكل ({filteredGoogleLeads.length})
+                      </label>
+                    </div>
                   {filteredGoogleLeads.map((lead) => {
                     const alreadyRealCustomer = customers.some(c => c.phone === lead.phone || c.name.toLowerCase() === lead.name.toLowerCase());
                     const showConfirmed = lead.confirmed || alreadyRealCustomer;
@@ -1587,7 +1641,20 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                           className="p-4 bg-[#F7FAFC]/50 hover:bg-[#F7FAFC] flex items-center justify-between gap-4 cursor-pointer select-none"
                         >
                           <div className="flex flex-col gap-1 text-sm select-none">
-                            <span className="font-extrabold text-slate-850 text-base flex items-center gap-1.5 leading-snug">
+                            <span className="font-extrabold text-slate-850 text-base flex items-center gap-2 leading-snug">
+                              <input
+                                type="checkbox"
+                                checked={selectedLeads.includes(lead.id)}
+                                onChange={(e) => {
+                                  if (e.target.checked) {
+                                    setSelectedLeads(prev => [...prev, lead.id]);
+                                  } else {
+                                    setSelectedLeads(prev => prev.filter(id => id !== lead.id));
+                                  }
+                                }}
+                                onClick={(e) => e.stopPropagation()}
+                                className="h-4 w-4 rounded border-slate-300 text-rose-600 focus:ring-rose-500 cursor-pointer"
+                              />
                               {showConfirmed ? (
                                 <span className="h-2.5 w-2.5 rounded-full bg-emerald-500 shrink-0"></span>
                               ) : (

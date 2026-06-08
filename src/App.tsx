@@ -32,7 +32,7 @@ import InvoiceTab from './components/InvoiceTab';
 import AuthGate from './components/AuthGate';
 import AiChatAssistant from './components/AiChatAssistant';
 import { Lock, Fingerprint, Key, ShieldAlert, CheckCircle, RefreshCw, Save, LogOut, MessageCircle, Bell, Settings as SettingsIcon, HelpCircle, AlertCircle } from 'lucide-react';
-import { confirmEvents } from './utils/confirm';
+import { confirmEvents, confirmDialog } from './utils/confirm';
 import { idbGet, idbSet } from './utils/idb';
 
 export default function App() {
@@ -377,6 +377,14 @@ export default function App() {
     }, 300);
   };
 
+  const markAsDeleted = (id: string) => {
+    const deleted = JSON.parse(localStorage.getItem('deleted_records_sys') || '[]');
+    if (!deleted.includes(id)) {
+      deleted.push(id);
+      localStorage.setItem('deleted_records_sys', JSON.stringify(deleted));
+    }
+  };
+
   const handleAddProduct = (newProd: Omit<Product, 'id'>) => {
     if (checkSimulationGuard()) return;
     const id = `prod-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
@@ -420,6 +428,7 @@ export default function App() {
   const handleDeleteLoad = (id: string) => {
     if (checkSimulationGuard()) return;
     setFactoryLoads(factoryLoads.filter(load => load.id !== id));
+    markAsDeleted(id);
     promptForSync('حذف حمولة من السيارة');
   };
 
@@ -470,6 +479,7 @@ export default function App() {
   const handleDeleteCustomer = (id: string) => {
     if (checkSimulationGuard()) return;
     setCustomers(customers.filter(c => c.id !== id));
+    markAsDeleted(id);
     promptForSync('حذف عميل من الدليل');
   };
 
@@ -527,6 +537,7 @@ export default function App() {
       ));
     }
     setInvoices(prev => prev.filter(inv => inv.id !== id));
+    markAsDeleted(id);
     promptForSync('حذف فاتورة بيع');
   };
 
@@ -546,6 +557,7 @@ export default function App() {
   const handleDeleteExpense = (id: string) => {
     if (checkSimulationGuard()) return;
     setExpenses(expenses.filter(e => e.id !== id));
+    markAsDeleted(id);
     promptForSync('حذف مصروف/إيراد');
   };
 
@@ -577,6 +589,7 @@ export default function App() {
   const handleDeleteTrip = (id: string) => {
     if (checkSimulationGuard()) return;
     setTrips(trips.filter(t => t.id !== id));
+    markAsDeleted(id);
     promptForSync('حذف مشوار أو تحرك');
   };
 
@@ -613,10 +626,11 @@ export default function App() {
       setIsHeaderSyncing(true);
 
       const totalSales = invoices.reduce((sum, inv) => sum + (inv.totalAfterDiscount || 0), 0);
-      const totalSpent = expenses.reduce((sum, exp) => sum + (exp.amount || 0), 0);
-      const extraRevenues = 0; 
+      const totalSpent = expenses.filter(e => e.type !== 'revenue').reduce((sum, exp) => sum + (exp.amount || 0), 0);
+      const extraRevenues = expenses.filter(e => e.type === 'revenue').reduce((sum, exp) => sum + (exp.amount || 0), 0);
       const netProfit = totalSales + extraRevenues - totalSpent;
 
+      const deletedIds = JSON.parse(localStorage.getItem('deleted_records_sys') || '[]');
       const customersMap = new Map(customers.map(c => [c.id, c]));
       const productsMap = new Map(products.map(p => [p.id, p]));
 
@@ -638,6 +652,7 @@ export default function App() {
 
       const payload = {
         type: 'تقرير_كامل',
+        deletedIds: deletedIds,
         metadata: {
           syncedAt: new Date().toISOString(),
           app: 'نظام المبيعات والمخزون للسيارة',
@@ -651,17 +666,20 @@ export default function App() {
             id: inv.id,
             invNum: inv.invoiceNumber,
             customerName: cust ? cust.name : 'عميل مجهول',
+            customerId: inv.customerId,
             area: cust ? cust.area : 'منطقة مجهولة',
             date: inv.date,
+            totalBeforeDiscount: inv.totalBeforeDiscount,
             total: inv.totalAfterDiscount,
             paidAmount: inv.paidAmount !== undefined ? inv.paidAmount : inv.totalAfterDiscount,
             delegateName: inv.delegateName || 'مجهول',
             delegatePhone: inv.delegatePhone || '',
             notes: inv.notes,
-            items: inv.items || []
+            items: inv.items || [],
+            isDelivered: inv.isDelivered || false
           };
         }),
-        expenses: (expenses || []).filter(e => e.amount > 0).map(e => ({
+        expenses: (expenses || []).filter(e => e.amount > 0 && (isManager || e.delegatePhone === currentUser?.phone)).map(e => ({
           id: e.id,
           date: e.date,
           amount: e.amount,
@@ -671,22 +689,24 @@ export default function App() {
           delegateName: e.delegateName || 'مجهول',
           delegatePhone: e.delegatePhone || ''
         })),
-        trips: (trips || []).map(t => ({
+        trips: (trips || []).filter(t => isManager || t.delegatePhone === currentUser?.phone).map(t => ({
           id: t.id,
           description: t.description,
           price: t.price,
           status: t.collected ? 'محصلة' : 'غير محصلة',
           date: t.date || new Date().toISOString(),
           delegateName: t.delegateName || 'مجهول',
-          delegatePhone: t.delegatePhone || ''
+          delegatePhone: t.delegatePhone || '',
+          odometerStart: t.odometerStart || '',
+          odometerEnd: t.odometerEnd || ''
         })),
-        products: products.map(p => ({
+        products: isManager ? products.map(p => ({
           id: p.id,
           name: p.name,
           price: p.price,
           count: p.weights ? p.weights.length : 0,
           weights: p.weights || []
-        })),
+        })) : [],
         customers: customers.map(c => {
           return {
             id: c.id,
@@ -702,7 +722,7 @@ export default function App() {
             lastPurchaseDate: c.lastPurchaseDate || ''
           }
         }),
-        users: freshUsersList.map(u => ({
+        users: isManager ? freshUsersList.map(u => ({
           name: u.name,
           phone: u.phone,
           role: u.role,
@@ -712,8 +732,8 @@ export default function App() {
           permittedTabs: (u.permittedTabs || []).join(','),
           permittedSubTabs: (u.permittedSubTabs || []).join(','),
           canEditPrices: u.canEditPrices !== false
-        })),
-        factoryLoads: (factoryLoads || []).map(fl => {
+        })) : [],
+        factoryLoads: (factoryLoads || []).filter(fl => isManager || fl.delegatePhone === currentUser?.phone).map(fl => {
           const prod = productsMap.get(fl.productId);
           const activeWeights = prod ? (prod.weights && prod.weights.length > 0 ? prod.weights : getProductWeightsFallback(prod)) : [];
           const wt = activeWeights.find(w => w.id === fl.weightId);
@@ -761,6 +781,9 @@ export default function App() {
         status: 'success',
         actionDesc: 'مزامنة شاملة للبيانات'
       }, ...prev]);
+
+      // 🚨 الحل الجذري لتراكم المحذوفات: تفريغ سلة المحذوفات بعد كل رفع ناجح لضمان عدم مسح ملفات جديدة بالخطأ
+      localStorage.removeItem('deleted_records_sys');
 
       setIsHeaderSyncing(false);
       return true;
@@ -975,6 +998,14 @@ export default function App() {
       return;
     }
 
+    let shouldReplace = false;
+    if (!isSilent) {
+      const proceed = await confirmDialog("هل أنت متأكد من رغبتك في استدعاء وتحديث البيانات من السحابة (جوجل شيت)؟", false);
+      if (!proceed) return;
+
+      shouldReplace = await confirmDialog("كيف تريد تحديث البيانات؟\n\n[موافق]: مسح البيانات المحلية بالكامل واستبدالها ببيانات السحابة.\n[إلغاء]: دمج البيانات السحابية مع الموجودة (إضافة).", true);
+      showToast("☁️ جاري استدعاء البيانات من السحابة...");
+    }
 
     try {
       const response = await fetch(settings.googleSheetsUrl);
@@ -1023,7 +1054,17 @@ export default function App() {
             uniqueMappedUsers.unshift(currentOwner);
           }
           
-          handleUpdateUsersList(uniqueMappedUsers);
+          if (shouldReplace) {
+            handleUpdateUsersList(uniqueMappedUsers);
+          } else {
+            const merged = [...usersList];
+            uniqueMappedUsers.forEach((nu: any) => {
+              const idx = merged.findIndex(u => u.phone === nu.phone);
+              if (idx > -1) merged[idx] = nu;
+              else merged.push(nu);
+            });
+            handleUpdateUsersList(merged);
+          }
         }
 
         // 2. Update products and categories (النسخة المسطحة الجديدة المتوافقة مع التعديل اليدوي)
@@ -1069,7 +1110,19 @@ export default function App() {
           });
           
           const mappedProducts = Object.values(productGroups);
-          setProducts(mappedProducts);
+          if (shouldReplace) {
+            setProducts(mappedProducts);
+          } else {
+            setProducts(prev => {
+              const merged = [...prev];
+              mappedProducts.forEach(np => {
+                const idx = merged.findIndex(p => p.id === np.id);
+                if (idx > -1) merged[idx] = np;
+                else merged.push(np as Product);
+              });
+              return merged;
+            });
+          }
         } else if (data.products && Array.isArray(data.products)) {
           // التوافق الرجعي لو السيرفر لسه مبعتش النسخة المسطحة
           const mappedProducts = data.products.map((p: any) => ({
@@ -1081,7 +1134,19 @@ export default function App() {
             category: p.category || 'عام',
             weights: Array.isArray(p.weights) && p.weights.length > 0 ? p.weights : [{ id: '1', size: 'كرتونة', cartonPriceFromFactory: Number(p.price || 0)*12, unitsPerCarton: 12, factoryPricePerUnit: Number(p.price || 0), profitMarginPercent: 0, retailPricePerUnit: Number(p.price || 0) }]
           }));
-          setProducts(mappedProducts);
+          if (shouldReplace) {
+            setProducts(mappedProducts);
+          } else {
+            setProducts(prev => {
+              const merged = [...prev];
+              mappedProducts.forEach((np: any) => {
+                const idx = merged.findIndex(p => p.id === np.id);
+                if (idx > -1) merged[idx] = np;
+                else merged.push(np);
+              });
+              return merged;
+            });
+          }
         }
 
         // 3. Update customers list
@@ -1105,7 +1170,7 @@ export default function App() {
           thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
           const mappedInvoices = data.invoices.map((inv: any) => {
-            const cust = customers.find(c => c.name === inv.customerName);
+            const cust = customers.find(c => c.id === inv.customerId || c.name === inv.customerName);
             return {
               id: inv.id || String(Math.random()),
               invoiceNumber: inv.invNum || inv.invoiceNumber,
@@ -1113,13 +1178,14 @@ export default function App() {
               date: inv.date || new Date().toISOString(),
               items: Array.isArray(inv.items) ? inv.items : [],
               discount: inv.discount || 0,
-              totalBeforeDiscount: inv.totalBeforeDiscount || inv.total || 0,
-              totalAfterDiscount: inv.total || inv.totalAfterDiscount || 0,
+              totalBeforeDiscount: Number(inv.totalBeforeDiscount) || Number(inv.total) || 0,
+              totalAfterDiscount: Number(inv.total) || Number(inv.totalAfterDiscount) || 0,
               paidAmount: inv.paidAmount !== undefined ? Number(inv.paidAmount) : Number(inv.total || 0),
               remainingAmount: inv.remainingAmount || 0,
               notes: inv.notes || '',
               delegateName: inv.delegateName || 'مجهول',
-              delegatePhone: inv.delegatePhone || ''
+              delegatePhone: inv.delegatePhone || '',
+              isDelivered: inv.isDelivered === 'true' || inv.isDelivered === true
             };
           }).filter((inv: any) => {
             // تصفية الفواتير القديمة (أكثر من 30 يوم ومسددة بالكامل) لتوفير المساحة
@@ -1128,7 +1194,19 @@ export default function App() {
             return !(invDate < thirtyDaysAgo && isPaid);
           });
           
-          setInvoices(mappedInvoices);
+          if (shouldReplace) {
+            setInvoices(mappedInvoices);
+          } else {
+            setInvoices(prev => {
+              const merged = [...prev];
+              mappedInvoices.forEach((ni: any) => {
+                const idx = merged.findIndex(i => i.id === ni.id);
+                if (idx > -1) merged[idx] = ni;
+                else merged.push(ni);
+              });
+              return merged;
+            });
+          }
         }
 
         if (data.expenses && Array.isArray(data.expenses)) {
@@ -1157,7 +1235,19 @@ export default function App() {
               delegatePhone: e.delegatePhone || ''
             };
           }).filter((e: any) => e.amount > 0 && e.description);
-          setExpenses(mappedExpenses);
+          if (shouldReplace) {
+            setExpenses(mappedExpenses);
+          } else {
+            setExpenses(prev => {
+              const merged = [...prev];
+              mappedExpenses.forEach((ne: any) => {
+                const idx = merged.findIndex(e => e.id === ne.id);
+                if (idx > -1) merged[idx] = ne;
+                else merged.push(ne);
+              });
+              return merged;
+            });
+          }
         }
 
         if (data.trips && Array.isArray(data.trips)) {
@@ -1166,11 +1256,25 @@ export default function App() {
             date: t.date,
             description: t.description || t.area || '',
             price: Number(t.price || 0),
-            collected: t.status === 'محصلة' || t.collected === true,
+            collected: t.status === 'محصلة' || t.status === 'true' || t.collected === true,
             delegateName: t.delegateName || 'مجهول',
-            delegatePhone: t.delegatePhone || ''
+            delegatePhone: t.delegatePhone || '',
+            odometerStart: t.odometerStart ? Number(t.odometerStart) : undefined,
+            odometerEnd: t.odometerEnd ? Number(t.odometerEnd) : undefined
           }));
-          setTrips(mappedTrips);
+          if (shouldReplace) {
+            setTrips(mappedTrips);
+          } else {
+            setTrips(prev => {
+              const merged = [...prev];
+              mappedTrips.forEach((nt: any) => {
+                const idx = merged.findIndex(t => t.id === nt.id);
+                if (idx > -1) merged[idx] = nt;
+                else merged.push(nt);
+              });
+              return merged;
+            });
+          }
         }
 
         if (data.factoryLoads && Array.isArray(data.factoryLoads)) {
@@ -1186,10 +1290,23 @@ export default function App() {
             delegateName: fl.delegateName || '',
             delegatePhone: fl.delegatePhone || ''
           }));
-          setFactoryLoads(mappedLoads);
+          if (shouldReplace) {
+            setFactoryLoads(mappedLoads);
+          } else {
+            setFactoryLoads(prev => {
+              const merged = [...prev];
+              mappedLoads.forEach((nl: any) => {
+                const idx = merged.findIndex(l => l.id === nl.id);
+                if (idx > -1) merged[idx] = nl;
+                else merged.push(nl);
+              });
+              return merged;
+            });
+          }
         }
 
         if (!isSilent) showToast("✓ تم التحديث بنجاح!");
+        localStorage.removeItem('deleted_records_sys');
       } else {
         if (!isSilent) showToast("تنبيه: تم إرجاع بيانات فارغة ومخالفة للنموذج. جاري التحميل العادي...");
         setTimeout(() => {
