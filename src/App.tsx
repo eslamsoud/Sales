@@ -84,7 +84,10 @@ export default function App() {
     const entered = lockPassword.trim();
     const correct = currentUser.phone === '01228466613'
       ? (localStorage.getItem('owner_passcode_sys') || '1987')
-      : (currentUser.password || '1234');
+      : (() => {
+          try { return decodeURIComponent(atob(currentUser.password || '')); }
+          catch(e) { return currentUser.password || '1234'; }
+        })();
 
     if (entered === correct) {
       setIsLockedByTimeout(false);
@@ -872,7 +875,7 @@ export default function App() {
         method: 'POST',
         mode: 'no-cors',
         headers: {
-          'Content-Type': 'application/json',
+          'Content-Type': 'text/plain;charset=utf-8',
         },
         body: JSON.stringify(payload)
       });
@@ -1048,12 +1051,14 @@ export default function App() {
 
           <div className="border-t border-slate-100 pt-2 text-center">
             <button
-              onClick={() => {
-                localStorage.removeItem('authed_user_phone');
-                setCurrentUser(null);
-                setIsLockedByTimeout(false);
-                setLockPassword('');
-                setLockError('');
+              onClick={async () => {
+                if (await confirmDialog("هل أنت متأكد من تسجيل الخروج وتبديل الحساب؟", false)) {
+                  localStorage.removeItem('authed_user_phone');
+                  setCurrentUser(null);
+                  setIsLockedByTimeout(false);
+                  setLockPassword('');
+                  setLockError('');
+                }
               }}
               className="text-red-500 hover:text-red-700 hover:underline text-xs font-black cursor-pointer transition-colors"
             >
@@ -1066,6 +1071,9 @@ export default function App() {
   }
 
   async function handleSecureExit() {
+    const proceed = await confirmDialog("هل أنت متأكد من رغبتك في الخروج من النظام؟\nسيتم مزامنة وحفظ بياناتك سحابياً قبل الخروج للحفاظ عليها.", false);
+    if (!proceed) return;
+
     showToast("جاري الخروج الآمن والمزامنة السحابية...");
     const success = await syncAllDataToGoogle(true);
     if (success) {
@@ -1111,8 +1119,15 @@ export default function App() {
     }
 
     try {
-      // إضافة المتغير العشوائي (?t=Time) تمنع المتصفح من استخدام الكاش وتجبره على سحب داتا حقيقية من جوجل شيت
-      const response = await fetch(settings.googleSheetsUrl + '?t=' + Date.now());
+      // إضافة المتغير العشوائي وتفعيل منع الكاش لضمان سحب أحدث بيانات من جوجل شيت
+      const urlSeparator = settings.googleSheetsUrl.includes('?') ? '&' : '?';
+      const fetchUrl = settings.googleSheetsUrl + urlSeparator + 't=' + Date.now();
+      
+      const response = await fetch(fetchUrl, {
+        method: 'GET',
+        cache: 'no-store',
+        redirect: 'follow'
+      });
       if (!response.ok) {
         throw new Error(`استجابة غير صالحة من السيرفر: ${response.status}`);
       }
@@ -1283,7 +1298,7 @@ export default function App() {
           const mappedInvoices = data.invoices.map((inv: any) => {
             const cust = customers.find(c => c.id === inv.customerId || c.name === inv.customerName);
             return {
-              id: inv.id || String(Math.random()),
+              id: inv.id || inv.invNum || inv.invoiceNumber || String(Math.random()),
               invoiceNumber: inv.invNum || inv.invoiceNumber,
               customerId: cust ? cust.id : (inv.customerId || 'cust_' + Date.now()),
               date: inv.date || new Date().toISOString(),
@@ -1363,7 +1378,7 @@ export default function App() {
               };
             }
             return {
-              id: String(e.id || Math.random()).replace(/^'/, ''),
+              id: String(e.id || e.date + '-' + e.amount || Math.random()).replace(/^'/, ''),
               date: e.date,
               amount: Number(e.amount || 0),
               category: e.category,
@@ -1390,7 +1405,7 @@ export default function App() {
 
         if (data.trips && Array.isArray(data.trips)) {
           const mappedTrips = data.trips.map((t: any) => ({
-            id: t.id || String(Math.random()),
+            id: t.id || t.date + '-' + t.description || String(Math.random()),
             date: t.date,
             description: t.description || t.area || '',
             price: Number(t.price || 0),
@@ -1417,7 +1432,7 @@ export default function App() {
 
         if (data.factoryLoads && Array.isArray(data.factoryLoads)) {
           const mappedLoads = data.factoryLoads.map((fl: any) => ({
-            id: fl.id || String(Math.random()),
+            id: fl.id || fl.date + '-' + fl.productId || String(Math.random()),
             date: fl.date,
             productName: fl.productName,
             weightSize: fl.weightSize || 'كرتونة',

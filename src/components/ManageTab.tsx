@@ -72,7 +72,13 @@ function doGet(e) {
       var sheet = ss.getSheetByName(sheetName);
       if (!sheet || sheet.getLastRow() <= 1) return [];
       var data = sheet.getRange(2, 1, sheet.getLastRow() - 1, sheet.getLastColumn()).getValues();
-      return data.filter(function(row) { return row[0] && getSafeString(row[0]) !== ''; }).map(mapFn);
+      return data.filter(function(row) { 
+        var c0 = getSafeString(row[0]);
+        var c1 = getSafeString(row[1]);
+        var c2 = getSafeString(row[2]);
+        var c3 = getSafeString(row[3]);
+        return c0 !== '' || c1 !== '' || c2 !== '' || c3 !== ''; 
+      }).map(mapFn);
     }
 
     // أ. جلب الفواتير
@@ -128,7 +134,13 @@ function doGet(e) {
       var headers = newProductsSheet.getRange(1, 1, 1, newProductsSheet.getLastColumn()).getValues()[0];
       var hasRetailCarton = headers.indexOf('سعر بيع الكرتونة') !== -1;
       var pData = newProductsSheet.getRange(2, 1, newProductsSheet.getLastRow() - 1, newProductsSheet.getLastColumn()).getValues();
-      result.flatProducts = pData.filter(function(row) { return row[0] && getSafeString(row[0]) !== ''; }).map(function(row) {
+      result.flatProducts = pData.filter(function(row) { 
+         var c0 = getSafeString(row[0]);
+         var c1 = getSafeString(row[1]);
+         var c2 = getSafeString(row[2]);
+         var c3 = getSafeString(row[3]);
+         return c0 !== '' || c1 !== '' || c2 !== '' || c3 !== '';
+      }).map(function(row) {
         return { 
           weightId: getSafeString(row[0]), productId: getSafeString(row[1]), productName: getSafeString(row[2]),
           size: getSafeString(row[3]), cartonPriceFromFactory: getSafeNumber(row[4]),
@@ -146,7 +158,14 @@ function doGet(e) {
       var fHeaders = factorySheet.getRange(1, 1, 1, factorySheet.getLastColumn()).getValues()[0];
       var hasIds = fHeaders.indexOf('معرف الصنف') !== -1;
       var fData = factorySheet.getRange(2, 1, factorySheet.getLastRow() - 1, factorySheet.getLastColumn()).getValues();
-      result.factoryLoads = fData.filter(function(row) { return row[0] && getSafeString(row[0]) !== ''; }).map(function(row) {
+      result.factoryLoads = fData.filter(function(row) { 
+         var c0 = getSafeString(row[0]);
+         var c1 = getSafeString(row[1]);
+         var c2 = getSafeString(row[2]);
+         var c3 = getSafeString(row[3]);
+         var c4 = getSafeString(row[4]);
+         return c0 !== '' || c1 !== '' || c2 !== '' || c3 !== '' || c4 !== '';
+      }).map(function(row) {
         if (hasIds) {
           return { 
             id: getSafeString(row[0]), date: getSafeString(row[1]), productId: getSafeString(row[2]),
@@ -979,7 +998,10 @@ export default function ManageTab({
           phone: u.phone,
           role: u.role,
           status: u.status,
-          password: u.password || '1234',
+          password: (() => {
+            try { return decodeURIComponent(atob(u.password || '')); }
+            catch(e) { return u.password || '1234'; }
+          })(),
           customRoleName: u.customRoleName || '',
           permittedTabs: (u.permittedTabs || []).join(','),
           permittedSubTabs: (u.permittedSubTabs || []).join(','),
@@ -1020,7 +1042,7 @@ export default function ManageTab({
         method: 'POST',
         mode: 'no-cors',
         headers: {
-          'Content-Type': 'application/json',
+          'Content-Type': 'text/plain;charset=utf-8',
         },
         body: JSON.stringify(payload)
       });
@@ -1185,7 +1207,9 @@ export default function ManageTab({
               onKeyDown={(e) => {
                 if (e.key === 'Enter') {
                   const targetUser = usersList.find(u => u.phone === currentUser?.phone);
-                  const p = targetUser?.password ? decodeURIComponent(atob(targetUser.password)) : '';
+                    let p = '';
+                    try { p = targetUser?.password ? decodeURIComponent(atob(targetUser.password)) : ''; }
+                    catch(e) { p = targetUser?.password || ''; }
                   if (delegateTypedPassword === p) {
                     setIsDelegateUnlocked(true);
                   } else {
@@ -1198,7 +1222,9 @@ export default function ManageTab({
             <button
               onClick={() => {
                 const targetUser = usersList.find(u => u.phone === currentUser?.phone);
-                const p = targetUser?.password ? decodeURIComponent(atob(targetUser.password)) : '';
+                  let p = '';
+                  try { p = targetUser?.password ? decodeURIComponent(atob(targetUser.password)) : ''; }
+                  catch(e) { p = targetUser?.password || ''; }
                 if (delegateTypedPassword === p) {
                   setIsDelegateUnlocked(true);
                 } else {
@@ -1912,7 +1938,7 @@ export default function ManageTab({
                           }
                           localStorage.setItem('owner_passcode_sys', newOwnerPassword.trim());
                           const updatedList = usersList.map(u => 
-                            u.phone === '01228466613' ? { ...u, password: newOwnerPassword.trim() } : u
+                            u.phone === '01228466613' ? { ...u, password: btoa(encodeURIComponent(newOwnerPassword.trim())) } : u
                           );
                           onUpdateUsersList(updatedList);
                           setCurrentOwnerPassword('');
@@ -2080,7 +2106,10 @@ export default function ManageTab({
                                     <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
                                       <input
                                         type="text"
-                                        value={localPasswords[user.phone] !== undefined ? localPasswords[user.phone] : (user.password || '1234')}
+                                        value={localPasswords[user.phone] !== undefined ? localPasswords[user.phone] : (() => {
+                                          try { return decodeURIComponent(atob(user.password || '')); }
+                                          catch(e) { return user.password || '1234'; }
+                                        })()}
                                         onChange={(e) => {
                                           const newPass = e.target.value;
                                           setLocalPasswords(prev => ({ ...prev, [user.phone]: newPass }));
@@ -2091,7 +2120,9 @@ export default function ManageTab({
                                       <button
                                         type="button"
                                         onClick={() => {
-                                          const targetVal = localPasswords[user.phone] !== undefined ? localPasswords[user.phone] : (user.password || '1234');
+                                          const targetVal = localPasswords[user.phone] !== undefined 
+                                            ? btoa(encodeURIComponent(localPasswords[user.phone])) 
+                                            : user.password;
                                           if (window.confirm(`هل أنت متأكد من تغيير رمز المرور للمندوب "${user.name}"؟`)) {
                                             const updated = usersList.map(u => 
                                               u.phone === user.phone ? { ...u, password: targetVal } : u
@@ -2108,7 +2139,10 @@ export default function ManageTab({
                                         <span>تأكيد وحفظ الباسورد</span>
                                       </button>
                                     </div>
-                                    {localPasswords[user.phone] !== undefined && localPasswords[user.phone] !== (user.password || '1234') && (
+                                    {localPasswords[user.phone] !== undefined && localPasswords[user.phone] !== (() => {
+                                      try { return decodeURIComponent(atob(user.password || '')); }
+                                      catch(e) { return user.password || '1234'; }
+                                    })() && (
                                       <div className="text-[10px] text-amber-600 font-extrabold flex items-center gap-1 bg-amber-50 border border-amber-200 rounded-lg p-1.5 animate-pulse">
                                         <span>⚠️</span>
                                         <span>تنبيه: التغييرات التي أجريتها بالمسودّة لم تُحفظ بعد. اضغط على زر "تأكيد وحفظ الباسورد".</span>
