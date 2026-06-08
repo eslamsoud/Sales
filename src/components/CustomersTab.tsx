@@ -438,7 +438,6 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
         area: finalArea,
         governorate: finalGov,
         salesManager: salesManager.trim(),
-        salesManager: salesManager.trim(),
         locationLink: locationLink.trim() || `https://maps.google.com/?q=${encodeURIComponent(name.trim() + ' ' + finalArea)}`
       });
       showToast('✓ تم تعديل بيانات العميل بنجاح.');
