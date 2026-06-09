@@ -124,6 +124,7 @@ function ReportsTabComponent({
   const [custStartDate, setCustStartDate] = useState('');
   const [custEndDate, setCustEndDate] = useState('');
   const [custAreaFilter, setCustAreaFilter] = useState('');
+  const [custStatusFilter, setCustStatusFilter] = useState<'all' | 'active' | 'inactive'>('all'); // محمي
   const [expandedCustomerId, setExpandedCustomerId] = useState<string | null>(null);
   const [waLoadingId, setWaLoadingId] = useState<string | null>(null);
   
@@ -1046,8 +1047,12 @@ function ReportsTabComponent({
         }),
         isActive: totalPurchases > 0
       };
+    }).filter(c => {
+      if (custStatusFilter === 'active') return c.isActive;
+      if (custStatusFilter === 'inactive') return !c.isActive;
+      return true;
     }).sort((a, b) => b.totalPurchases - a.totalPurchases);
-  }, [customers, invoices, custAreaFilter, custDateFilter, custStartDate, custEndDate]);
+  }, [customers, invoices, custAreaFilter, custDateFilter, custStartDate, custEndDate, custStatusFilter]);
 
   // Unique areas
   const areas = Array.from(new Set(customers.map(c => c.area).filter(Boolean)));
@@ -1626,7 +1631,15 @@ function ReportsTabComponent({
                       setEditingInvoice(selectedInvoice);
                       setEditItems([...itemsList]);
                       setEditPaid(selectedInvoice.paidAmount !== undefined ? selectedInvoice.paidAmount : selectedInvoice.totalAfterDiscount);
-                      setEditDate(selectedInvoice.date ? selectedInvoice.date.substring(0, 16) : '');
+                    
+                    let safeDateStr = '';
+                    if (selectedInvoice.date) {
+                      const parsed = new Date(selectedInvoice.date);
+                      if (!isNaN(parsed.getTime())) {
+                        safeDateStr = parsed.toISOString().substring(0, 16);
+                      }
+                    }
+                    setEditDate(safeDateStr);
                       setEditNotes(selectedInvoice.notes || '');
                     }}
                     className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold py-2 px-3 rounded-lg text-xs transition-all active:scale-95 cursor-pointer text-center flex items-center justify-center gap-1 shadow-sm"
@@ -2227,8 +2240,8 @@ function ReportsTabComponent({
                         return false;
                       }
                     })
-                    .map(({ customer, invoices: unpaidInvs, totalDebt }) => (
-                      <div key={customer.id} className="border border-slate-200 rounded-xl bg-slate-50/50 p-3 flex flex-col gap-2.5">
+                    .map(({ customer, invoices: unpaidInvs, totalDebt }, cIdx) => (
+                      <div key={`${customer.id}_${cIdx}`} className="border border-slate-200 rounded-xl bg-slate-50/50 p-3 flex flex-col gap-2.5">
                         
                         {/* Customer title bar */}
                         <div className="flex justify-between items-start border-b border-slate-200 pb-2">
@@ -2254,10 +2267,10 @@ function ReportsTabComponent({
 
                         {/* Unpaid invoices detail list for this customer */}
                         <div className="flex flex-col gap-2">
-                          {unpaidInvs.map(inv => {
+                          {unpaidInvs.map((inv, iIdx) => {
                             const remaining = (inv.totalAfterDiscount || 0) - (inv.paidAmount ?? 0);
                             return (
-                              <div key={inv.id} className="bg-[#FFFFFF] border border-slate-150 p-2.5 rounded-lg flex items-center justify-between shadow-xs">
+                              <div key={`${inv.id}_${iIdx}`} className="bg-[#FFFFFF] border border-slate-150 p-2.5 rounded-lg flex items-center justify-between shadow-xs">
                                 <div className="flex flex-col gap-1 text-right">
                                   <div className="flex items-center gap-1.5 flex-row-reverse justify-end">
                                     <span className="text-[11px] font-bold text-[#1A365D]">فاتورة #{inv.invoiceNumber}</span>

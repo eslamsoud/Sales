@@ -54,16 +54,27 @@ export default function AiChatAssistant({
   const [isLoading, setIsLoading] = useState(false);
   const [showQuickActions, setShowQuickActions] = useState(true);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const chatContainerRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
   useEffect(() => {
-    if (isOpen) {
+    if (isOpen && !isMinimized) {
+      // When a new message is added, scroll to the bottom to show it.
       scrollToBottom();
     }
-  }, [messages, isOpen, isMinimized]);
+  }, [messages]);
+
+  useEffect(() => {
+    if (isOpen && !isMinimized) {
+      // When the chat is opened, scroll to the top to show the beginning.
+      setTimeout(() => {
+        if (chatContainerRef.current) chatContainerRef.current.scrollTop = 0;
+      }, 100);
+    }
+  }, [isOpen, isMinimized]);
 
   const [isListening, setIsListening] = useState(false);
   const [isPlaying, setIsPlaying] = useState<number | null>(null);
@@ -280,7 +291,7 @@ ${areaList || '- لا يوجد عملاء مسجلين.'}
 
       if (response.ok) {
         const data = await response.json();
-        setMessages(prev => [...prev, { id: Date.now().toString(), role: 'model', text: data.text }]);
+        setMessages(prev => [...prev, { id: Date.now().toString() + Math.random(), role: 'model', text: data.text }]);
       } else {
         throw new Error('فشل جلب الرد');
       }
@@ -404,7 +415,7 @@ ${areaList || '- لا يوجد عملاء مسجلين.'}
 
         {!isMinimized && (
           <>
-            <div className="flex-1 overflow-y-auto p-3 flex flex-col gap-3 custom-scroll bg-slate-50/50">
+            <div ref={chatContainerRef} className="flex-1 overflow-y-auto p-3 flex flex-col gap-3 custom-scroll bg-slate-50/50">
               {messages.map((m, idx) => (
                 <div key={idx} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                   <div className={`max-w-[90%] p-3 rounded-2xl text-xs leading-relaxed ${

@@ -745,9 +745,9 @@ export default function ManageTab({
   };
   useEffect(() => {
     if (subTab === 'ai_settings' && chatBottomRef.current) {
-      chatBottomRef.current.scrollIntoView({ behavior: 'smooth' });
+      chatBottomRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
-  }, [aiChatHistory, subTab]);
+  }, [aiChatHistory]);
 
   // 📡 رادار الخرائط الحي: تحديث تلقائي من السحابة كل 30 ثانية
   useEffect(() => {

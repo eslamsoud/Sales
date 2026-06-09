@@ -8,7 +8,7 @@ import { confirmDialog } from '../utils/confirm';
 import React, { useState } from 'react';
 import { Customer, AppSettings } from '../types';
 import { showToast } from '../utils/toast';
-import { Users, Plus, MapPin, Search, Phone, PhoneOff, ExternalLink, Trash2, ArrowRight, Compass, Check, Loader2, Star, MessageSquare, Send, Copy, Sparkles, Printer, FileText, Download, ArrowUpDown } from 'lucide-react';
+import { Users, Plus, MapPin, Search, Phone, PhoneOff, ExternalLink, Trash2, ArrowRight, Compass, Check, Loader2, Star, MessageSquare, Send, Copy, Sparkles, Printer, FileText, Download, ArrowUpDown, Edit } from 'lucide-react';
 import SecurePhoneDisplay from './SecurePhoneDisplay';
 import GmpMapEngine from './GmpMapEngine';
 
@@ -161,14 +161,6 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
   const [sortBy, setSortBy] = useState<'none' | 'alpha' | 'purchases'>('none');
   const [pendingLeadToCustomer, setPendingLeadToCustomer] = useState<any>(null);
 
-  const discoveredLeadTypeCounts = React.useMemo(() => {
-    return googleLeads.reduce((acc, lead) => {
-        const type = lead.type || 'غير محدد';
-        acc[type] = (acc[type] || 0) + 1;
-        return acc;
-    }, {} as Record<string, number>);
-  }, [googleLeads]);
-
   React.useEffect(() => {
     window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
   }, [activeTab]);
@@ -241,6 +233,14 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
   // Automatically save googleLeads inside localStorage on change
   React.useEffect(() => {
     localStorage.setItem('google_leads_staging_sys', JSON.stringify(googleLeads));
+  }, [googleLeads]);
+
+  const discoveredLeadTypeCounts = React.useMemo(() => {
+    return googleLeads.reduce((acc, lead) => {
+        const type = lead.type || 'غير محدد';
+        acc[type] = (acc[type] || 0) + 1;
+        return acc;
+    }, {} as Record<string, number>);
   }, [googleLeads]);
 
   const DEFAULT_AREAS = ['الزقازيق', 'ميت غمر', 'بدر', 'العاشر من رمضان', 'بلبيس', 'القاهرة'];

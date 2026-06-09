@@ -879,7 +879,7 @@ export default function App() {
       });
 
       setSyncLogs(prev => [{
-        id: Date.now().toString(),
+        id: Date.now().toString() + Math.random(),
         timestamp: new Date().toISOString(),
         delegateName: currentUser?.name || 'مجهول',
         status: 'success',
@@ -895,7 +895,7 @@ export default function App() {
       console.error('Error syncing to Google Sheets from header:', err);
       
       setSyncLogs(prev => [{
-        id: Date.now().toString(),
+        id: Date.now().toString() + Math.random(),
         timestamp: new Date().toISOString(),
         delegateName: currentUser?.name || 'مجهول',
         status: 'fail',
@@ -1870,7 +1870,7 @@ export default function App() {
             usersList={usersList}
             syncLogs={syncLogs}
             onAddSyncLog={(newLog) => {
-              setSyncLogs(prev => [{ ...newLog, id: Date.now().toString(), timestamp: new Date().toISOString() }, ...prev]);
+              setSyncLogs(prev => [{ ...newLog, id: Date.now().toString() + Math.random(), timestamp: new Date().toISOString() }, ...prev]);
               if (newLog.status === 'success' && currentUser) {
                 setUsersList(prev => {
                   const updated = prev.map(u => u.phone === currentUser.phone ? { ...u, lastSync: new Date().toISOString() } : u);

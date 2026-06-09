@@ -103,7 +103,10 @@ export default function InvoiceTab({
   const [manualInvoiceNumber, setManualInvoiceNumber] = useState(() => localStorage.getItem('invoice_draft_manualInvoiceNumber') || '');
   const [invoiceDate, setInvoiceDate] = useState(() => {
     const cached = localStorage.getItem('invoice_draft_date');
-    if (cached) return cached;
+    if (cached) {
+      const d = new Date(cached);
+      if (!isNaN(d.getTime())) return cached;
+    }
     const now = new Date();
     // Egyptian local datetime format alignment
     now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
@@ -1728,10 +1731,10 @@ export default function InvoiceTab({
                   <span className="text-[10px] text-gray-400 font-bold">يمكنك تعديل أو حذف الفاتورة حتى تأكيد استلامها فتنقل للارشيف</span>
                 </div>
                 <div className="flex flex-col gap-3 max-h-96 overflow-y-auto">
-                  {activeInvs.map(inv => {
+                  {activeInvs.map((inv, idx) => {
                     const cust = customers.find(c => c.id === inv.customerId);
                     return (
-                      <div key={inv.id} className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl flex flex-col gap-2.5 text-right">
+                      <div key={`${inv.id}_${idx}`} className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl flex flex-col gap-2.5 text-right">
                         <div className="flex justify-between items-center text-xs">
                           <span className="font-extrabold text-[#1A365D]">{cust?.name || 'عميل مجهول'} ({cust?.area || 'بدون منطقة'})</span>
                           <span className="font-black text-[#DD6B20] bg-orange-50 px-2 py-0.5 rounded-md">#{inv.invoiceNumber}</span>
@@ -1765,7 +1768,12 @@ export default function InvoiceTab({
                             onClick={() => {
                               setEditingInvoiceId(inv.id);
                               setSelectedCustomerId(inv.customerId);
-                              setInvoiceDate(inv.date.substring(0, 16));
+                              let dStr = '';
+                              const parsed = new Date(inv.date);
+                              if (!isNaN(parsed.getTime())) {
+                                dStr = parsed.toISOString().substring(0, 16);
+                              }
+                              setInvoiceDate(dStr);
                               setBillItems(inv.items);
                               setInvoiceNotes(inv.notes || '');
                               setCustomPaidAmount(inv.paidAmount !== undefined ? inv.paidAmount.toString() : inv.totalAfterDiscount.toString());
@@ -1848,12 +1856,12 @@ export default function InvoiceTab({
                 {(activeSubTab === 'archive' ? filteredArchiveList : filteredDebtorsList).length === 0 ? (
                   <p className="text-center text-gray-400 py-10 text-xs">لا توجد مبيعات مطابقة أو مسجلة بعد.</p>
                 ) : (
-                  [...(activeSubTab === 'archive' ? filteredArchiveList : filteredDebtorsList)].reverse().map(inv => {
+                  [...(activeSubTab === 'archive' ? filteredArchiveList : filteredDebtorsList)].reverse().map((inv, idx) => {
                     const cust = customers.find(c => c.id === inv.customerId);
                     const remaining = inv.totalAfterDiscount - (inv.paidAmount ?? inv.totalAfterDiscount);
                     return (
                       <div 
-                        key={inv.id} 
+                        key={`${inv.id}_${idx}`} 
                         className="p-3.5 bg-[#F7FAFC]/40 border border-slate-200 rounded-xl hover:bg-[#F7FAFC] hover:border-indigo-100 transition-colors flex items-center justify-between gap-3 text-xs"
                       >
                         <div className="flex flex-col gap-1 w-full">
