@@ -35,6 +35,9 @@ import { Lock, Fingerprint, Key, ShieldAlert, CheckCircle, RefreshCw, Save, LogO
 import { confirmEvents, confirmDialog } from './utils/confirm';
 import { idbGet, idbSet } from './utils/idb';
 
+// 🌐 رابط جوجل شيت الموحد والمدمج في التطبيق مباشرة
+const APP_SCRIPT_URL = import.meta.env.VITE_GOOGLE_SHEETS_URL || "https://script.google.com/macros/s/AKfycbyJnhlgJNJ4ggzet0h5z6n2oplDP4VVWy1tI52lgYpHqFqjl2FDJu3ZdaTCU0lxgjmy/exec";
+
 export default function App() {
   const [activeTab, setActiveTab] = useState<string>('dashboard');
   const [isChatOpen, setIsChatOpen] = useState<boolean>(false);
@@ -387,15 +390,8 @@ export default function App() {
 
   // التهيئة الصامتة (Silent Provisioning) من السيرفر للأجهزة الجديدة بدون تدخل المستخدم
   useEffect(() => {
-    const envUrl = import.meta.env.VITE_GOOGLE_SHEETS_URL;
-    if (envUrl && !settings.googleSheetsUrl) {
-      const updatedSettings = { ...settings, googleSheetsUrl: envUrl };
-      setSettings(updatedSettings);
-      localStorage.setItem('settings_sys', JSON.stringify(updatedSettings));
-      
-      if (usersList.length <= 1) {
-        handleUpdateData(true); // جلب البيانات صامتاً في الخلفية
-      }
+    if (APP_SCRIPT_URL && usersList.length <= 1) {
+      handleUpdateData(true); // جلب البيانات صامتاً في الخلفية
     }
   }, []);
 
@@ -453,7 +449,7 @@ export default function App() {
 
   // Operations handlers
   const promptForSync = (actionDesc: string) => {
-    if (!settings.googleSheetsUrl) return;
+    if (!APP_SCRIPT_URL) return;
     setTimeout(async () => {
       showToast(`☁️ جاري الحفظ السحابي...`);
       const success = await syncAllDataToGoogle(true);
@@ -705,8 +701,8 @@ export default function App() {
   };
 
   async function syncAllDataToGoogle(silent = false): Promise<boolean> {
-    if (!settings.googleSheetsUrl) {
-      if (!silent) alert('تنبيه: لم يتم وضع رابط مزامنة جوجل شيت في إعدادات النظام.');
+    if (!APP_SCRIPT_URL || APP_SCRIPT_URL === "ضع_رابط_الاسكريبت_الخاص_بك_هنا") {
+      if (!silent) alert('تنبيه: لم يتم تضمين رابط مزامنة جوجل شيت في ملفات النظام.');
       return false;
     }
 
@@ -871,7 +867,7 @@ export default function App() {
         }))
       };
 
-      await fetch(settings.googleSheetsUrl.trim(), {
+      await fetch(APP_SCRIPT_URL.trim(), {
         method: 'POST',
         mode: 'no-cors',
         headers: {
@@ -1101,8 +1097,8 @@ export default function App() {
   }
 
   async function handleUpdateData(isSilent = false) {
-    if (!settings.googleSheetsUrl) {
-      if (!isSilent) showToast("تنبيه: لم يتم ضبط رابط جوجل شيت في إعدادات النظام. جاري إعادة تشغيل عادية...");
+    if (!APP_SCRIPT_URL || APP_SCRIPT_URL === "ضع_رابط_الاسكريبت_الخاص_بك_هنا") {
+      if (!isSilent) showToast("تنبيه: لم يتم إعداد رابط جوجل شيت في ملفات النظام. جاري إعادة تشغيل عادية...");
       setTimeout(() => {
         window.location.reload();
       }, 1500);
@@ -1120,8 +1116,8 @@ export default function App() {
 
     try {
       // إضافة المتغير العشوائي وتفعيل منع الكاش لضمان سحب أحدث بيانات من جوجل شيت
-      const urlSeparator = settings.googleSheetsUrl.includes('?') ? '&' : '?';
-      const fetchUrl = settings.googleSheetsUrl + urlSeparator + 't=' + Date.now();
+      const urlSeparator = APP_SCRIPT_URL.includes('?') ? '&' : '?';
+      const fetchUrl = APP_SCRIPT_URL + urlSeparator + 't=' + Date.now();
       
       const response = await fetch(fetchUrl, {
         method: 'GET',

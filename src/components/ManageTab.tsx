@@ -47,6 +47,8 @@ const API_KEY =
   (globalThis as any).GOOGLE_MAPS_PLATFORM_KEY ||
   '';
 
+const APP_SCRIPT_URL = import.meta.env.VITE_GOOGLE_SHEETS_URL || "https://script.google.com/macros/s/AKfycbyJnhlgJNJ4ggzet0h5z6n2oplDP4VVWy1tI52lgYpHqFqjl2FDJu3ZdaTCU0lxgjmy/exec";
+
 const generateAppsScriptCode = () => {
   return `// 1. استقبال طلب الجلب والتحديث الميداني ثنائي الاتجاه
 function doGet(e) {
@@ -556,7 +558,6 @@ export default function ManageTab({
     window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
   }, [subTab, managerSubTab]);
   // Core settings form state
-  const [googleUrl, setGoogleUrl] = useState(settings.googleSheetsUrl || '');
   const [currency, setCurrency] = useState(settings.currency || 'ج.م');
   const [pitchGuidelines, setPitchGuidelines] = useState(settings.aiPitchGuidelines || '');
   const [retentionGuidelines, setRetentionGuidelines] = useState(settings.aiRetentionGuidelines || '');
@@ -854,7 +855,6 @@ export default function ManageTab({
     e.preventDefault();
     onUpdateSettings({
       ...settings,
-      googleSheetsUrl: googleUrl.trim(),
       currency: currency.trim(),
       aiPitchGuidelines: pitchGuidelines.trim(),
       aiRetentionGuidelines: retentionGuidelines.trim(),
@@ -884,9 +884,9 @@ export default function ManageTab({
     };
   }, [invoices, expenses]);
   const handleBulkSyncToGoogleSheets = async () => {
-    if (!googleUrl) {
+    if (!APP_SCRIPT_URL || APP_SCRIPT_URL === "ضع_رابط_الاسكريبت_الخاص_بك_هنا") {
       setSyncStatus('fail');
-      showToast('⚠️ خطأ: لم يتم وضع رابط مزامنة جوجل.');
+      showToast('⚠️ خطأ: لم يتم دمج رابط مزامنة جوجل في ملفات النظام.');
       return;
     }
     setSyncStatus('syncing');
@@ -1038,7 +1038,7 @@ export default function ManageTab({
           dateAdded: l.dateAdded || ''
         }))
       };
-      const resp = await fetch(googleUrl.trim(), {
+      const resp = await fetch(APP_SCRIPT_URL.trim(), {
         method: 'POST',
         mode: 'no-cors',
         headers: {
@@ -2728,14 +2728,13 @@ export default function ManageTab({
                       <label className="block text-xs font-bold text-[#2B6CB0] mb-1">رابط تطبيق الويب لجوجل (Google Web App URL):</label>
                       <input
                         type="url"
-                        placeholder="https://script.google.com/macros/s/.../exec"
-                        value={googleUrl}
-                        onChange={(e) => setGoogleUrl(e.target.value)}
-                        className="w-full bg-[#F7FAFC] border border-slate-200 rounded-lg p-2.5 text-xs text-left font-mono focus:ring-1 focus:ring-indigo-500"
+                        value={APP_SCRIPT_URL}
+                        disabled
+                        className="w-full bg-slate-100 border border-slate-200 rounded-lg p-2.5 text-xs text-left font-mono text-slate-500"
                         style={{ direction: 'ltr' }}
                       />
-                      <p className="text-[10px] text-gray-500 mt-1 leading-normal font-semibold">
-                        عند إضافة هذا الرابط، يقوم التطبيق بمزامنة المبيعات والمصروفات فوراً وتحديث ملف الأكسل السحابي لجوجل شيت تلقائياً.
+                      <p className="text-[10px] text-emerald-600 mt-1 leading-normal font-bold">
+                        ✓ تم دمج الرابط برمجياً في ملفات النظام لضمان مزامنة جميع هواتف المناديب تلقائياً.
                       </p>
                     </div>
                     
@@ -2802,13 +2801,13 @@ export default function ManageTab({
                         onClick={handleSaveSettings}
                         className="w-full bg-[#1A365D] hover:bg-[#2B6CB0] text-white active:scale-95 transition-all rounded-xl py-2.5 text-xs font-bold cursor-pointer"
                       >
-                        حفظ التعديلات ورابط جوجل
+                        حفظ التعديلات
                       </button>
                       <div className="border-t border-slate-200 mt-4 pt-4 flex flex-col gap-2">
                         <button
                           type="button"
                           onClick={handleBulkSyncToGoogleSheets}
-                          disabled={syncStatus === 'syncing' || !googleUrl}
+                          disabled={syncStatus === 'syncing' || !APP_SCRIPT_URL || APP_SCRIPT_URL === "ضع_رابط_الاسكريبت_الخاص_بك_هنا"}
                           className="w-full bg-[#1A365D] text-white border-transparent border border-indigo-700 rounded-lg py-2.5 text-xs font-bold hover:bg-[#1A365D] active:scale-95 transition-all cursor-pointer disabled:opacity-50 flex items-center justify-center gap-2"
                         >
                           <Send className="h-4 w-4" />
@@ -2845,7 +2844,7 @@ export default function ManageTab({
                   </p>
                   <button
                     onClick={handleBulkSyncToGoogleSheets}
-                    disabled={syncStatus === 'syncing' || !googleUrl}
+                    disabled={syncStatus === 'syncing' || !APP_SCRIPT_URL || APP_SCRIPT_URL === "ضع_رابط_الاسكريبت_الخاص_بك_هنا"}
                     className="whitespace-nowrap bg-[#1A365D] text-white border-transparent border border-indigo-700 rounded-lg py-2 px-4 text-xs font-bold hover:bg-indigo-900 active:scale-95 transition-all cursor-pointer disabled:opacity-50 flex items-center justify-center gap-1.5"
                   >
                     <Send className="h-4 w-4" />
