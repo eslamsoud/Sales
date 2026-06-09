@@ -756,7 +756,7 @@ export default function App() {
           totalExpenses: Number(totalSpent) || 0,
           netProfit: Number(netProfit) || 0
         },
-        invoices: (isSyncManager ? invoices : invoices.filter(inv => inv.delegatePhone === currentUser?.phone)).map(inv => {
+        invoices: invoices.map(inv => {
           const cust = customersMap.get(inv.customerId);
           return {
             id: inv.id,
@@ -775,7 +775,7 @@ export default function App() {
             isDelivered: inv.isDelivered || false
           };
         }),
-        expenses: (isSyncManager ? (expenses || []) : (expenses || []).filter(e => e.delegatePhone === currentUser?.phone)).filter(e => e.amount > 0).map(e => ({
+        expenses: (expenses || []).filter(e => e.amount > 0).map(e => ({
           id: e.id,
           date: e.date,
           amount: e.amount,
@@ -785,7 +785,7 @@ export default function App() {
           delegateName: e.delegateName || 'مجهول',
           delegatePhone: e.delegatePhone || ''
         })),
-        trips: (trips || []).filter(t => isSyncManager || t.delegatePhone === currentUser?.phone).map(t => ({
+        trips: (trips || []).map(t => ({
           id: t.id,
           description: t.description,
           price: t.price,
@@ -835,7 +835,7 @@ export default function App() {
             lastLat: u.lastLat || '',
             lastLng: u.lastLng || ''
         })) : [],
-        factoryLoads: (factoryLoads || []).filter(fl => isSyncManager || fl.delegatePhone === currentUser?.phone).map(fl => {
+        factoryLoads: (factoryLoads || []).map(fl => {
           const prod = productsMap.get(fl.productId);
           const activeWeights = prod ? (prod.weights && prod.weights.length > 0 ? prod.weights : getProductWeightsFallback(prod)) : [];
           const wt = activeWeights.find(w => w.id === fl.weightId);
@@ -1281,9 +1281,27 @@ export default function App() {
             governorate: c.governorate || 'القاهرة',
             detailedAddress: c.detailedAddress || '',
             locationLink: c.locationLink || '',
-            purchasesCount: Number(c.purchasesCount || 0)
+            purchasesCount: Number(c.purchasesCount || 0),
+            salesManager: c.salesManager || '',
+            totalSpent: Number(c.totalSpent || 0),
+            lastPurchaseDate: c.lastPurchaseDate || ''
           }));
-          setCustomers(mappedCustomers);
+          if (shouldReplace) {
+            setCustomers(mappedCustomers);
+          } else {
+            setCustomers(prev => {
+              const merged = [...prev];
+              mappedCustomers.forEach((nc: any) => {
+                const idx = merged.findIndex(c => c.id === nc.id || (c.phone && c.phone === nc.phone));
+                if (idx > -1) {
+                  merged[idx] = { ...merged[idx], ...nc };
+                } else {
+                  merged.push(nc);
+                }
+              });
+              return merged;
+            });
+          }
         }
 
         // 4. Update operational tables (Invoices, Expenses, Trips, Factory loads)
@@ -1454,7 +1472,12 @@ export default function App() {
           }
         }
 
-        if (!isSilent) showToast("✓ تم التحديث بنجاح!");
+        if (!isSilent) {
+          showToast("✓ تم التحديث بنجاح! جاري تنشيط الواجهة...");
+          setTimeout(() => {
+            window.location.reload();
+          }, 1500);
+        }
         localStorage.removeItem('deleted_records_sys');
       } else {
         if (!isSilent) showToast("تنبيه: تم إرجاع بيانات فارغة ومخالفة للنموذج. جاري التحميل العادي...");
@@ -1525,7 +1548,7 @@ export default function App() {
 
           <button
             onClick={handleUpdateData}
-            title="تحديث وإعادة تشغيل في حالة التعليق"
+            title="جلب وتحديث البيانات من السحابة ⬇️"
             className="flex items-center justify-center bg-white/10 hover:bg-white/20 active:scale-95 transition-all text-white p-2 rounded-xl border border-white/5 cursor-pointer shadow-sm"
             style={{ width: '36px', height: '33px' }}
           >
@@ -1535,7 +1558,7 @@ export default function App() {
           <button
             onClick={handleManualSave}
             disabled={isHeaderSyncing}
-            title="النسخ الاحتياطي وحفظ البيانات سحابياً"
+            title="صب وترحيل بيانات المندوب للسحابة ☁️"
             className="flex items-center justify-center bg-amber-500 hover:bg-amber-600 active:scale-95 transition-all text-white p-2 rounded-xl cursor-pointer shadow-sm disabled:opacity-50"
           >
             <Save className={`h-4.5 w-4.5 shrink-0 ${isHeaderSyncing ? 'animate-spin' : ''}`} />

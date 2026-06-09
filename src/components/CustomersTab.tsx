@@ -94,6 +94,7 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
   const [discoveredAreaFilter, setDiscoveredAreaFilter] = useState('');
   const [selectedLeads, setSelectedLeads] = useState<string[]>([]);
   const [sortBy, setSortBy] = useState<'none' | 'alpha' | 'purchases'>('none');
+  const [pendingLeadToCustomer, setPendingLeadToCustomer] = useState<any>(null);
 
   React.useEffect(() => {
     window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
@@ -389,33 +390,29 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
       if (!proceed) return;
     }
 
-    const smPrompt = window.prompt("اكتب اسم مدير البيع / المسؤول عن المحل (اختياري، للبحث لاحقاً):", "");
-    const salesManagerName = smPrompt !== null ? smPrompt.trim() : "";
-
-    onAddCustomer({
-      name: (lead.name || '').trim(),
-      phone: (lead.phone || '').trim(),
-      area: finalArea,
-      governorate: gov,
-      locationLink: lead.locationLink || `https://maps.google.com/?q=${encodeURIComponent((lead.name || '').trim() + ' ' + finalArea)}`,
-      salesManager: salesManagerName
-    });
-
-    // حذف العميل من المكتشفين لكونه انتقل رسمياً إلى العملاء الفعليين
-    setGoogleLeads(prev => prev.filter(g => g.id !== lead.id));
+    // بدلاً من الحفظ المباشر، نقوم بملء نموذج الإضافة ليتمكن المستخدم من المراجعة
+    setName((lead.name || '').trim());
+    setPhone((lead.phone || '').trim());
+    setSalesManager(''); // نترك مدير البيع فارغاً ليكتبه المندوب
     
-    // إضافة لقائمة المحذوفات لتحديث السحابة
-    const deleted = JSON.parse(localStorage.getItem('deleted_records_sys') || '[]');
-    if (!deleted.includes(lead.id)) {
-      deleted.push(lead.id);
-      localStorage.setItem('deleted_records_sys', JSON.stringify(deleted));
+    const areaExists = allAreas.includes(finalArea);
+    if (areaExists) {
+      setArea(finalArea);
+      setCustomArea('');
+    } else {
+      setArea('أخرى');
+      setCustomArea(finalArea);
     }
     
-    setSearchQuery((lead.name || '').trim());
+    setGovernorate(gov);
+    setLocationLink(lead.locationLink || `https://maps.google.com/?q=${encodeURIComponent((lead.name || '').trim() + ' ' + finalArea)}`);
+    
+    setPendingLeadToCustomer(lead);
     setActiveTab('list');
-    window.scrollTo({ top: 0, left: 0, behavior: 'smooth' });
+    setShowAddForm(true);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
 
-    showToast(`✓ تم نقل العميل "${lead.name}" للعملاء الفعليين بنجاح!`);
+    showToast(`يرجى مراجعة وتعديل بيانات العميل وإضافة (مدير البيع) قبل الحفظ النهائي.`);
   };
 
   const handleDeleteGoogleLead = (leadId: string) => {
@@ -477,8 +474,15 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
         phone: phone.trim(),
         area: finalArea,
         governorate: finalGov,
+        salesManager: salesManager.trim(),
         locationLink: locationLink.trim() || `https://maps.google.com/?q=${encodeURIComponent(name.trim() + ' ' + finalArea)}`
       });
+      
+      // مسح العميل من قائمة "المكتشفين" إذا كان منقولاً منها
+      if (pendingLeadToCustomer) {
+        handleDeleteGoogleLead(pendingLeadToCustomer.id);
+      }
+      showToast('✓ تم إضافة العميل الجديد بنجاح.');
     }
 
     setName('');
@@ -491,6 +495,7 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
     setGeoStatusMsg('');
     setShowAddForm(false);
     setEditingCustomer(null);
+    setPendingLeadToCustomer(null);
   };
 
   // Capture Geolocation coords and turn them into a google maps link automatically!
@@ -769,7 +774,11 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                   </h3>
                   <button
                     type="button"
-                    onClick={() => setShowAddForm(false)}
+                    onClick={() => {
+                      setShowAddForm(false);
+                      setPendingLeadToCustomer(null);
+                      setEditingCustomer(null);
+                    }}
                     className="text-gray-400 hover:text-[#2B6CB0] text-xs font-bold bg-[#F7FAFC] p-1 px-2.5 rounded-lg transition-colors cursor-pointer"
                   >
                     إلغاء
@@ -1537,38 +1546,36 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                     <p className="text-[10.5px] text-[#2B6CB0] font-bold mt-0.5">يتم الاحتفاظ بالعملاء هنا حتى بدون إنترنت للعودة إليهم</p>
                   </div>
                   <div className="flex gap-2 items-center">
-                    {selectedLeads.length > 0 && (
-                      currentUser?.role === 'owner' && (
+                    {currentUser?.role === 'owner' && (
                       <button
                         type="button"
                         onClick={async () => {
-                          const proceed = await confirmDialog(`هل أنت متأكد من مسح ${selectedLeads.length} عميل محدد؟`);
-                          if (proceed) {
-                            setGoogleLeads(prev => prev.filter(g => !selectedLeads.includes(g.id)));
-                            const deleted = JSON.parse(localStorage.getItem('deleted_records_sys') || '[]');
-                            selectedLeads.forEach(id => { if (!deleted.includes(id)) deleted.push(id); });
-                            localStorage.setItem('deleted_records_sys', JSON.stringify(deleted));
-                            setSelectedLeads([]);
-                            showToast('✓ تم مسح العملاء المحددين بنجاح!');
+                          if (selectedLeads.length > 0) {
+                            const proceed = await confirmDialog(`هل أنت متأكد من مسح ${selectedLeads.length} عميل محدد؟`);
+                            if (proceed) {
+                              setGoogleLeads(prev => prev.filter(g => !selectedLeads.includes(g.id)));
+                              const deleted = JSON.parse(localStorage.getItem('deleted_records_sys') || '[]');
+                              selectedLeads.forEach(id => { if (!deleted.includes(id)) deleted.push(id); });
+                              localStorage.setItem('deleted_records_sys', JSON.stringify(deleted));
+                              setSelectedLeads([]);
+                              showToast('✓ تم مسح العملاء المحددين بنجاح!');
+                            }
+                          } else {
+                            handleBulkDeleteAllGoogleLeads();
                           }
                         }}
-                        className="text-[10px] bg-rose-100 hover:bg-rose-200 text-rose-800 font-black px-2 py-1.5 rounded-lg flex items-center gap-1 cursor-pointer shadow-xs transition-colors border border-rose-300"
+                        className={`text-[10px] font-black px-2 py-1.5 rounded-lg flex items-center gap-1 cursor-pointer shadow-xs transition-colors border ${
+                          selectedLeads.length > 0 
+                            ? 'bg-rose-100 hover:bg-rose-200 text-rose-800 border-rose-300' 
+                            : 'bg-rose-50 hover:bg-rose-100 text-rose-700 border-rose-200'
+                        }`}
+                        title={selectedLeads.length > 0 ? "مسح العملاء المحددين" : "مسح جميع العملاء المكتشفين"}
                       >
                         <Trash2 className="h-3 w-3" />
-                        <span className="hidden sm:inline-block">مسح المحدد ({selectedLeads.length})</span>
+                        <span className="hidden sm:inline-block">
+                          {selectedLeads.length > 0 ? `مسح المحدد (${selectedLeads.length})` : 'مسح الكل'}
+                        </span>
                       </button>
-                      )
-                    )}
-                    {currentUser?.role === 'owner' && (
-                    <button
-                      type="button"
-                      onClick={handleBulkDeleteAllGoogleLeads}
-                      className="text-[10px] bg-rose-50 hover:bg-rose-100 text-rose-700 font-black px-2 py-1.5 rounded-lg flex items-center gap-1 cursor-pointer shadow-xs transition-colors border border-rose-200"
-                      title="مسح جميع العملاء المكتشفين"
-                    >
-                      <Trash2 className="h-3 w-3" />
-                      <span className="hidden sm:inline-block">مسح الكل</span>
-                    </button>
                     )}
                     <button
                       type="button"
