@@ -117,6 +117,8 @@ export interface AppSettings {
   representativeName?: string; // اسم المندوب
   representativePhone?: string; // رقم هاتف المندوب
   appName?: string; // الاسم ليظهر في الفواتير (اسم النشاط)
+  aiName?: string; // اسم الصديق / المساعد الذكي
+  aiVoiceURI?: string; // معرّف الصوت المختار للردود
   workAreas?: Array<{ governorate: string; area: string }>; // مناطق العمل المضافة
 }
 
@@ -132,6 +134,7 @@ export interface UserAuth {
   lastActive?: string; // تاريخ ووقت آخر ظهور للمندوب
   lastSync?: string; // تاريخ ووقت آخر مزامنة تمت بنجاح للمندوب
   canEditPrices?: boolean; // السماح بتعديل الأسعار (القراءة فقط)
+  canUseAiAssistant?: boolean; // السماح باستخدام المستشار الذكي (AI)
   lastLat?: number; // إحداثيات الموقع (خط العرض)
   lastLng?: number; // إحداثيات الموقع (خط الطول)
   createdAt: string;

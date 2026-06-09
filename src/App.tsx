@@ -117,6 +117,7 @@ export default function App() {
         'prices_list', 'prices_calc', 'prices_bot'
       ],
       canEditPrices: true,
+      canUseAiAssistant: true,
       password: btoa(encodeURIComponent(localStorage.getItem('owner_passcode_sys') || '1987')),
       customRoleName: 'المدير العام 👑',
       createdAt: new Date().toISOString()
@@ -833,7 +834,8 @@ export default function App() {
             canEditPrices: u.canEditPrices !== false,
             lastActive: u.lastActive || '',
             lastLat: u.lastLat || '',
-            lastLng: u.lastLng || ''
+            lastLng: u.lastLng || '',
+            canUseAiAssistant: u.canUseAiAssistant !== false
         })) : [],
         factoryLoads: (factoryLoads || []).map(fl => {
           const prod = productsMap.get(fl.productId);
@@ -1148,6 +1150,7 @@ export default function App() {
               ? u.permittedSubTabs.split(',').map((t: string) => t.trim()).filter(Boolean)
               : Array.isArray(u.permittedSubTabs) ? u.permittedSubTabs : [],
             canEditPrices: u.canEditPrices !== false,
+            canUseAiAssistant: u.canUseAiAssistant !== false,
             password: (() => {
               const p = String(u.password || '').replace(/^'/, '');
               try { if (btoa(atob(p)) === p || btoa(decodeURIComponent(atob(p))) === p) return p; } catch(e) {}
@@ -1535,16 +1538,18 @@ export default function App() {
 
         {/* Actions Button Container (Left Side in RTL due to justify-between) */}
         <div className="flex items-center gap-2 mt-2.5 mb-0 pb-0 mr-0">
-          <button
-            onClick={() => setIsChatOpen(!isChatOpen)}
-            title="المستشار الميداني الذكي"
-            className={`flex items-center justify-center p-2 rounded-xl transition-all cursor-pointer shadow-sm ${
-              isChatOpen ? 'bg-indigo-500 hover:bg-indigo-600' : 'bg-white/10 hover:bg-white/20'
-            }`}
-          >
-            <MessageCircle className="h-4.5 w-4.5 shrink-0" />
-            <span className="hidden sm:inline mr-1 text-[10.5px] font-black">المستشار</span>
-          </button>
+          {effectiveUser.canUseAiAssistant !== false && (
+            <button
+              onClick={() => setIsChatOpen(!isChatOpen)}
+              title="المستشار الميداني الذكي"
+              className={`flex items-center justify-center p-2 rounded-xl transition-all cursor-pointer shadow-sm ${
+                isChatOpen ? 'bg-indigo-500 hover:bg-indigo-600' : 'bg-white/10 hover:bg-white/20'
+              }`}
+            >
+              <MessageCircle className="h-4.5 w-4.5 shrink-0" />
+              <span className="hidden sm:inline mr-1 text-[10.5px] font-black">المستشار</span>
+            </button>
+          )}
 
           <button
             onClick={handleUpdateData}
@@ -1932,17 +1937,20 @@ export default function App() {
         نظام إدارة المبيعات والمخزون © {new Date().getFullYear()} ملك EAGS Group
       </footer>
 
-      <AiChatAssistant 
-        isOpen={isChatOpen} 
-        setIsOpen={setIsChatOpen}
-        products={products}
-        factoryLoads={filteredFactoryLoads}
-        customers={customers}
-        invoices={filteredInvoices}
-        expenses={filteredExpenses}
-        trips={filteredTrips}
-        currentUser={effectiveUser}
-      />
+      {effectiveUser.canUseAiAssistant !== false && (
+        <AiChatAssistant 
+          isOpen={isChatOpen} 
+          setIsOpen={setIsChatOpen}
+          products={products}
+          factoryLoads={filteredFactoryLoads}
+          customers={customers}
+          invoices={filteredInvoices}
+          expenses={filteredExpenses}
+          trips={filteredTrips}
+          currentUser={effectiveUser}
+          settings={settings}
+        />
+      )}
 
       {/* Global Custom Toast / App Alerts */}
       <AnimatePresence>

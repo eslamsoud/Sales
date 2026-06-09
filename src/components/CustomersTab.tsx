@@ -8,7 +8,7 @@ import { confirmDialog } from '../utils/confirm';
 import React, { useState } from 'react';
 import { Customer, AppSettings } from '../types';
 import { showToast } from '../utils/toast';
-import { Users, Plus, MapPin, Search, Phone, ExternalLink, Trash2, ArrowRight, Compass, Check, Loader2, Star, MessageSquare, Send, Copy, Sparkles, Printer, FileText, Download, ArrowUpDown } from 'lucide-react';
+import { Users, Plus, MapPin, Search, Phone, PhoneOff, ExternalLink, Trash2, ArrowRight, Compass, Check, Loader2, Star, MessageSquare, Send, Copy, Sparkles, Printer, FileText, Download, ArrowUpDown } from 'lucide-react';
 import SecurePhoneDisplay from './SecurePhoneDisplay';
 import GmpMapEngine from './GmpMapEngine';
 
@@ -18,6 +18,36 @@ const EGYPT_GOVERNORATES = [
   'بني سويف', 'المنيا', 'أسيوط', 'سوهاج', 'قنا', 'الأقصر', 'أسوان', 'مطروح', 
   'الوادي الجديد', 'البحر الأحمر', 'شمال سيناء', 'جنوب سيناء', 'كفر الشيخ', 'أخرى'
 ];
+
+const EGYPT_CITIES: Record<string, string[]> = {
+  'القاهرة': ['مصر الجديدة', 'مدينة نصر', 'المعادي', 'التجمع الخامس', 'شبرا', 'المرج', 'حلوان', 'المطرية', 'الزيتون', 'السلام', 'البساتين', 'دار السلام', 'الخليفة', 'المقطم', 'القاهرة الجديدة', 'بدر', 'الشروق', '15 مايو', 'وسط البلد', 'عين شمس', 'الزمالك'],
+  'الجيزة': ['الجيزة', 'الدقي', 'المهندسين', 'الهرم', 'العجوزة', 'إمبابة', 'الشيخ زايد', '6 أكتوبر', 'العمرانية', 'البدرشين', 'الصف', 'أطفيح', 'العياط', 'منشأة القناطر', 'أوسيم', 'كرداسة', 'أبو النمرس', 'الحوامدية'],
+  'الإسكندرية': ['الإسكندرية', 'برج العرب', 'العامرية', 'المنتزه', 'الرمل', 'سيدي بشر', 'سموحة', 'ميامي', 'كليوباترا', 'البيطاش', 'الدخيلة', 'العجمي', 'المندرة', 'محرم بك', 'الجمرك', 'المنشية'],
+  'الشرقية': ['الزقازيق', 'أبو حماد', 'بلبيس', 'العاشر من رمضان', 'منيا القمح', 'فاقوس', 'الحسينية', 'أبو كبير', 'ديرب نجم', 'مشتول السوق', 'الإبراهيمية', 'كفر صقر', 'أولاد صقر', 'الصالحية الجديدة', 'القرين', 'القنايات'],
+  'الدقهلية': ['المنصورة', 'ميت غمر', 'السنبلاوين', 'دكرنس', 'أجا', 'بلقاس', 'شربين', 'طلخا', 'نبروه', 'جمصة', 'بني عبيد', 'المطرية', 'تمي الأمديد', 'محلة دمنة', 'الكردي'],
+  'البحيرة': ['دمنهور', 'كفر الدوار', 'رشيد', 'إدكو', 'أبو المطامير', 'أبو حمص', 'الدلنجات', 'المحمودية', 'الرحمانية', 'إيتاي البارود', 'شبراخيت', 'كوم حمادة', 'وادي النطرون', 'بدر'],
+  'القليوبية': ['بنها', 'شبرا الخيمة', 'قليوب', 'الخانكة', 'العبور', 'القناطر الخيرية', 'طوخ', 'قها', 'كفر شكر', 'شبين القناطر', 'الخصوص'],
+  'الغربية': ['طنطا', 'المحلة الكبرى', 'زفتى', 'كفر الزيات', 'سمنود', 'السنطة', 'بسيون', 'قطور'],
+  'المنوفية': ['شبين الكوم', 'منوف', 'مدينة السادات', 'سرس الليان', 'أشمون', 'الباجور', 'قويسنا', 'بركة السبع', 'تلا', 'الشهداء'],
+  'دمياط': ['دمياط', 'دمياط الجديدة', 'رأس البر', 'فارسكور', 'الزرقا', 'كفر سعد', 'كفر البطيخ', 'عزبة البرج', 'ميت أبو غالب', 'السرو'],
+  'بورسعيد': ['بورسعيد', 'بورفؤاد', 'الشرق', 'الزهور', 'الضواحي', 'المناخ', 'الجنوب'],
+  'الإسماعيلية': ['الإسماعيلية', 'فايد', 'القنطرة شرق', 'القنطرة غرب', 'التل الكبير', 'أبو صوير', 'القصاصين'],
+  'السويس': ['السويس', 'الأربعين', 'عتاقة', 'الجناين', 'فيصل'],
+  'كفر الشيخ': ['كفر الشيخ', 'دسوق', 'فوه', 'مطوبس', 'بلطيم', 'الحامول', 'بيلا', 'الرياض', 'سيدي سالم', 'قلين', 'برج البرلس', 'مسير', 'سيدي غازي'],
+  'الفيوم': ['الفيوم', 'سنورس', 'إطسا', 'طامية', 'إبشواي', 'يوسف الصديق'],
+  'بني سويف': ['بني سويف', 'الواسطى', 'ناصر', 'إهناسيا', 'ببا', 'سمسطا', 'الفشن'],
+  'المنيا': ['المنيا', 'مغاغة', 'بني مزار', 'مطاي', 'سمالوط', 'أبو قرقاص', 'ملوي', 'دير مواس', 'العدوة'],
+  'أسيوط': ['أسيوط', 'ديروط', 'القوصية', 'أبنوب', 'منفلوط', 'أبو تيج', 'الغنايم', 'ساحل سليم', 'البداري', 'الفتح', 'أسيوط الجديدة'],
+  'سوهاج': ['سوهاج', 'أخميم', 'البلينا', 'المراغة', 'المنشأة', 'دار السلام', 'جرجا', 'جهينة', 'ساقلتة', 'طما', 'طهطا', 'سوهاج الجديدة'],
+  'قنا': ['قنا', 'أبو تشت', 'فرشوط', 'نجع حمادي', 'الوقف', 'دشنا', 'قفط', 'قوص', 'نقادة'],
+  'الأقصر': ['الأقصر', 'إسنا', 'أرمنت', 'الطود', 'البياضية', 'القرنة', 'الزينية'],
+  'أسوان': ['أسوان', 'كوم أمبو', 'دراو', 'إدفو', 'نصر النوبة', 'أبو سمبل', 'كلابشة', 'الرديسية', 'البصيلية'],
+  'مطروح': ['مرسى مطروح', 'العلمين', 'الضبعة', 'براني', 'السلوم', 'سيدي بئراني', 'سيدي عبد الرحمن', 'النجيلة', 'سيوة'],
+  'البحر الأحمر': ['الغردقة', 'رأس غارب', 'سفاجا', 'القصير', 'مرسى علم', 'شلاتين', 'حلايب'],
+  'الوادي الجديد': ['الخارجة', 'الداخلة', 'الفرافرة', 'باريس', 'بلاط'],
+  'شمال سيناء': ['العريش', 'بئر العبد', 'الشيخ زويد', 'رفح', 'الحسنة', 'نخل'],
+  'جنوب سيناء': ['الطور', 'شرم الشيخ', 'دهب', 'نويبع', 'طابا', 'سانت كاترين', 'أبو رديس', 'أبو زنيمة', 'رأس سدر']
+};
 
 const getGovernorateForArea = (area: string): string => {
   const norm = (area || '').trim();
@@ -47,13 +77,47 @@ const getGovernorateForArea = (area: string): string => {
 
 const formatWhatsAppLink = (phone: string, encodedText: string = '') => {
   let cleaned = (phone || '').replace(/[^0-9]/g, '');
-  if (!cleaned) return `whatsapp://send?text=${encodedText}`;
+  if (!cleaned) return `https://wa.me/?text=${encodedText}`;
   if (cleaned.startsWith('0')) {
     cleaned = '20' + cleaned.substring(1);
   } else if (cleaned.length === 10 && cleaned.startsWith('1')) {
     cleaned = '20' + cleaned;
   }
-  return `whatsapp://send?phone=${cleaned}${encodedText ? '&text=' + encodedText : ''}`;
+  return `https://wa.me/${cleaned}${encodedText ? '?text=' + encodedText : ''}`;
+};
+
+const hasNoPhone = (phone?: string) => !phone || phone === 'غير مسجل' || phone.trim() === '';
+
+const getLeadCardTheme = (type: string) => {
+  const t = type || '';
+  if (t.includes('هايبر')) return 'bg-indigo-50/60 border-indigo-200 hover:border-indigo-300 shadow-sm';
+  if (t.includes('سوبر ماركت')) return 'bg-blue-50/60 border-blue-200 hover:border-blue-300 shadow-sm';
+  if (t.includes('ميني ماركت') || t.includes('كشك')) return 'bg-cyan-50/60 border-cyan-200 hover:border-cyan-300 shadow-sm';
+  if (t.includes('جملة') && !t.includes('نصف')) return 'bg-purple-50/60 border-purple-200 hover:border-purple-300 shadow-sm';
+  if (t.includes('نصف جملة')) return 'bg-fuchsia-50/60 border-fuchsia-200 hover:border-fuchsia-300 shadow-sm';
+  if (t.includes('توزيع')) return 'bg-violet-50/60 border-violet-200 hover:border-violet-300 shadow-sm';
+  if (t.includes('حلواني') || t.includes('مخبز')) return 'bg-pink-50/60 border-pink-200 hover:border-pink-300 shadow-sm';
+  if (t.includes('عطارة') || t.includes('علافة')) return 'bg-amber-50/60 border-amber-200 hover:border-amber-300 shadow-sm';
+  if (t.includes('تموين')) return 'bg-teal-50/60 border-teal-200 hover:border-teal-300 shadow-sm';
+  if (t.includes('مطعم') || t.includes('مطاعم')) return 'bg-orange-50/60 border-orange-200 hover:border-orange-300 shadow-sm';
+  if (t.includes('مطابخ') || t.includes('تجهيزات')) return 'bg-stone-50/60 border-stone-200 hover:border-stone-300 shadow-sm';
+  return 'bg-[#FFFFFF] border-slate-200 hover:border-slate-350 shadow-sm';
+};
+
+const getLeadBadgeTheme = (type: string) => {
+  const t = type || '';
+  if (t.includes('هايبر')) return 'bg-indigo-100 text-indigo-900 border-indigo-200';
+  if (t.includes('سوبر ماركت')) return 'bg-blue-100 text-blue-900 border-blue-200';
+  if (t.includes('ميني ماركت') || t.includes('كشك')) return 'bg-cyan-100 text-cyan-900 border-cyan-200';
+  if (t.includes('جملة') && !t.includes('نصف')) return 'bg-purple-100 text-purple-900 border-purple-200';
+  if (t.includes('نصف جملة')) return 'bg-fuchsia-100 text-fuchsia-900 border-fuchsia-200';
+  if (t.includes('توزيع')) return 'bg-violet-100 text-violet-900 border-violet-200';
+  if (t.includes('حلواني') || t.includes('مخبز')) return 'bg-pink-100 text-pink-900 border-pink-200';
+  if (t.includes('عطارة') || t.includes('علافة')) return 'bg-amber-100 text-amber-900 border-amber-200';
+  if (t.includes('تموين')) return 'bg-teal-100 text-teal-900 border-teal-200';
+  if (t.includes('مطعم') || t.includes('مطاعم')) return 'bg-orange-100 text-orange-900 border-orange-200';
+  if (t.includes('مطابخ') || t.includes('تجهيزات')) return 'bg-stone-100 text-stone-900 border-stone-200';
+  return 'bg-slate-100 text-slate-700 border-slate-200';
 };
 
 interface CustomersTabProps {
@@ -92,9 +156,18 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
   const [waLoadingId, setWaLoadingId] = useState<string | null>(null);
   const [discoveredGovFilter, setDiscoveredGovFilter] = useState('');
   const [discoveredAreaFilter, setDiscoveredAreaFilter] = useState('');
+  const [discoveredTypesFilter, setDiscoveredTypesFilter] = useState<string[]>([]);
   const [selectedLeads, setSelectedLeads] = useState<string[]>([]);
   const [sortBy, setSortBy] = useState<'none' | 'alpha' | 'purchases'>('none');
   const [pendingLeadToCustomer, setPendingLeadToCustomer] = useState<any>(null);
+
+  const discoveredLeadTypeCounts = React.useMemo(() => {
+    return googleLeads.reduce((acc, lead) => {
+        const type = lead.type || 'غير محدد';
+        acc[type] = (acc[type] || 0) + 1;
+        return acc;
+    }, {} as Record<string, number>);
+  }, [googleLeads]);
 
   React.useEffect(() => {
     window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
@@ -717,33 +790,31 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
               )}
               
               {showMaps && (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => setActiveTab('maps_finder')}
-                    className={`flex-1 text-center py-2.5 text-xs font-black transition-all cursor-pointer flex items-center justify-center gap-1.5 rounded-xl ${
-                      activeTab === 'maps_finder' ? 'bg-[#FFFFFF] text-[#DD6B20] shadow-xs border border-slate-200' : 'text-[#6B7280] bg-transparent hover:text-[#1A365D]'
-                    }`}
-                  >
-                    <Compass className="h-3.5 w-3.5" />
-                    <span>استكشاف عملاء</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setActiveTab('google_leads')}
-                    className={`flex-1 text-center py-2.5 text-xs font-black transition-all cursor-pointer flex items-center justify-center gap-1.5 rounded-xl ${
-                      activeTab === 'google_leads' ? 'bg-[#FFFFFF] text-[#DD6B20] shadow-xs border border-slate-200' : 'text-[#6B7280] bg-transparent hover:text-[#1A365D]'
-                    }`}
-                  >
-                    <span className="relative flex h-2 w-2">
-                      <span className={`animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75 ${googleLeads.filter(g => !g.confirmed).length === 0 ? 'hidden' : ''}`}></span>
-                      <span className={`relative inline-flex rounded-full h-2 w-2 bg-red-500 ${googleLeads.filter(g => !g.confirmed).length === 0 ? 'hidden' : ''}`}></span>
-                    </span>
-                    <span>عملاء مكتشفين ({googleLeads.length})</span>
-                  </button>
-                </>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('maps_finder')}
+                  className={`flex-1 text-center py-2.5 text-xs font-black transition-all cursor-pointer flex items-center justify-center gap-1.5 rounded-xl ${
+                    activeTab === 'maps_finder' ? 'bg-[#FFFFFF] text-[#DD6B20] shadow-xs border border-slate-200' : 'text-[#6B7280] bg-transparent hover:text-[#1A365D]'
+                  }`}
+                >
+                  <Compass className="h-3.5 w-3.5" />
+                  <span>استكشاف عملاء</span>
+                </button>
               )}
+
+              <button
+                type="button"
+                onClick={() => setActiveTab('google_leads')}
+                className={`flex-1 text-center py-2.5 text-xs font-black transition-all cursor-pointer flex items-center justify-center gap-1.5 rounded-xl ${
+                  activeTab === 'google_leads' ? 'bg-[#FFFFFF] text-[#DD6B20] shadow-xs border border-slate-200' : 'text-[#6B7280] bg-transparent hover:text-[#1A365D]'
+                }`}
+              >
+                <span className="relative flex h-2 w-2">
+                  <span className={`animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75 ${googleLeads.filter(g => !g.confirmed).length === 0 ? 'hidden' : ''}`}></span>
+                  <span className={`relative inline-flex rounded-full h-2 w-2 bg-red-500 ${googleLeads.filter(g => !g.confirmed).length === 0 ? 'hidden' : ''}`}></span>
+                </span>
+                <span>عملاء مكتشفين ({googleLeads.length})</span>
+              </button>
             </div>
           );
         })()}
@@ -890,6 +961,18 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
 
                                 return false;
                               });
+
+                              // الدمج الذكي للمدن والمراكز الرسمية التابعة للمحافظة المختارة
+                              if (currentGov) {
+                                const govKey = Object.keys(EGYPT_CITIES).find(k => k.toLowerCase() === currentGov);
+                                if (govKey && EGYPT_CITIES[govKey]) {
+                                  EGYPT_CITIES[govKey].forEach(city => {
+                                    if (!matchedAreas.includes(city)) {
+                                      matchedAreas.push(city);
+                                    }
+                                  });
+                                }
+                              }
 
                               const filtered = matchedAreas.filter(a => 
                                 !query || 
@@ -1313,22 +1396,26 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                   {mapsResults.map((lead) => {
                     const isAdded = googleLeads.some(g => g.name.toLowerCase() === lead.name.toLowerCase() || g.phone === lead.phone || addedLeadIds.includes(lead.id));
                     const isLeadExpanded = !!expandedGoogleLeads[lead.id];
+                    const isNoPhone = hasNoPhone(lead.phone);
+                    const themeClass = getLeadCardTheme(lead.type);
+                    const badgeClass = getLeadBadgeTheme(lead.type);
 
                     return (
-                      <div key={lead.id} className="border border-slate-150 rounded-xl overflow-hidden bg-[#FFFFFF] hover:border-indigo-200 transition-all flex flex-col shadow-sm">
+                      <div key={lead.id} className={`border rounded-xl overflow-hidden transition-all flex flex-col ${isNoPhone ? 'bg-rose-50/40 border-rose-200 hover:border-rose-300 shadow-sm' : themeClass}`}>
                         
                         {/* Interactive Header for Toggle */}
                         <div 
                           onClick={() => setExpandedGoogleLeads(prev => prev[lead.id] ? {} : { [lead.id]: true })}
-                          className="p-4 bg-[#F7FAFC]/60 hover:bg-[#F7FAFC] flex items-center justify-between gap-4 cursor-pointer transition-colors"
+                          className={`p-4 flex items-center justify-between gap-4 cursor-pointer transition-colors ${isNoPhone ? 'bg-rose-50/30 hover:bg-rose-50/60' : 'bg-[#F7FAFC]/60 hover:bg-[#F7FAFC]'}`}
                         >
                           <div className="flex flex-col gap-1.5 text-sm select-none">
-                            <span className="font-extrabold text-slate-850 text-base flex items-center gap-1.5 leading-snug">
+                            <span className={`font-extrabold text-base flex items-center gap-1.5 leading-snug ${isNoPhone ? 'text-rose-700' : 'text-slate-850'}`}>
                               <span className={`h-2.5 w-2.5 rounded-full shrink-0 transition-all ${isLeadExpanded ? 'bg-[#FFFFFF] text-[#1A365D] border-b-2 border-[#DD6B20] shadow-sm' : 'bg-slate-350'}`}></span>
+                              {isNoPhone && <PhoneOff className="h-4 w-4 text-rose-500 shrink-0" />}
                               {lead.name}
                             </span>
                             <div className="flex flex-wrap gap-1.5 mt-0.5">
-                              <span className="text-[10px] text-[#1A365D] font-extrabold bg-indigo-50/70 py-0.5 px-2 rounded border border-indigo-100 self-start">
+                              <span className={`text-[10px] font-extrabold py-0.5 px-2 rounded border self-start ${badgeClass}`}>
                                 تصنيف: {lead.type}
                               </span>
                               {lead.rating && (
@@ -1379,9 +1466,9 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                             {/* Contacts & Direct Action Buttons */}
                             <div className="bg-[#F7FAFC]/50 border border-slate-150 p-3 rounded-xl flex flex-col gap-3">
                               <div className="flex flex-col gap-1 text-xs">
-                                <span className="font-bold text-slate-650 flex items-center gap-1">
-                                  <Phone className="h-3.5 w-3.5 text-[#1A365D]" />
-                                  رقم التواصل الهاتف: <a href={`tel:${lead.phone}`} className="hover:underline font-mono font-bold text-[#1A365D]">{lead.phone}</a>
+                                <span className={`font-bold flex items-center gap-1 ${isNoPhone ? 'text-rose-600' : 'text-slate-650'}`}>
+                                  {isNoPhone ? <PhoneOff className="h-3.5 w-3.5 text-rose-500" /> : <Phone className="h-3.5 w-3.5 text-[#1A365D]" />}
+                                  رقم التواصل الهاتف: {isNoPhone ? <span className="font-bold">غير متوفر</span> : <a href={`tel:${lead.phone}`} className="hover:underline font-mono font-bold text-[#1A365D]">{lead.phone}</a>}
                                 </span>
                                 <span className="font-bold text-slate-650 flex items-center gap-1 mt-0.5">
                                   <MapPin className="h-3.5 w-3.5 text-emerald-500" />
@@ -1392,26 +1479,40 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                               {/* Quick Action triggers: Direct Call, WhatsApp message, AI Generator */}
                               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 border-t border-slate-150/60 pt-3">
                                 {/* Call Button */}
-                                <a
-                                  href={`tel:${lead.phone}`}
-                                  className="px-3.5 py-2 bg-[#F7FAFC] hover:bg-blue-100 text-blue-700 border border-blue-200 rounded-xl text-xs font-black flex items-center justify-center gap-1.5 transition-colors active:scale-95 text-center"
-                                  title="اتصال هاتفي سريع ومباشر"
-                                >
-                                  <Phone className="h-3.5 w-3.5" />
-                                  <span>اتصل بالعميل</span>
-                                </a>
+                                {isNoPhone ? (
+                                  <button disabled className="px-3.5 py-2 bg-slate-50 text-slate-400 border border-slate-200 rounded-xl text-xs font-black flex items-center justify-center gap-1.5 text-center cursor-not-allowed">
+                                    <PhoneOff className="h-3.5 w-3.5" />
+                                    <span>لا يوجد رقم</span>
+                                  </button>
+                                ) : (
+                                  <a
+                                    href={`tel:${lead.phone}`}
+                                    className="px-3.5 py-2 bg-[#F7FAFC] hover:bg-blue-100 text-blue-700 border border-blue-200 rounded-xl text-xs font-black flex items-center justify-center gap-1.5 transition-colors active:scale-95 text-center"
+                                    title="اتصال هاتفي سريع ومباشر"
+                                  >
+                                    <Phone className="h-3.5 w-3.5" />
+                                    <span>اتصل بالعميل</span>
+                                  </a>
+                                )}
 
                                 {/* WhatsApp Button */}
-                                <a
-                                  href={formatWhatsAppLink(lead.phone)}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="px-3.5 py-2 bg-emerald-50 hover:bg-emerald-100 text-[#DD6B20] border border-emerald-200 rounded-xl text-xs font-black flex items-center justify-center gap-1.5 transition-colors active:scale-95 text-center"
-                                  title="مراسلة سريعة عبر واتساب"
-                                >
-                                  <MessageSquare className="h-3.5 w-3.5" />
-                                  <span>دردشة واتساب</span>
-                                </a>
+                                {isNoPhone ? (
+                                  <button disabled className="px-3.5 py-2 bg-slate-50 text-slate-400 border border-slate-200 rounded-xl text-xs font-black flex items-center justify-center gap-1.5 text-center cursor-not-allowed">
+                                    <MessageSquare className="h-3.5 w-3.5" />
+                                    <span>لا يوجد واتساب</span>
+                                  </button>
+                                ) : (
+                                  <a
+                                    href={formatWhatsAppLink(lead.phone)}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="px-3.5 py-2 bg-emerald-50 hover:bg-emerald-100/85 text-[#DD6B20] border border-emerald-200 rounded-xl text-xs font-black flex items-center justify-center gap-1.5 transition-colors active:scale-95 text-center"
+                                    title="مراسلة سريعة عبر واتساب"
+                                  >
+                                    <MessageSquare className="h-3.5 w-3.5" />
+                                    <span>دردشة واتساب</span>
+                                  </a>
+                                )}
 
                                 {/* AI Message Pitch trigger */}
                                 <button
@@ -1460,15 +1561,22 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                                       <Copy className="h-3.5 w-3.5 text-[#2B6CB0]" />
                                       <span>نسخ النص</span>
                                     </button>
-                                    <a
-                                      href={formatWhatsAppLink(lead.phone, encodeURIComponent(aiPitchText))}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      className="px-3 py-1.5 bg-[#DD6B20] text-white text-white rounded-lg font-bold flex items-center gap-1 hover:bg-[#C05621] transition-colors"
-                                    >
-                                      <Send className="h-3.5 w-3.5" />
-                                      <span>بدء إرسال على واتس العميل</span>
-                                    </a>
+                                    {isNoPhone ? (
+                                      <button disabled className="px-3 py-1.5 bg-slate-100 text-slate-400 rounded-lg font-bold flex items-center gap-1 cursor-not-allowed">
+                                        <Send className="h-3.5 w-3.5" />
+                                        <span>لا يوجد رقم</span>
+                                      </button>
+                                    ) : (
+                                      <a
+                                        href={formatWhatsAppLink(lead.phone, encodeURIComponent(aiPitchText))}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="px-3 py-1.5 bg-[#DD6B20] text-white text-white rounded-lg font-bold flex items-center gap-1 hover:bg-[#C05621] transition-colors"
+                                      >
+                                        <Send className="h-3.5 w-3.5" />
+                                        <span>بدء إرسال على واتس العميل</span>
+                                      </a>
+                                    )}
                                   </div>
                                 </div>
                               )}
@@ -1616,13 +1724,51 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                     <Search className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-sky-400" />
                     <input
                       type="text"
+                      list="search-discovered-area-list"
                       placeholder="تصفية بالمنطقة أو الاسم..."
                       value={discoveredAreaFilter}
                       onChange={(e) => setDiscoveredAreaFilter(e.target.value)}
                       className="w-full bg-[#F7FAFC] pr-9 pl-3 py-2 border border-slate-200 rounded-lg text-xs font-medium focus:ring-1 focus:ring-indigo-500 text-right font-bold text-[#1A365D]"
                     />
+                    <datalist id="search-discovered-area-list">
+                      {Array.from(new Set([
+                        ...googleLeads
+                          .filter(l => !discoveredGovFilter || (l.governorate || getGovernorateForArea(l.area || '')).includes(discoveredGovFilter))
+                          .map(l => (l.area || '').trim())
+                          .filter(Boolean),
+                        ...(discoveredGovFilter && EGYPT_CITIES[discoveredGovFilter] ? EGYPT_CITIES[discoveredGovFilter] : [])
+                      ])).map(area => (
+                        <option key={area} value={area}>{area}</option>
+                      ))}
+                    </datalist>
                   </div>
                 </div>
+
+                {/* أزرار التصفية حسب النشاط التجاري (تحديد متعدد) */}
+                {googleLeads.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 mt-1 bg-[#F7FAFC] p-2.5 rounded-xl border border-slate-150">
+                    <span className="text-[10px] font-bold text-[#2B6CB0] w-full mb-0.5">تصفية حسب النشاط التجاري (يمكنك اختيار أكثر من نشاط):</span>
+                    <button
+                      type="button"
+                      onClick={() => setDiscoveredTypesFilter([])}
+                      className={`px-2.5 py-1.5 rounded-lg text-[10px] font-bold transition-all cursor-pointer select-none ${discoveredTypesFilter.length === 0 ? 'bg-[#1A365D] text-white shadow-sm' : 'bg-white text-[#1A365D] border border-slate-200 hover:bg-slate-50'}`}
+                    >
+                      الكل ({googleLeads.length})
+                    </button>
+                    {Object.entries(discoveredLeadTypeCounts).sort(([, a], [, b]) => b - a).map(([type, count]) => (
+                      <button
+                        key={type}
+                        type="button"
+                        onClick={() => {
+                          setDiscoveredTypesFilter(prev => prev.includes(type) ? prev.filter(x => x !== type) : [...prev, type]);
+                        }}
+                        className={`px-2.5 py-1.5 rounded-lg text-[10px] font-bold transition-all cursor-pointer select-none ${discoveredTypesFilter.includes(type) ? 'bg-[#DD6B20] text-white shadow-sm' : 'bg-white text-[#1A365D] border border-slate-200 hover:bg-slate-50'}`}
+                      >
+                        {type} ({count})
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
 
               {(() => {
@@ -1634,7 +1780,10 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                   const qArea = discoveredAreaFilter.trim().toLowerCase();
                   const matchesArea = !qArea || (lead.area || '').toLowerCase().includes(qArea) || (lead.name || '').toLowerCase().includes(qArea);
 
-                  return matchesGov && matchesArea;
+                  const leadType = lead.type || 'غير محدد';
+                  const matchesType = discoveredTypesFilter.length === 0 || discoveredTypesFilter.includes(leadType);
+
+                  return matchesGov && matchesArea && matchesType;
                 });
 
                 if (filteredGoogleLeads.length === 0) {
@@ -1651,31 +1800,39 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
 
                 return (
                   <div className="flex flex-col gap-3.5">
-                    <div className="flex items-center justify-between px-2 pb-1 border-b border-slate-100">
-                      <label className="flex items-center gap-2 text-xs font-bold text-[#1A365D] cursor-pointer">
-                        <input 
-                          type="checkbox"
-                          checked={filteredGoogleLeads.length > 0 && selectedLeads.length === filteredGoogleLeads.length}
-                          onChange={(e) => {
-                            if (e.target.checked) {
-                              setSelectedLeads(filteredGoogleLeads.map(l => l.id));
-                            } else {
-                              setSelectedLeads([]);
-                            }
-                          }}
-                          className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
-                        />
-                        تحديد الكل ({filteredGoogleLeads.length})
-                      </label>
-                    </div>
+                    {currentUser?.role === 'owner' && (
+                      <div className="flex items-center justify-between px-2 pb-1 border-b border-slate-100">
+                        <label className="flex items-center gap-2 text-xs font-bold text-[#1A365D] cursor-pointer">
+                          <input 
+                            type="checkbox"
+                            checked={filteredGoogleLeads.length > 0 && selectedLeads.length === filteredGoogleLeads.length}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setSelectedLeads(filteredGoogleLeads.map(l => l.id));
+                              } else {
+                                setSelectedLeads([]);
+                              }
+                            }}
+                            className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                          />
+                          تحديد الكل ({filteredGoogleLeads.length})
+                        </label>
+                      </div>
+                    )}
                   {filteredGoogleLeads.map((lead) => {
                     const alreadyRealCustomer = customers.some(c => c.phone === lead.phone || c.name.toLowerCase() === lead.name.toLowerCase());
                     const showConfirmed = lead.confirmed || alreadyRealCustomer;
                     const isStagedExpanded = !!expandedStagedLeads[lead.id];
+                    const isNoPhone = hasNoPhone(lead.phone);
+                    const themeClass = getLeadCardTheme(lead.type);
+                    const badgeClass = getLeadBadgeTheme(lead.type);
 
                     return (
-                      <div key={lead.id} className={`border rounded-xl overflow-hidden transition-all flex flex-col ${
-                        showConfirmed ? 'bg-emerald-50/40 border-emerald-150/60' : 'bg-[#FFFFFF] border-slate-200 hover:border-slate-350 shadow-sm'
+                      <div key={lead.id} className={`border rounded-xl overflow-hidden transition-all flex flex-col ${ showConfirmed 
+                          ? 'bg-emerald-50/40 border-emerald-150/60' 
+                          : isNoPhone 
+                              ? 'bg-rose-50/40 border-rose-200 hover:border-rose-300'
+                              : themeClass
                       }`}>
                         
                         {/* Watchlist Header - Toggle Collapsible Card */}
@@ -1703,12 +1860,32 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                               ) : (
                                 <span className={`h-2.5 w-2.5 rounded-full shrink-0 transition-all ${isStagedExpanded ? 'bg-[#FFFFFF] text-[#1A365D] border-b-2 border-[#DD6B20] shadow-sm' : 'bg-amber-400'}`}></span>
                               )}
+                                {isNoPhone && !showConfirmed && <PhoneOff className="h-4 w-4 text-rose-600 shrink-0" />}
                               {lead.name}
                             </span>
                             <div className="flex flex-wrap gap-1.5 mt-0.5">
-                              <span className="text-[10px] text-[#1A365D] font-extrabold bg-indigo-50 py-0.5 px-2 rounded border border-indigo-100">
-                                {lead.type || 'نشاط تجاري'}
-                              </span>
+                              <div className="flex items-center gap-1">
+                                <span className={`text-[10px] font-extrabold py-0.5 px-2 rounded border self-start ${badgeClass}`}>
+                                  تصنيف: {lead.type || 'غير محدد'}
+                                </span>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  const newType = window.prompt(`أدخل التصنيف الجديد للعميل "${lead.name}":`, lead.type || 'سوبر ماركت');
+                                  if (newType && newType.trim()) {
+                                    setGoogleLeads(prevLeads => prevLeads.map(l => 
+                                      l.id === lead.id ? { ...l, type: newType.trim() } : l
+                                    ));
+                                    showToast('✓ تم تحديث التصنيف بنجاح.');
+                                  }
+                                }}
+                                className="p-1 text-indigo-600 hover:bg-indigo-100 rounded-full transition-colors"
+                                title="تعديل التصنيف"
+                              >
+                                <Edit className="h-3 w-3" />
+                              </button>
+                              </div>
                               {lead.dateAdded && (
                                 <span className="text-[9.5px] text-[#2B6CB0] bg-[#FFFFFF] py-0.5 px-1.5 rounded border border-slate-150 font-mono font-bold">
                                   تاريخ السحب: {lead.dateAdded}
@@ -1768,9 +1945,9 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                             {/* Contacts & Direct Action Buttons */}
                             <div className="bg-[#F7FAFC]/50 border border-slate-150 p-3 rounded-xl flex flex-col gap-3">
                               <div className="flex flex-col gap-1 text-xs">
-                                <span className="font-bold text-slate-650 flex items-center gap-1">
-                                  <Phone className="h-3.5 w-3.5 text-[#1A365D]" />
-                                  رقم الهاتف: <a href={`tel:${lead.phone}`} className="hover:underline font-mono font-bold text-[#1A365D]">{lead.phone}</a>
+                                  <span className={`font-bold flex items-center gap-1 ${isNoPhone ? 'text-rose-600' : 'text-slate-650'}`}>
+                                    {isNoPhone ? <PhoneOff className="h-3.5 w-3.5 text-rose-500" /> : <Phone className="h-3.5 w-3.5 text-[#1A365D]" />}
+                                    رقم الهاتف: {isNoPhone ? <span className="font-bold">غير متوفر</span> : <a href={`tel:${lead.phone}`} className="hover:underline font-mono font-bold text-[#1A365D]">{lead.phone}</a>}
                                 </span>
                                 <span className="font-bold text-slate-650 flex items-center gap-1 mt-0.5">
                                   <MapPin className="h-3.5 w-3.5 text-emerald-500" />
@@ -1780,25 +1957,39 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
 
                               {/* WhatsApp & Dialing buttons for staging checklist */}
                               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 border-t border-slate-150/60 pt-3">
-                                <a
-                                  href={`tel:${lead.phone}`}
-                                  className="px-3.5 py-1.5 bg-[#F7FAFC] hover:bg-blue-100/85 text-blue-700 border border-blue-200 rounded-lg text-xs font-black flex items-center justify-center gap-1.5 transition-colors active:scale-95 text-center"
-                                  title="اتصال هاتفي مباشر"
-                                >
-                                  <Phone className="h-3.5 w-3.5" />
-                                  <span>اتصال هاتفي</span>
-                                </a>
+                                  {isNoPhone ? (
+                                    <button disabled className="px-3.5 py-1.5 bg-slate-50 text-slate-400 border border-slate-200 rounded-lg text-xs font-black flex items-center justify-center gap-1.5 text-center cursor-not-allowed">
+                                      <PhoneOff className="h-3.5 w-3.5" />
+                                      <span>لا يوجد رقم</span>
+                                    </button>
+                                  ) : (
+                                    <a
+                                      href={`tel:${lead.phone}`}
+                                      className="px-3.5 py-1.5 bg-[#F7FAFC] hover:bg-blue-100/85 text-blue-700 border border-blue-200 rounded-lg text-xs font-black flex items-center justify-center gap-1.5 transition-colors active:scale-95 text-center"
+                                      title="اتصال هاتفي مباشر"
+                                    >
+                                      <Phone className="h-3.5 w-3.5" />
+                                      <span>اتصال هاتفي</span>
+                                    </a>
+                                  )}
 
-                                <a
-                                  href={formatWhatsAppLink(lead.phone)}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="px-3.5 py-1.5 bg-emerald-50 hover:bg-emerald-100/85 text-[#DD6B20] border border-emerald-200 rounded-lg text-xs font-black flex items-center justify-center gap-1.5 transition-colors active:scale-95 text-center"
-                                  title="مراسلة سريعة عبر واتساب"
-                                >
-                                  <MessageSquare className="h-3.5 w-3.5" />
-                                  <span>واتساب مباشر</span>
-                                </a>
+                                  {isNoPhone ? (
+                                    <button disabled className="px-3.5 py-1.5 bg-slate-50 text-slate-400 border border-slate-200 rounded-lg text-xs font-black flex items-center justify-center gap-1.5 text-center cursor-not-allowed">
+                                      <MessageSquare className="h-3.5 w-3.5" />
+                                      <span>لا يوجد واتساب</span>
+                                    </button>
+                                  ) : (
+                                    <a
+                                      href={formatWhatsAppLink(lead.phone)}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="px-3.5 py-1.5 bg-emerald-50 hover:bg-emerald-100/85 text-[#DD6B20] border border-emerald-200 rounded-lg text-xs font-black flex items-center justify-center gap-1.5 transition-colors active:scale-95 text-center"
+                                      title="مراسلة سريعة عبر واتساب"
+                                    >
+                                      <MessageSquare className="h-3.5 w-3.5" />
+                                      <span>واتساب مباشر</span>
+                                    </a>
+                                  )}
                               </div>
                             </div>
 

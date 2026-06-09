@@ -58,6 +58,14 @@ export default function InvoiceTab({
     return 'create';
   });
   
+  const [paymentModal, setPaymentModal] = useState<{
+    isOpen: boolean;
+    invoice: Invoice | null;
+    type: 'partial' | 'full';
+    amount: string;
+    paymentMethod: string;
+  }>({ isOpen: false, invoice: null, type: 'full', amount: '', paymentMethod: 'نقدي (كاش)' });
+
   const [editingInvoiceId, setEditingInvoiceId] = useState<string | null>(null);
   
   const handleCancelEditActiveInvoice = () => {
@@ -1889,27 +1897,15 @@ export default function InvoiceTab({
                           {activeSubTab === 'debtors' && (
                             <>
                               <button
-                                onClick={async () => {
+                                onClick={() => {
                                   const remaining = inv.totalAfterDiscount - (inv.paidAmount ?? 0);
-                                  const partialInput = prompt(`ما هو المبلغ المسدد الآن؟ (المبلغ المتبقي: ${formatNum(remaining)}ج.م)`);
-                                  if (partialInput) {
-                                    const amount = parseFloat(partialInput);
-                                    if (isNaN(amount) || amount <= 0 || amount > remaining) {
-                                          showToast('⚠️ مبلغ غير صالح!');
-                                    } else {
-                                      if (await confirmDialog(`هل أنت متأكد من تسديد جزء مقداره ${amount}ج.م؟`)) {
-                                        const dateStr = new Date().toLocaleDateString('ar-EG');
-                                        const newNotes = inv.notes ? `${inv.notes} | تم سداد جزئي ${amount}ج.م بتاريخ ${dateStr}` : `تم سداد جزئي ${amount}ج.م بتاريخ ${dateStr}`;
-                                        const updatedInv = {
-                                          ...inv,
-                                          paidAmount: (inv.paidAmount ?? 0) + amount,
-                                          notes: newNotes
-                                        };
-                                        onUpdateInvoice(updatedInv);
-                                        setJustSavedInvoice({...updatedInv, customer: cust, _partialPayment: amount, _previousPaid: inv.paidAmount ?? 0});
-                                      }
-                                    }
-                                  }
+                                  setPaymentModal({
+                                    isOpen: true,
+                                    invoice: inv,
+                                    type: 'partial',
+                                    amount: '',
+                                    paymentMethod: 'نقدي (كاش)'
+                                  });
                                 }}
                                 className="bg-amber-100 border border-amber-250 p-2 text-amber-700 rounded-xl hover:bg-amber-200 active:scale-95 transition-all cursor-pointer flex items-center justify-center font-bold text-[11px]"
                                 title="تسديد دفعة (جزئي)"
@@ -1917,15 +1913,15 @@ export default function InvoiceTab({
                                 <span className="font-extrabold px-1">جزئي</span>
                               </button>
                               <button
-                                onClick={async () => { if (await confirmDialog('هل أنت متأكد من تسديد المبلغ المتبقي بالكامل (يتم التحويل لأرشيف الفواتير)؟')) {
-                                    const previousPaid = inv.paidAmount;
-                                    const updatedInv = {
-                                      ...inv,
-                                      paidAmount: inv.totalAfterDiscount
-                                    };
-                                    onUpdateInvoice(updatedInv);
-                                    setJustSavedInvoice({...updatedInv, customer: cust, _debtPaid: true, _previousPaid: previousPaid});
-                                  }
+                                onClick={() => {
+                                  const remaining = inv.totalAfterDiscount - (inv.paidAmount ?? 0);
+                                  setPaymentModal({
+                                    isOpen: true,
+                                    invoice: inv,
+                                    type: 'full',
+                                    amount: String(remaining),
+                                    paymentMethod: 'نقدي (كاش)'
+                                  });
                                 }}
                                 className="bg-emerald-100 border border-emerald-250 p-2 text-emerald-700 rounded-xl hover:bg-emerald-200 active:scale-95 transition-all cursor-pointer flex items-center justify-center font-bold text-[11px]"
                                 title="تسديد المتبقي وتحويل للأرشيف"
@@ -2142,6 +2138,101 @@ export default function InvoiceTab({
 
       {isScanningBarcode && (
         <BarcodeScanner onScanSuccess={handleScanSuccess} onClose={() => setIsScanningBarcode(false)} />
+      )}
+
+      {paymentModal.isOpen && paymentModal.invoice && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in" dir="rtl">
+          <div className="bg-white rounded-3xl p-6 w-full max-w-sm shadow-2xl flex flex-col gap-4 text-center border border-slate-100">
+            <div className="mx-auto w-14 h-14 bg-indigo-50 rounded-full flex items-center justify-center text-indigo-600 mb-2 shadow-inner">
+              <Receipt className="h-7 w-7 text-emerald-500" />
+            </div>
+            <h3 className="text-[#1A365D] font-black text-base leading-relaxed">
+              {paymentModal.type === 'full' ? 'تسديد الفاتورة بالكامل وتحويلها للأرشيف' : 'تسديد دفعة جزئية من الفاتورة'}
+              <br/>
+              <span className="text-xs text-slate-500">#{paymentModal.invoice.invoiceNumber}</span>
+            </h3>
+            
+            <div className="flex flex-col gap-3 mt-2 text-right">
+              <div>
+                <label className="block text-[11px] font-bold text-slate-500 mb-1">المبلغ المسدد (ج.م):</label>
+                <input 
+                  type="number" 
+                  value={paymentModal.amount}
+                  onChange={(e) => setPaymentModal({...paymentModal, amount: e.target.value})}
+                  className="w-full bg-[#F7FAFC] border border-slate-200 rounded-xl py-2 px-3 text-[#1A365D] font-bold text-center outline-none focus:ring-1 focus:ring-indigo-500"
+                  placeholder="أدخل المبلغ..."
+                />
+              </div>
+              <div>
+                <label className="block text-[11px] font-bold text-slate-500 mb-1">نوع وطريقة السداد:</label>
+                <select
+                  value={paymentModal.paymentMethod}
+                  onChange={(e) => setPaymentModal({...paymentModal, paymentMethod: e.target.value})}
+                  className="w-full bg-[#F7FAFC] border border-slate-200 rounded-xl py-2 px-3 text-[#1A365D] font-bold outline-none focus:ring-1 focus:ring-indigo-500"
+                >
+                  <option value="نقدي (كاش)">نقدي (كاش)</option>
+                  <option value="تحويل محفظة (فودافون كاش الخ)">تحويل محفظة (فودافون كاش الخ)</option>
+                  <option value="تحويل بنكي / انستا باي">تحويل بنكي / انستا باي</option>
+                  <option value="شيك">شيك</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="flex gap-3 mt-4">
+              <button
+                onClick={() => {
+                  const amountToPay = parseFloat(paymentModal.amount);
+                  const remaining = (paymentModal.invoice!.totalAfterDiscount || 0) - (paymentModal.invoice!.paidAmount ?? 0);
+
+                  if (isNaN(amountToPay) || amountToPay <= 0 || amountToPay > remaining) {
+                    showToast('⚠️ مبلغ غير صالح! يجب أن يكون أكبر من صفر ولا يتجاوز المتبقي.');
+                    return;
+                  }
+
+                  const now = new Date();
+                  const dateStr = `${now.toLocaleDateString('ar-EG')} ${now.toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })}`;
+
+                  let actionText = paymentModal.type === 'full' ? 'سداد كلي' : 'سداد جزئي';
+                  if (amountToPay === remaining) actionText = 'سداد كلي';
+
+                  const newNotes = paymentModal.invoice!.notes 
+                    ? `${paymentModal.invoice!.notes} | ${actionText} ${amountToPay}ج.م (${paymentModal.paymentMethod}) بتاريخ ${dateStr}`
+                    : `${actionText} ${amountToPay}ج.م (${paymentModal.paymentMethod}) بتاريخ ${dateStr}`;
+
+                  const updatedInv = {
+                    ...paymentModal.invoice!,
+                    paidAmount: (paymentModal.invoice!.paidAmount ?? 0) + amountToPay,
+                    notes: newNotes
+                  };
+
+                  const isFullyPaid = updatedInv.paidAmount >= updatedInv.totalAfterDiscount;
+
+                  onUpdateInvoice(updatedInv);
+
+                  const customer = customers.find(c => c.id === updatedInv.customerId);
+                  setJustSavedInvoice({
+                    ...updatedInv, 
+                    customer, 
+                    _debtPaid: isFullyPaid, 
+                    _partialPayment: isFullyPaid ? undefined : amountToPay, 
+                    _previousPaid: paymentModal.invoice!.paidAmount ?? 0
+                  });
+
+                  setPaymentModal({...paymentModal, isOpen: false});
+                }}
+                className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white py-2.5 rounded-xl font-bold active:scale-95 transition-all shadow-md text-sm cursor-pointer"
+              >
+                تأكيد السداد ✅
+              </button>
+              <button
+                onClick={() => setPaymentModal({...paymentModal, isOpen: false})}
+                className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 py-2.5 rounded-xl font-bold active:scale-95 transition-all shadow-sm text-sm cursor-pointer"
+              >
+                إلغاء
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
     </div>

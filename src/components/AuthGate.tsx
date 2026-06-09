@@ -74,6 +74,7 @@ export default function AuthGate({ usersList, customersList = [], onUpdateUsers,
             role: 'employee',
             status: 'active',
             permittedTabs: ['dashboard', 'prices'],
+            canUseAiAssistant: false,
             password: btoa(encodeURIComponent('0000')), // الزوار لا يستخدمون الباسورد أصلاً
             customRoleName: 'عميل زائر للعرض 👀',
             createdAt: new Date().toISOString()

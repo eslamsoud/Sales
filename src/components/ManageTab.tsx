@@ -49,6 +49,36 @@ const API_KEY =
 
 const APP_SCRIPT_URL = import.meta.env.VITE_GOOGLE_SHEETS_URL || "https://script.google.com/macros/s/AKfycbyJnhlgJNJ4ggzet0h5z6n2oplDP4VVWy1tI52lgYpHqFqjl2FDJu3ZdaTCU0lxgjmy/exec";
 
+const EGYPT_CITIES: Record<string, string[]> = {
+  'القاهرة': ['مصر الجديدة', 'مدينة نصر', 'المعادي', 'التجمع الخامس', 'شبرا', 'المرج', 'حلوان', 'المطرية', 'الزيتون', 'السلام', 'البساتين', 'دار السلام', 'الخليفة', 'المقطم', 'القاهرة الجديدة', 'بدر', 'الشروق', '15 مايو', 'وسط البلد', 'عين شمس', 'الزمالك'],
+  'الجيزة': ['الجيزة', 'الدقي', 'المهندسين', 'الهرم', 'العجوزة', 'إمبابة', 'الشيخ زايد', '6 أكتوبر', 'العمرانية', 'البدرشين', 'الصف', 'أطفيح', 'العياط', 'منشأة القناطر', 'أوسيم', 'كرداسة', 'أبو النمرس', 'الحوامدية'],
+  'الإسكندرية': ['الإسكندرية', 'برج العرب', 'العامرية', 'المنتزه', 'الرمل', 'سيدي بشر', 'سموحة', 'ميامي', 'كليوباترا', 'البيطاش', 'الدخيلة', 'العجمي', 'المندرة', 'محرم بك', 'الجمرك', 'المنشية'],
+  'الشرقية': ['الزقازيق', 'أبو حماد', 'بلبيس', 'العاشر من رمضان', 'منيا القمح', 'فاقوس', 'الحسينية', 'أبو كبير', 'ديرب نجم', 'مشتول السوق', 'الإبراهيمية', 'كفر صقر', 'أولاد صقر', 'الصالحية الجديدة', 'القرين', 'القنايات'],
+  'الدقهلية': ['المنصورة', 'ميت غمر', 'السنبلاوين', 'دكرنس', 'أجا', 'بلقاس', 'شربين', 'طلخا', 'نبروه', 'جمصة', 'بني عبيد', 'المطرية', 'تمي الأمديد', 'محلة دمنة', 'الكردي'],
+  'البحيرة': ['دمنهور', 'كفر الدوار', 'رشيد', 'إدكو', 'أبو المطامير', 'أبو حمص', 'الدلنجات', 'المحمودية', 'الرحمانية', 'إيتاي البارود', 'شبراخيت', 'كوم حمادة', 'وادي النطرون', 'بدر'],
+  'القليوبية': ['بنها', 'شبرا الخيمة', 'قليوب', 'الخانكة', 'العبور', 'القناطر الخيرية', 'طوخ', 'قها', 'كفر شكر', 'شبين القناطر', 'الخصوص'],
+  'الغربية': ['طنطا', 'المحلة الكبرى', 'زفتى', 'كفر الزيات', 'سمنود', 'السنطة', 'بسيون', 'قطور'],
+  'المنوفية': ['شبين الكوم', 'منوف', 'مدينة السادات', 'سرس الليان', 'أشمون', 'الباجور', 'قويسنا', 'بركة السبع', 'تلا', 'الشهداء'],
+  'دمياط': ['دمياط', 'دمياط الجديدة', 'رأس البر', 'فارسكور', 'الزرقا', 'كفر سعد', 'كفر البطيخ', 'عزبة البرج', 'ميت أبو غالب', 'السرو'],
+  'بورسعيد': ['بورسعيد', 'بورفؤاد', 'الشرق', 'الزهور', 'الضواحي', 'المناخ', 'الجنوب'],
+  'الإسماعيلية': ['الإسماعيلية', 'فايد', 'القنطرة شرق', 'القنطرة غرب', 'التل الكبير', 'أبو صوير', 'القصاصين'],
+  'السويس': ['السويس', 'الأربعين', 'عتاقة', 'الجناين', 'فيصل'],
+  'كفر الشيخ': ['كفر الشيخ', 'دسوق', 'فوه', 'مطوبس', 'بلطيم', 'الحامول', 'بيلا', 'الرياض', 'سيدي سالم', 'قلين', 'برج البرلس', 'مسير', 'سيدي غازي'],
+  'الفيوم': ['الفيوم', 'سنورس', 'إطسا', 'طامية', 'إبشواي', 'يوسف الصديق'],
+  'بني سويف': ['بني سويف', 'الواسطى', 'ناصر', 'إهناسيا', 'ببا', 'سمسطا', 'الفشن'],
+  'المنيا': ['المنيا', 'مغاغة', 'بني مزار', 'مطاي', 'سمالوط', 'أبو قرقاص', 'ملوي', 'دير مواس', 'العدوة'],
+  'أسيوط': ['أسيوط', 'ديروط', 'القوصية', 'أبنوب', 'منفلوط', 'أبو تيج', 'الغنايم', 'ساحل سليم', 'البداري', 'الفتح', 'أسيوط الجديدة'],
+  'سوهاج': ['سوهاج', 'أخميم', 'البلينا', 'المراغة', 'المنشأة', 'دار السلام', 'جرجا', 'جهينة', 'ساقلتة', 'طما', 'طهطا', 'سوهاج الجديدة'],
+  'قنا': ['قنا', 'أبو تشت', 'فرشوط', 'نجع حمادي', 'الوقف', 'دشنا', 'قفط', 'قوص', 'نقادة'],
+  'الأقصر': ['الأقصر', 'إسنا', 'أرمنت', 'الطود', 'البياضية', 'القرنة', 'الزينية'],
+  'أسوان': ['أسوان', 'كوم أمبو', 'دراو', 'إدفو', 'نصر النوبة', 'أبو سمبل', 'كلابشة', 'الرديسية', 'البصيلية'],
+  'مطروح': ['مرسى مطروح', 'العلمين', 'الضبعة', 'براني', 'السلوم', 'سيدي بئراني', 'سيدي عبد الرحمن', 'النجيلة', 'سيوة'],
+  'البحر الأحمر': ['الغردقة', 'رأس غارب', 'سفاجا', 'القصير', 'مرسى علم', 'شلاتين', 'حلايب'],
+  'الوادي الجديد': ['الخارجة', 'الداخلة', 'الفرافرة', 'باريس', 'بلاط'],
+  'شمال سيناء': ['العريش', 'بئر العبد', 'الشيخ زويد', 'رفح', 'الحسنة', 'نخل'],
+  'جنوب سيناء': ['الطور', 'شرم الشيخ', 'دهب', 'نويبع', 'طابا', 'سانت كاترين', 'أبو رديس', 'أبو زنيمة', 'رأس سدر']
+};
+
 const generateAppsScriptCode = () => {
   return `// 1. استقبال طلب الجلب والتحديث الميداني ثنائي الاتجاه
 function doGet(e) {
@@ -198,7 +228,8 @@ function doGet(e) {
         canEditPrices: row[8] === 'لا' ? false : true,
         lastActive: getSafeString(row[9]), 
         lastLat: getSafeNumber(row[10]), 
-        lastLng: getSafeNumber(row[11])
+        lastLng: getSafeNumber(row[11]),
+        canUseAiAssistant: row[12] === 'لا' ? false : true
       };
     });
 
@@ -389,10 +420,11 @@ function doPost(e) {
             "'" + String(u.password || ''), u.customRoleName || '', 
             u.permittedTabs || '', u.permittedSubTabs || '',
             u.canEditPrices === false ? 'لا' : 'نعم',
-            u.lastActive || '', u.lastLat || '', u.lastLng || ''
+            u.lastActive || '', u.lastLat || '', u.lastLng || '',
+            u.canUseAiAssistant === false ? 'لا' : 'نعم'
           ]; 
         });
-        upsertData('صلاحيات_المستخدمين', ['رقم الهاتف', 'الاسم', 'الدور/الوظيفة', 'الحالة', 'الرمز السري', 'المسمى الوظيفي', 'الصلاحيات المفعّلة', 'الصلاحيات الفرعية', 'تعديل الأسعار', 'آخر ظهور', 'خط العرض', 'خط الطول'], userRows, "#ead1dc", deletedIds);
+        upsertData('صلاحيات_المستخدمين', ['رقم الهاتف', 'الاسم', 'الدور/الوظيفة', 'الحالة', 'الرمز السري', 'المسمى الوظيفي', 'الصلاحيات المفعّلة', 'الصلاحيات الفرعية', 'تعديل الأسعار', 'آخر ظهور', 'خط العرض', 'خط الطول', 'المستشار الذكي'], userRows, "#ead1dc", deletedIds);
       }
 
       // 8. المكتشفين
@@ -564,6 +596,23 @@ export default function ManageTab({
   const [repName, setRepName] = useState(settings.representativeName || '');
   const [repPhone, setRepPhone] = useState(settings.representativePhone || '01228466613');
   const [invoiceAppName, setInvoiceAppName] = useState(settings.appName || 'الاخوه EAGS لخدمات التوزيع');
+  
+  // AI Personalization
+  const [aiName, setAiName] = useState(settings.aiName || 'المستشار الميداني');
+  const [aiVoiceURI, setAiVoiceURI] = useState(settings.aiVoiceURI || '');
+  const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
+
+  // Fetch system voices
+  useEffect(() => {
+    const loadVoices = () => {
+      setAvailableVoices(window.speechSynthesis.getVoices());
+    };
+    loadVoices();
+    if (window.speechSynthesis.onvoiceschanged !== undefined) {
+      window.speechSynthesis.onvoiceschanged = loadVoices;
+    }
+  }, []);
+
   const [googlePassword, setGooglePassword] = useState('');
   // Delegate live tracking state
   const [trackedUserPhone, setTrackedUserPhone] = useState<string>('');
@@ -860,7 +909,9 @@ export default function ManageTab({
       aiRetentionGuidelines: retentionGuidelines.trim(),
       representativeName: repName.trim(),
       representativePhone: repPhone.trim(),
-      appName: invoiceAppName.trim()
+      appName: invoiceAppName.trim(),
+      aiName: aiName.trim(),
+      aiVoiceURI: aiVoiceURI
     });
     setSaveSuccessMsg('تم حفظ الإعدادات بنجاح!');
     setTimeout(() => setSaveSuccessMsg(''), 3000);
@@ -1155,6 +1206,7 @@ export default function ManageTab({
       permittedTabs,
       customRoleName,
       canEditPrices: newUserType === 'visitor' ? false : true,
+      canUseAiAssistant: newUserType === 'visitor' ? false : true,
       permittedSubTabs: newUserType === 'leader' 
         ? ['loads', 'products', 'previous_loads', 'factory_account', 'trips', 'customers_list', 'customers_maps_finder', 'invoice_create', 'invoice_balance', 'expenses_list', 'admin_ai', 'admin_areas', 'prices_list', 'prices_calc', 'prices_bot'] 
         : newUserType === 'visitor' 
@@ -2234,7 +2286,8 @@ export default function ManageTab({
                                                 customRoleName: 'زائر للعرض فقط 👀', 
                                                 permittedTabs: ['dashboard', 'prices'],
                                                 permittedSubTabs: ['prices_list'],
-                                                canEditPrices: false
+                                                canEditPrices: false,
+                                                canUseAiAssistant: false
                                               } 
                                             : u
                                         );
@@ -2260,7 +2313,8 @@ export default function ManageTab({
                                                 customRoleName: 'مندوب توزيع ومبيعات 🚚', 
                                                 permittedTabs: ['dashboard', 'factory', 'customers', 'invoice', 'prices', 'expenses', 'administrative'],
                                                 permittedSubTabs: ['loads', 'factory_account', 'customers_list', 'customers_maps_finder', 'invoice_create', 'invoice_balance', 'expenses_list', 'admin_ai', 'prices_list', 'prices_calc', 'prices_bot'],
-                                                canEditPrices: false
+                                                canEditPrices: false,
+                                                canUseAiAssistant: true
                                               } 
                                             : u
                                         );
@@ -2286,7 +2340,8 @@ export default function ManageTab({
                                                   customRoleName: 'نائب المدير 💼', 
                                                   permittedTabs: ['dashboard', 'factory', 'customers', 'invoice', 'prices', 'expenses', 'administrative'],
                                                   permittedSubTabs: ['loads', 'products', 'previous_loads', 'factory_account', 'trips', 'customers_list', 'customers_maps_finder', 'invoice_create', 'invoice_balance', 'expenses_list', 'admin_ai', 'admin_areas', 'prices_list', 'prices_calc', 'prices_bot'],
-                                                  canEditPrices: true
+                                                  canEditPrices: true,
+                                                  canUseAiAssistant: true
                                               } 
                                             : u
                                         );
@@ -2316,7 +2371,8 @@ export default function ManageTab({
                                                   'customers_list', 'customers_maps_finder', 'invoice_create', 'invoice_balance',
                                                   'expenses_list', 'reports_finance', 'reports_stats', 'reports_areas', 'reports_invoices', 'reports_inventory',
                                                   'prices_list', 'prices_calc', 'prices_bot'
-                                                ] 
+                                                ],
+                                                canUseAiAssistant: true 
                                               } 
                                             : u
                                         );
@@ -2472,6 +2528,49 @@ export default function ManageTab({
                                 <p className="text-[9px] text-slate-500 font-bold">
                                   وضع القراءة فقط يمنع المندوب من تعديل الأسعار، مما يتيح له عرض شاشات التطبيق للعملاء بأمان.
                                 </p>
+                              </div>
+
+                              {/* AI Assistant Toggle */}
+                              <div className="mt-3 bg-indigo-50/50 p-3 rounded-xl border border-indigo-100 flex flex-col gap-2">
+                                <span className="text-[11px] font-black text-indigo-900">🤖 صلاحية المستشار الميداني الذكي (AI):</span>
+                                <div className="flex bg-white p-1 rounded-lg border border-slate-200">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const updated = usersList.map(u => 
+                                        u.phone === user.phone 
+                                          ? { ...u, canUseAiAssistant: true } 
+                                          : u
+                                      );
+                                      onUpdateUsersList(updated);
+                                      localStorage.setItem('users_permissions_sys', JSON.stringify(updated));
+                                      onTriggerSync?.('تفعيل المساعد الذكي');
+                                    }}
+                                    className={`flex-1 py-1.5 px-2 text-[10px] sm:text-xs font-black rounded-md transition-all cursor-pointer ${
+                                      user.canUseAiAssistant !== false ? 'bg-indigo-100 text-indigo-800 shadow-sm' : 'text-slate-400 hover:text-slate-700'
+                                    }`}
+                                  >
+                                    تفعيل المستشار ✨
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const updated = usersList.map(u => 
+                                        u.phone === user.phone 
+                                          ? { ...u, canUseAiAssistant: false } 
+                                          : u
+                                      );
+                                      onUpdateUsersList(updated);
+                                      localStorage.setItem('users_permissions_sys', JSON.stringify(updated));
+                                      onTriggerSync?.('تعطيل المساعد الذكي');
+                                    }}
+                                    className={`flex-1 py-1.5 px-2 text-[10px] sm:text-xs font-black rounded-md transition-all cursor-pointer ${
+                                      user.canUseAiAssistant === false ? 'bg-rose-100 text-rose-800 shadow-sm' : 'text-slate-400 hover:text-slate-700'
+                                    }`}
+                                  >
+                                    إخفاء المستشار 🚫
+                                  </button>
+                                </div>
                               </div>
 
                               {/* 📊 لوحة مراقبة وتتبع العمليات المالية والميدانية للمندوب */}
@@ -3144,6 +3243,37 @@ export default function ManageTab({
               <Sparkles className="h-5 w-5 text-[#1A365D]" />
               إعدادات الذكاء الاصطناعي والعامة
             </h3>
+            
+            {/* إعدادات هوية الصديق/المساعد */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 mb-1 bg-slate-50 border border-slate-150 p-3 rounded-xl">
+              <div>
+                <label className="block text-xs font-black text-[#2B6CB0] mb-1">اسم الصديق (المساعد الذكي)</label>
+                <input
+                  type="text"
+                  value={aiName}
+                  onChange={(e) => setAiName(e.target.value)}
+                  placeholder="مثال: رفيق الدرب، الكابتن، المستشار..."
+                  className="w-full bg-[#FFFFFF] border border-slate-200 rounded-lg p-2 text-xs font-semibold focus:ring-1 focus:ring-indigo-500"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-black text-[#2B6CB0] mb-1">صوت المتحدث الآلي</label>
+                <select
+                  value={aiVoiceURI}
+                  onChange={(e) => setAiVoiceURI(e.target.value)}
+                  className="w-full bg-[#FFFFFF] border border-slate-200 rounded-lg p-2 text-xs font-semibold focus:ring-1 focus:ring-indigo-500 outline-none"
+                >
+                  <option value="">-- الصوت الافتراضي للنظام --</option>
+                  {availableVoices.filter(v => v.lang.toLowerCase().startsWith('ar')).map(v => (
+                    <option key={v.voiceURI} value={v.voiceURI}>{v.name} ({v.lang})</option>
+                  ))}
+                  {availableVoices.filter(v => v.lang.toLowerCase().startsWith('ar')).length === 0 && (
+                    <option value="" disabled>-- عذراً، لا توجد أصوات عربية مثبتة على جهازك --</option>
+                  )}
+                </select>
+              </div>
+            </div>
+
             <div className="flex flex-col gap-3.5">
               {/* AI Pitch Guidelines Field */}
               <div className="border border-indigo-100 rounded-xl p-3 bg-indigo-50/20 mt-1">
@@ -3493,11 +3623,17 @@ export default function ManageTab({
                   <input
                     type="text"
                     required
+                    list="new-area-cities-list"
                     placeholder="مثال: طنطا، كفر الزيات، زفتى"
                     value={newAreaName}
                     onChange={(e) => setNewAreaName(e.target.value)}
                     className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-xs font-semibold text-[#1A365D] outline-none focus:ring-1 focus:ring-indigo-500 text-right"
                   />
+                  <datalist id="new-area-cities-list">
+                    {newAreaGov && EGYPT_CITIES[newAreaGov] ? EGYPT_CITIES[newAreaGov].map(city => (
+                      <option key={city} value={city}>{city}</option>
+                    )) : null}
+                  </datalist>
                 </div>
               </div>
               <div className="flex justify-end mt-1">
