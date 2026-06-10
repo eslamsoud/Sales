@@ -473,6 +473,14 @@ function MapSearchInner({ storeType, batchSize, onResults, isSearching, setIsSea
 const MAPS_LIBRARIES: any[] = ['places', 'geocoding', 'geometry', 'marker'];
 
 export default function GmpMapEngine(props: GmpMapEngineProps) {
+  if (!hasValidKey) {
+    return (
+      <div className="bg-rose-50 border border-rose-200 p-6 rounded-xl flex flex-col items-center justify-center text-center gap-2 mt-4 shadow-sm">
+        <span className="text-rose-700 font-bold text-sm">مفتاح خرائط جوجل غير متوفر ⚠️</span>
+        <span className="text-rose-500 text-xs leading-relaxed">يرجى إضافة <code className="font-mono bg-rose-100 px-1 rounded text-rose-800">VITE_GOOGLE_MAPS_PLATFORM_KEY</code> في ملف <code className="font-mono bg-rose-100 px-1 rounded text-rose-800">.env</code> الخاص بك وتفعيل خدمات (Places, Geocoding, Maps JavaScript) من لوحة تحكم Google Cloud.</span>
+      </div>
+    );
+  }
 
   return (
     <APIProvider apiKey={API_KEY} version="beta" libraries={MAPS_LIBRARIES}>

@@ -37,6 +37,8 @@ export interface FactoryLoad {
   advanceAmount?: number; // مقدم البضاعة المدفوع للمصنع
   delegateName?: string;  // اسم المندوب المسجل للعملية
   delegatePhone?: string; // رقم هاتف المندوب المسجل للعملية
+  lat?: number; // خط العرض
+  lng?: number; // خط الطول
 }
 
 export interface Customer {
@@ -74,6 +76,8 @@ export interface Invoice {
   delegateName?: string;  // اسم المندوب المسجل للعملية
   delegatePhone?: string; // رقم هاتف المندوب المسجل للعملية
   isDelivered?: boolean; // هل تم التسليم قيد الأرشفة
+  lat?: number;
+  lng?: number;
 }
 
 export interface Expense {
@@ -85,6 +89,8 @@ export interface Expense {
   type?: 'expense' | 'revenue'; // added type for revenues
   delegateName?: string;  // اسم المندوب المسجل للعملية
   delegatePhone?: string; // رقم هاتف المندوب المسجل للعملية
+  lat?: number;
+  lng?: number;
 }
 
 export interface SyncLog {
@@ -106,6 +112,8 @@ export interface Trip {
   odometerEnd?: number; // قراءة العداد عند النهاية
   delegateName?: string;  // اسم المندوب المسجل للعملية
   delegatePhone?: string; // رقم هاتف المندوب المسجل للعملية
+  lat?: number;
+  lng?: number;
 }
 
 export interface AppSettings {

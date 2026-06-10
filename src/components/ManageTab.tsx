@@ -646,6 +646,7 @@ export default function ManageTab({
   const [movementDayFilters, setMovementDayFilters] = useState<string[]>([]);
   const [movementStartDate, setMovementStartDate] = useState('');
   const [movementEndDate, setMovementEndDate] = useState('');
+  const [movementDelegateFilter, setMovementDelegateFilter] = useState<string>('all');
   const [activeTrackingCard, setActiveTrackingCard] = useState<'invoices' | 'revenue' | 'collection' | null>(null);
   const trackingRef = useRef<HTMLDivElement>(null);
   // AI Status State
@@ -1528,39 +1529,43 @@ export default function ManageTab({
 
                           {/* Real Google Maps Tactical Screen */}
                           <div className="relative w-full h-64 bg-slate-100 rounded-xl overflow-hidden border border-slate-200 shadow-inner flex items-center justify-center">
-                            <APIProvider apiKey={API_KEY}>
-                              <GoogleMap
-                                defaultCenter={mapCenter}
-                                center={mapCenter}
-                                defaultZoom={15}
-                                mapId="LIVE_TRACKING_MAP"
-                                disableDefaultUI={false}
-                                gestureHandling="greedy"
-                              >
-                                {trackedUser?.lastLat && trackedUser?.lastLng && (
-                                  <AdvancedMarker position={{ lat: trackedUser.lastLat, lng: trackedUser.lastLng }}>
-                                    <Pin background="#E11D48" glyphColor="#fff" borderColor="#BE123C" />
-                                  </AdvancedMarker>
-                                )}
-                              </GoogleMap>
-                            </APIProvider>
-                            
-                            <div className="absolute top-2 right-2 text-[9px] text-emerald-700 bg-white/95 px-2 py-1 rounded shadow-sm font-black opacity-90 select-none flex items-center gap-1 border border-emerald-200">
-                              <span className="h-1.5 w-1.5 bg-emerald-500 rounded-full animate-ping" />
-                              تتبع خرائط جوجل نشط
-                            </div>
-                            
-                            <button
-                              type="button"
-                              onClick={() => {
-                                onTriggerSync?.('تحديث المواقع الجغرافية');
-                                showToast('جاري سحب أحدث الإحداثيات من السحابة...');
-                              }}
-                              className="absolute bottom-2 left-2 bg-[#1A365D]/90 hover:bg-[#1A365D] text-white border border-[#1A365D] rounded px-3 py-2 text-[10px] font-bold cursor-pointer transition-colors flex items-center gap-1.5 shadow-md"
-                            >
-                              <RefreshCw className="h-3.5 w-3.5" />
-                              استدعاء موقع المندوب الآن 🔄
-                            </button>
+                                {API_KEY && API_KEY !== 'YOUR_API_KEY' ? (
+                                  <>
+                                    <APIProvider apiKey={API_KEY}>
+                                  <GoogleMap
+                                    defaultCenter={mapCenter}
+                                    center={mapCenter}
+                                    defaultZoom={15}
+                                    mapId="LIVE_TRACKING_MAP"
+                                    disableDefaultUI={false}
+                                    gestureHandling="greedy"
+                                  >
+                                    {trackedUser?.lastLat && trackedUser?.lastLng && (
+                                      <AdvancedMarker position={{ lat: trackedUser.lastLat, lng: trackedUser.lastLng }}>
+                                        <Pin background="#E11D48" glyphColor="#fff" borderColor="#BE123C" />
+                                      </AdvancedMarker>
+                                    )}
+                                  </GoogleMap>
+                                </APIProvider>
+                                
+                                <div className="absolute top-2 right-2 text-[9px] text-emerald-700 bg-white/95 px-2 py-1 rounded shadow-sm font-black opacity-90 select-none flex items-center gap-1 border border-emerald-200">
+                                  <span className="h-1.5 w-1.5 bg-emerald-500 rounded-full animate-ping" />
+                                  تتبع خرائط جوجل نشط
+                                </div>
+                                
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    onTriggerSync?.('تحديث المواقع الجغرافية');
+                                    showToast('جاري سحب أحدث الإحداثيات من السحابة...');
+                                  }}
+                                  className="absolute bottom-2 left-2 bg-[#1A365D]/90 hover:bg-[#1A365D] text-white border border-[#1A365D] rounded px-3 py-2 text-[10px] font-bold cursor-pointer transition-colors flex items-center gap-1.5 shadow-md"
+                                >
+                                  <RefreshCw className="h-3.5 w-3.5" />
+                                  استدعاء موقع المندوب الآن 🔄
+                                </button>
+                                  </>
+                        ) : null}
                           </div>
                     </>
                   );
@@ -1755,6 +1760,20 @@ export default function ManageTab({
                         </div>
                       </div>
                       
+                      <div className="flex items-center gap-2 mt-2 mb-1 hide-on-print">
+                        <label className="text-[10px] font-bold text-gray-500">تصفية بالمندوب:</label>
+                        <select
+                          value={movementDelegateFilter}
+                          onChange={(e) => setMovementDelegateFilter(e.target.value)}
+                          className="bg-white border border-slate-200 rounded-lg p-1.5 text-[11px] font-bold text-[#1A365D] focus:outline-none flex-1"
+                        >
+                          <option value="all">الكل (جميع المناديب)</option>
+                          {usersList.filter(u => u.phone !== '01228466613').map(u => (
+                            <option key={u.phone} value={u.phone}>{u.name} ({u.phone})</option>
+                          ))}
+                        </select>
+                      </div>
+                      
                       <div className="flex bg-[#F7FAFC] border border-slate-200 rounded-lg overflow-hidden hide-on-print">
                          <button 
                            onClick={() => { setMovementFilter('all'); setMovementDayFilters([]); }} 
@@ -1823,12 +1842,16 @@ export default function ManageTab({
                         combinedActivities.push({
                           id: `inv-${inv.id}`,
                           date: inv.date,
+                          delegatePhone: inv.delegatePhone,
+                          delegateName: inv.delegateName,
                           title: `🧾 فاتورة #${inv.invoiceNumber} • ${customer?.name || 'عميل مجهول'}`,
-                          subtitle: `باع ${totalItemsCount} عبوة • ${customer?.area || 'بدون منطقة'}`,
+                          subtitle: `باع ${totalItemsCount} عبوة • ${customer?.area || 'بدون منطقة'} • المندوب: ${inv.delegateName || 'مجهول'}`,
                           amountText: `بقيمة ${formatNum(inv.totalAfterDiscount)}ج.م`,
                           time: inv.date && inv.date.length > 11 ? inv.date.substring(11, 16) : 'الآن',
                           badgeText: inv.paidAmount >= inv.totalAfterDiscount ? 'خالص نقداً' : inv.paidAmount > 0 ? 'متبقي جزء' : 'آجل بالكامل',
-                          badgeClass: inv.paidAmount >= inv.totalAfterDiscount ? "bg-emerald-100 text-emerald-800" : inv.paidAmount > 0 ? "bg-amber-100 text-amber-800" : "bg-rose-100 text-rose-800"
+                          badgeClass: inv.paidAmount >= inv.totalAfterDiscount ? "bg-emerald-100 text-emerald-800" : inv.paidAmount > 0 ? "bg-amber-100 text-amber-800" : "bg-rose-100 text-rose-800",
+                          lat: inv.lat,
+                          lng: inv.lng
                         });
                       });
 
@@ -1837,12 +1860,16 @@ export default function ManageTab({
                         combinedActivities.push({
                           id: `exp-${exp.id}`,
                           date: exp.date,
+                          delegatePhone: exp.delegatePhone,
+                          delegateName: exp.delegateName,
                           title: `${isRev ? '📥 إيراد/تحصيل' : '💸 مصروف تشغيلي'} • ${exp.category}`,
-                          subtitle: `البيان: ${exp.description || 'بدون بيان'}`,
+                          subtitle: `البيان: ${exp.description || 'بدون بيان'} • المندوب: ${exp.delegateName || 'مجهول'}`,
                           amountText: `المبلغ: ${formatNum(exp.amount)}ج.م`,
                           time: exp.date && exp.date.length > 11 ? exp.date.substring(11, 16) : 'الآن',
                           badgeText: isRev ? 'إيراد نقدية' : 'خصم نقدية',
-                          badgeClass: isRev ? "bg-blue-100 text-blue-800" : "bg-red-100 text-red-800"
+                          badgeClass: isRev ? "bg-blue-100 text-blue-800" : "bg-red-100 text-red-800",
+                          lat: exp.lat,
+                          lng: exp.lng
                         });
                       });
 
@@ -1850,12 +1877,16 @@ export default function ManageTab({
                         combinedActivities.push({
                           id: `trip-${trip.id}`,
                           date: trip.date,
+                          delegatePhone: trip.delegatePhone,
+                          delegateName: trip.delegateName,
                           title: `🚚 تحرك/مشوار • ${trip.description}`,
-                          subtitle: trip.odometerStart && trip.odometerEnd ? `مسافة: ${trip.odometerEnd - trip.odometerStart} كم` : 'بدون مسافة مسجلة',
+                          subtitle: trip.odometerStart && trip.odometerEnd ? `مسافة: ${trip.odometerEnd - trip.odometerStart} كم • المندوب: ${trip.delegateName || 'مجهول'}` : `بدون مسافة مسجلة • المندوب: ${trip.delegateName || 'مجهول'}`,
                           amountText: `التكلفة: ${formatNum(trip.price)}ج.م`,
                           time: trip.date && trip.date.length > 11 ? trip.date.substring(11, 16) : 'الآن',
                           badgeText: trip.collected ? 'محصلة' : 'معلقة',
-                          badgeClass: trip.collected ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"
+                          badgeClass: trip.collected ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800",
+                          lat: trip.lat,
+                          lng: trip.lng
                         });
                       });
 
@@ -1864,16 +1895,42 @@ export default function ManageTab({
                         combinedActivities.push({
                           id: `load-${load.id}`,
                           date: load.date,
+                          delegatePhone: load.delegatePhone,
+                          delegateName: load.delegateName,
                           title: `🏭 سحب حمولة • ${prod?.name || 'صنف مجهول'}`,
-                          subtitle: `الكمية: ${load.quantity} عبوة`,
+                          subtitle: `الكمية: ${load.quantity} عبوة • المندوب: ${load.delegateName || 'مجهول'}`,
                           amountText: load.advanceAmount > 0 ? `مقدم: ${formatNum(load.advanceAmount)}ج.م` : 'بدون مقدم',
                           time: load.date && load.date.length > 11 ? load.date.substring(11, 16) : 'الآن',
                           badgeText: 'استلام بضاعة',
-                          badgeClass: "bg-purple-100 text-purple-800"
+                          badgeClass: "bg-purple-100 text-purple-800",
+                          lat: load.lat,
+                          lng: load.lng
                         });
                       });
 
+                      usersList.forEach(user => {
+                        if (user.lastLat && user.lastLng && user.lastActive) {
+                          combinedActivities.push({
+                            id: `loc-${user.phone}-${user.lastActive}`,
+                            date: user.lastActive,
+                            delegatePhone: user.phone,
+                            delegateName: user.name,
+                            title: `📍 رصد إحداثيات وتتبع خط السير (GPS)`,
+                            subtitle: `تم رصد تحرك المندوب: ${user.name}`,
+                            amountText: '',
+                            time: user.lastActive && user.lastActive.length > 11 ? user.lastActive.substring(11, 16) : 'الآن',
+                            badgeText: 'تتبع مسار',
+                            badgeClass: 'bg-sky-100 text-sky-800 border border-sky-200',
+                            lat: user.lastLat,
+                            lng: user.lastLng,
+                            isLocationOnly: true
+                          });
+                        }
+                      });
+
                       const filteredActivities = combinedActivities.filter(act => {
+                        if (movementDelegateFilter !== 'all' && act.delegatePhone !== movementDelegateFilter) return false;
+                        
                         if (movementFilter === 'all') return true;
                         if (!act.date) return false;
                         
@@ -1930,8 +1987,18 @@ export default function ManageTab({
                                     {act.title}
                                   </span>
                                   <span className="text-[10px] text-slate-500 font-bold">
-                                    {isToday ? act.time : `${dayNameText} ${dateText} • ${act.time}`} • {act.subtitle} • <span className="text-[#DD6B20]">{act.amountText}</span>
+                                    {isToday ? act.time : `${dayNameText} ${dateText} • ${act.time}`} • {act.subtitle} {act.amountText ? `• ` : ''}<span className="text-[#DD6B20]">{act.amountText}</span>
                                   </span>
+                                  <div className="flex items-center gap-1 mt-1 bg-slate-50 w-fit px-2 py-0.5 rounded border border-slate-150 hide-on-print">
+                                    <MapPin className="h-3 w-3 text-emerald-600" />
+                                    {act.lat && act.lng ? (
+                                       <a href={`https://maps.google.com/?q=${act.lat},${act.lng}`} target="_blank" rel="noreferrer" className="text-[9px] text-emerald-700 hover:underline font-mono font-bold" title="عرض الموقع على الخريطة">
+                                         إحداثيات مسجلة: {act.lat.toFixed(5)}, {act.lng.toFixed(5)}
+                                       </a>
+                                    ) : (
+                                       <span className="text-[9px] text-slate-400 font-bold">إحداثيات التحرك غير متوفرة/لم يتم الرصد</span>
+                                    )}
+                                  </div>
                                 </div>
                                 <div className="flex flex-col items-end gap-1 shrink-0">
                                   <span className={`text-[9px] font-extrabold px-1.5 py-0.5 rounded ${act.badgeClass}`}>
@@ -3681,7 +3748,9 @@ export default function ManageTab({
                   <MapPin className="h-8 w-8 text-gray-300" />
                   <span className="text-xs text-gray-400 font-bold">لا توجد مناطق عمل مضافة حالياً. يرجى البدء بإضافة مناطق العمل لتسهيل تعبئة الدليل ومطابقة المبيعات.</span>
                 </div>
-              ) : (() => {
+              ) : (
+                <>
+                  {(() => {
                 const queryNormalized = areaSearchQuery.trim().toLowerCase();
                 const filteredList = localWorkAreas.filter(w => 
                   !queryNormalized ||
@@ -3754,7 +3823,9 @@ export default function ManageTab({
                     ))}
                   </div>
                 );
-              })()}
+                  })()}
+                </>
+              )}
             </div>
             {/* Bottom Actions */}
             <div className="border-t border-slate-150 pt-4 flex justify-end gap-3 mt-2">

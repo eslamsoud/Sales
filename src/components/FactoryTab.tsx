@@ -84,6 +84,45 @@ export default function FactoryTab({
   const [archiveEndDate, setArchiveEndDate] = useState('');
   const [archiveSection, setArchiveSection] = useState<'factory' | 'trips'>('factory');
 
+  const [archiveDelegateFilter, setArchiveDelegateFilter] = useState<string>('all');
+  const [archiveDayFilters, setArchiveDayFilters] = useState<string[]>([]);
+
+  // States for live load filtering
+  const [liveLoadFilter, setLiveLoadFilter] = useState<'all' | 'daily' | 'weekly' | 'monthly' | 'custom'>('all');
+  const [liveLoadStartDate, setLiveLoadStartDate] = useState('');
+  const [liveLoadEndDate, setLiveLoadEndDate] = useState('');
+  const [liveLoadDelegateFilter, setLiveLoadDelegateFilter] = useState<string>('all');
+  const [liveLoadDayFilters, setLiveLoadDayFilters] = useState<string[]>([]);
+
+  const archiveDelegates = React.useMemo(() => {
+    const delegates = new Set<string>();
+    factoryLoads.forEach(l => { if (l.delegateName) delegates.add(l.delegateName.replace(/ \(.*?\)/, '').trim()); });
+    trips.forEach(t => { if (t.delegateName) delegates.add(t.delegateName.replace(/ \(.*?\)/, '').trim()); });
+    return Array.from(delegates);
+  }, [factoryLoads, trips]);
+
+  const filteredLiveLoads = React.useMemo(() => {
+    return factoryLoads.filter(load => {
+      if (liveLoadDelegateFilter !== 'all') {
+        const loadDelName = load.delegateName?.replace(/ \(.*?\)/, '').trim() || '';
+        if (!loadDelName.includes(liveLoadDelegateFilter)) return false;
+      }
+
+      const loadDateObj = new Date(load.date);
+      if (isNaN(loadDateObj.getTime())) return false;
+
+      if (liveLoadFilter === 'daily') return loadDateObj.toDateString() === new Date().toDateString();
+      if (liveLoadFilter === 'weekly') {
+        if (Math.abs(new Date().getTime() - loadDateObj.getTime()) / (1000 * 60 * 60 * 24) > 7) return false;
+        if (liveLoadDayFilters.length > 0) return liveLoadDayFilters.includes(new Intl.DateTimeFormat('en-US', { weekday: 'long' }).format(loadDateObj));
+        return true;
+      }
+      if (liveLoadFilter === 'monthly') return loadDateObj.getMonth() === new Date().getMonth() && loadDateObj.getFullYear() === new Date().getFullYear();
+      if (liveLoadFilter === 'custom') return (!liveLoadStartDate || load.date >= liveLoadStartDate) && (!liveLoadEndDate || load.date <= liveLoadEndDate + 'T23:59:59');
+      return true;
+    });
+  }, [factoryLoads, liveLoadFilter, liveLoadStartDate, liveLoadEndDate, liveLoadDelegateFilter, liveLoadDayFilters]);
+
   // States for Trips
   const [tripDescription, setTripDescription] = useState('');
   const [tripPrice, setTripPrice] = useState('');
@@ -146,7 +185,14 @@ export default function FactoryTab({
 
   const filteredLoads = React.useMemo(() => {
     return factoryLoads.filter(load => {
+      if (archiveDelegateFilter !== 'all') {
+        const loadDelName = load.delegateName?.replace(/ \(.*?\)/, '').trim() || '';
+        if (!loadDelName.includes(archiveDelegateFilter)) return false;
+      }
+
       const loadDateObj = new Date(load.date);
+      if (isNaN(loadDateObj.getTime())) return false;
+
       const now = new Date();
       
       if (archiveFilter === 'daily') {
@@ -155,12 +201,15 @@ export default function FactoryTab({
       if (archiveFilter === 'weekly') {
         const diffTime = Math.abs(now.getTime() - loadDateObj.getTime());
         const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-        return diffDays <= 7;
+        if (diffDays > 7) return false;
+        if (archiveDayFilters.length > 0) {
+          const englishDay = new Intl.DateTimeFormat('en-US', { weekday: 'long' }).format(loadDateObj);
+          return archiveDayFilters.includes(englishDay);
+        }
+        return true;
       }
       if (archiveFilter === 'monthly') {
-        const diffTime = Math.abs(now.getTime() - loadDateObj.getTime());
-        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-        return diffDays <= 30;
+        return loadDateObj.getMonth() === now.getMonth() && loadDateObj.getFullYear() === now.getFullYear();
       }
       if (archiveFilter === 'custom') {
         const dStr = load.date.split('T')[0]; // "YYYY-MM-DD" or similar
@@ -170,13 +219,18 @@ export default function FactoryTab({
       }
       return true;
     });
-  }, [factoryLoads, archiveFilter, archiveStartDate, archiveEndDate]);
+  }, [factoryLoads, archiveFilter, archiveStartDate, archiveEndDate, archiveDelegateFilter, archiveDayFilters]);
 
   const filteredArchiveTrips = React.useMemo(() => {
     if (!trips) return [];
     return trips.filter(trip => {
       if (!trip.collected) return false; // Only show collected (paid) trips in this archive
       
+      if (archiveDelegateFilter !== 'all') {
+        const tripDelName = trip.delegateName?.replace(/ \(.*?\)/, '').trim() || '';
+        if (!tripDelName.includes(archiveDelegateFilter)) return false;
+      }
+
       // Parse trip.date. It's usually "YYYY-MM-DD" from info input, but fallback is fine
       let tripDateObj = new Date(trip.date);
       if (isNaN(tripDateObj.getTime())) tripDateObj = new Date(); // fallback
@@ -189,12 +243,15 @@ export default function FactoryTab({
       if (archiveFilter === 'weekly') {
         const diffTime = Math.abs(now.getTime() - tripDateObj.getTime());
         const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-        return diffDays <= 7;
+        if (diffDays > 7) return false;
+        if (archiveDayFilters.length > 0) {
+          const englishDay = new Intl.DateTimeFormat('en-US', { weekday: 'long' }).format(tripDateObj);
+          return archiveDayFilters.includes(englishDay);
+        }
+        return true;
       }
       if (archiveFilter === 'monthly') {
-        const diffTime = Math.abs(now.getTime() - tripDateObj.getTime());
-        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-        return diffDays <= 30;
+        return tripDateObj.getMonth() === now.getMonth() && tripDateObj.getFullYear() === now.getFullYear();
       }
       if (archiveFilter === 'custom') {
         const dStr = trip.date; // assuming formatting is YYYY-MM-DD
@@ -204,7 +261,7 @@ export default function FactoryTab({
       }
       return true;
     });
-  }, [trips, archiveFilter, archiveStartDate, archiveEndDate]);
+  }, [trips, archiveFilter, archiveStartDate, archiveEndDate, archiveDelegateFilter, archiveDayFilters]);
 
   // Register extra factory payment form
   const [newPaymentAmount, setNewPaymentAmount] = useState('');
@@ -564,7 +621,8 @@ export default function FactoryTab({
         subtotal,
         date: load.date,
         warehouseKeeper: load.warehouseKeeper,
-        advanceAmount: load.advanceAmount
+        advanceAmount: load.advanceAmount,
+        delegateName: load.delegateName
       };
     });
 
@@ -575,6 +633,47 @@ export default function FactoryTab({
       totalIndividualItems
     };
   }, [factoryLoads, products]);
+
+  const filteredLiveLoadsSummary = useMemo(() => {
+    let grandFactoryCost = 0;
+    let totalCrates = 0;
+    let totalIndividualItems = 0;
+
+    const itemsList = filteredLiveLoads.map(load => {
+      const prod = products.find(p => p.id === load.productId);
+      const weights = prod ? getProductWeightsFallback(prod) : [];
+      const weight = weights.find(w => w.id === load.weightId) || weights[0];
+
+      const cartons = load.cartonsCount !== undefined ? load.cartonsCount : Math.floor(load.quantity / (weight?.unitsPerCarton || 12));
+      const loose = load.looseUnitsCount !== undefined ? load.looseUnitsCount : (load.quantity % (weight?.unitsPerCarton || 12));
+      const cartonPrice = weight?.cartonPriceFromFactory || 0;
+      const factoryPricePerUnit = weight?.factoryPricePerUnit || 0;
+
+      const subtotal = (cartons * cartonPrice) + (loose * factoryPricePerUnit);
+
+      grandFactoryCost += subtotal;
+      totalCrates += cartons;
+      totalIndividualItems += load.quantity;
+
+      return {
+        id: load.id,
+        productName: prod ? prod.name : 'صنف مجهول',
+        size: weight ? weight.size : 'حجم عادي',
+        cartons,
+        loose,
+        cartonPrice,
+        subtotal,
+        date: load.date,
+        warehouseKeeper: load.warehouseKeeper,
+        advanceAmount: load.advanceAmount,
+        delegateName: load.delegateName
+      };
+    });
+
+    return {
+      itemsList, grandFactoryCost, totalCrates, totalIndividualItems
+    };
+  }, [filteredLiveLoads, products]);
 
   // Group load items by product so they are listed with each product name written only once
   const groupedFactoryLoads = useMemo(() => {
@@ -638,7 +737,7 @@ export default function FactoryTab({
 
   // DRAW AND DOWNLOAD DYNAMIC STATEMENT OF SELLING LOADS AS HIGH-FIDELITY PDF (No Prices)
   const handlePrintCurrentLoads = () => {
-    const list = factoryInvoiceSummary.itemsList;
+    const list = filteredLiveLoadsSummary.itemsList;
     if (list.length === 0) {
       showToast('⚠️ لا توجد شحنات تحميل سابقة لتنزيل البيان.');
       return;
@@ -723,7 +822,13 @@ export default function FactoryTab({
       ctx.fillStyle = '#334155';
       ctx.font = 'bold 13px system-ui, sans-serif';
       ctx.textAlign = 'right';
-      ctx.fillText(`${item.productName} (${item.size})`, canvas.width - 55, y + 23);
+      ctx.fillText(`${item.productName} (${item.size})`, canvas.width - 55, y + 20);
+
+      if (item.delegateName) {
+        ctx.fillStyle = '#64748b';
+        ctx.font = '500 11px system-ui, sans-serif';
+        ctx.fillText(`المندوب: ${item.delegateName}`, canvas.width - 55, y + 36);
+      }
 
       ctx.textAlign = 'left';
       ctx.fillStyle = '#0f172a';
@@ -749,7 +854,7 @@ export default function FactoryTab({
     ctx.textAlign = 'left';
     ctx.fillStyle = '#4f46e5';
     ctx.font = 'bold 16px system-ui, sans-serif';
-    ctx.fillText(`إجمالي الكرتونات: ${factoryInvoiceSummary.totalCrates} كرتونة`, 65, y + 25);
+    ctx.fillText(`إجمالي الكرتونات: ${filteredLiveLoadsSummary.totalCrates} كرتونة`, 65, y + 25);
 
     // Bottom Boxes Section: Warehouse Keeper (Reviewed from) on the bottom left, driver signature on the bottom right
     y += 85;
@@ -797,7 +902,7 @@ export default function FactoryTab({
   };
 
   const handleDownloadInvoiceImage = () => {
-    const list = factoryInvoiceSummary.itemsList;
+    const list = filteredLiveLoadsSummary.itemsList;
     if (list.length === 0) {
       showToast('⚠️ لا توجد شحنات تحميل سابقة لتنزيل البيان.');
       return;
@@ -882,7 +987,13 @@ export default function FactoryTab({
       ctx.fillStyle = '#334155';
       ctx.font = 'bold 13px system-ui, sans-serif';
       ctx.textAlign = 'right';
-      ctx.fillText(`${item.productName} (${item.size})`, canvas.width - 55, y + 23);
+      ctx.fillText(`${item.productName} (${item.size})`, canvas.width - 55, y + 20);
+
+      if (item.delegateName) {
+        ctx.fillStyle = '#64748b';
+        ctx.font = '500 11px system-ui, sans-serif';
+        ctx.fillText(`المندوب: ${item.delegateName}`, canvas.width - 55, y + 36);
+      }
 
       ctx.textAlign = 'left';
       ctx.fillStyle = '#0f172a';
@@ -908,7 +1019,7 @@ export default function FactoryTab({
     ctx.textAlign = 'left';
     ctx.fillStyle = '#4f46e5';
     ctx.font = 'bold 16px system-ui, sans-serif';
-    ctx.fillText(`إجمالي الكرتونات: ${factoryInvoiceSummary.totalCrates} كرتونة`, 65, y + 25);
+    ctx.fillText(`إجمالي الكرتونات: ${filteredLiveLoadsSummary.totalCrates} كرتونة`, 65, y + 25);
 
     // Bottom Boxes Section: Warehouse Keeper (Reviewed from) on the bottom left, driver signature on the bottom right
     y += 85;
@@ -1904,13 +2015,69 @@ export default function FactoryTab({
                   بيان الكميات المحملة بالسيارة
                 </h3>
               </div>
+              
+              <div className="bg-[#F7FAFC] border border-slate-250/50 p-3 rounded-2xl flex flex-col gap-3">
+                <span className="text-xs font-black text-indigo-950 flex items-center gap-1.5">
+                  <Calendar className="h-4 w-4 text-[#2B6CB0]" />
+                  فلترة وتحديد فترة عرض الحمولة
+                </span>
 
-              {factoryLoads.length === 0 ? (
-                <p className="text-center text-gray-400 py-6 text-xs">لا توجد تحميلات مسجلة ببيان حمولة السيارة اليوم.</p>
+                {archiveDelegates.length > 0 && (
+                  <div className="flex items-center gap-2">
+                    <label className="text-[10px] font-bold text-gray-500">المندوب:</label>
+                    <select
+                      value={liveLoadDelegateFilter}
+                      onChange={(e) => setLiveLoadDelegateFilter(e.target.value)}
+                      className="bg-white border border-slate-200 rounded-lg p-1.5 text-[11px] font-bold text-[#1A365D] focus:outline-none flex-1"
+                    >
+                      <option value="all">الكل (جميع المناديب)</option>
+                      {archiveDelegates.map(del => (
+                        <option key={del} value={del}>{del}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
+                <div className="grid grid-cols-5 bg-[#FFFFFF] border border-slate-205 p-1 rounded-xl text-center gap-1">
+                  <button type="button" onClick={() => { setLiveLoadFilter('all'); setLiveLoadDayFilters([]); }} className={`py-1.5 px-0.5 rounded-lg text-[10.5px] font-bold transition-all cursor-pointer ${liveLoadFilter === 'all' ? 'bg-[#FFFFFF] text-[#1A365D] border-b-2 border-[#DD6B20] shadow-sm' : 'text-[#9CA3AF] hover:bg-slate-55'}`}>الكل</button>
+                  <button type="button" onClick={() => { setLiveLoadFilter('daily'); setLiveLoadDayFilters([]); }} className={`py-1.5 px-0.5 rounded-lg text-[10.5px] font-bold transition-all cursor-pointer ${liveLoadFilter === 'daily' ? 'bg-[#FFFFFF] text-[#1A365D] border-b-2 border-[#DD6B20] shadow-sm' : 'text-[#9CA3AF] hover:bg-slate-55'}`}>يومي</button>
+                  <button type="button" onClick={() => { setLiveLoadFilter('weekly'); setLiveLoadDayFilters([]); }} className={`py-1.5 px-0.5 rounded-lg text-[10.5px] font-bold transition-all cursor-pointer ${liveLoadFilter === 'weekly' ? 'bg-[#FFFFFF] text-[#1A365D] border-b-2 border-[#DD6B20] shadow-sm' : 'text-[#9CA3AF] hover:bg-slate-55'}`}>أسبوعي</button>
+                  <button type="button" onClick={() => { setLiveLoadFilter('monthly'); setLiveLoadDayFilters([]); }} className={`py-1.5 px-0.5 rounded-lg text-[10.5px] font-bold transition-all cursor-pointer ${liveLoadFilter === 'monthly' ? 'bg-[#FFFFFF] text-[#1A365D] border-b-2 border-[#DD6B20] shadow-sm' : 'text-[#9CA3AF] hover:bg-slate-55'}`}>شهري</button>
+                  <button type="button" onClick={() => { setLiveLoadFilter('custom'); setLiveLoadDayFilters([]); }} className={`py-1.5 px-0.5 rounded-lg text-[10.5px] font-bold transition-all cursor-pointer ${liveLoadFilter === 'custom' ? 'bg-[#FFFFFF] text-[#1A365D] border-b-2 border-[#DD6B20] shadow-sm' : 'text-[#9CA3AF] hover:bg-slate-55'}`}>مخصص</button>
+                </div>
+
+                {liveLoadFilter === 'weekly' && (
+                  <div className="flex bg-[#FFFFFF] border border-slate-200 rounded-lg overflow-hidden flex-wrap gap-px p-0.5 animate-fade-in" dir="rtl">
+                    <button onClick={() => setLiveLoadDayFilters([])} className={`flex-1 text-[10px] py-1.5 rounded font-bold transition-colors ${liveLoadDayFilters.length === 0 ? 'bg-[#1A365D] text-white shadow-xs' : 'text-slate-600 hover:bg-slate-100 bg-white'}`}>الكل</button>
+                    {['Saturday', 'Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'].map(day => {
+                       const arabicDays: Record<string, string> = { 'Saturday':'السبت', 'Sunday':'الأحد', 'Monday':'الإثنين', 'Tuesday':'الثلاثاء', 'Wednesday':'الأربعاء', 'Thursday':'الخميس', 'Friday':'الجمعة' };
+                       return (
+                         <button key={day} onClick={() => setLiveLoadDayFilters(prev => prev.includes(day) ? prev.filter(d => d !== day) : [...prev, day])} className={`flex-1 text-[10px] py-1.5 rounded font-bold transition-colors ${liveLoadDayFilters.includes(day) ? 'bg-[#1A365D] text-white shadow-xs' : 'text-slate-600 hover:bg-slate-100 bg-white'}`}>{arabicDays[day]}</button>
+                       )
+                    })}
+                  </div>
+                )}
+
+                {liveLoadFilter === 'custom' && (
+                  <div className="grid grid-cols-2 gap-2 animate-fade-in">
+                    <div>
+                      <label className="block text-[10px] text-gray-400 font-bold mb-0.5">من تاريخ</label>
+                      <input type="date" value={liveLoadStartDate} onChange={(e) => setLiveLoadStartDate(e.target.value)} className="w-full bg-[#FFFFFF] border border-slate-200 rounded-lg py-1 px-2 text-xs font-bold text-[#1A365D]" />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] text-gray-400 font-bold mb-0.5">إلى تاريخ</label>
+                      <input type="date" value={liveLoadEndDate} onChange={(e) => setLiveLoadEndDate(e.target.value)} className="w-full bg-[#FFFFFF] border border-slate-200 rounded-lg py-1 px-2 text-xs font-bold text-[#1A365D]" />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {filteredLiveLoads.length === 0 ? (
+                <p className="text-center text-gray-400 py-6 text-xs">لا توجد تحميلات مسجلة تطابق الفلتر.</p>
               ) : (
                 <div className="flex flex-col gap-4">
                   <div className="max-h-64 overflow-y-auto custom-scroll border border-slate-100 rounded-xl p-2.5 bg-[#F7FAFC]/50 divide-y divide-slate-150 flex flex-col gap-2.5">
-                    {factoryLoads.map((load) => {
+                    {filteredLiveLoads.map((load) => {
                       const prod = products.find(p => p.id === load.productId);
                       const weights = prod ? getProductWeightsFallback(prod) : [];
                       const weight = weights.find(w => w.id === load.weightId) || weights[0];
@@ -1936,9 +2103,16 @@ export default function FactoryTab({
 
                           {/* Extra info */}
                           <div className="flex justify-between items-center text-[10px]">
-                            <span className="text-gray-400 font-bold font-mono">
-                              {formattedDateStr}
-                            </span>
+                            <div className="flex items-center gap-2">
+                              <span className="text-gray-400 font-bold font-mono">
+                                {formattedDateStr}
+                              </span>
+                              {load.delegateName && (
+                                <span className="bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded-md font-bold">
+                                  المندوب: {load.delegateName}
+                                </span>
+                              )}
+                            </div>
                             <button
                               type="button"
                               onClick={() => {
@@ -1961,7 +2135,7 @@ export default function FactoryTab({
                     <button
                       type="button"
                       onClick={handleDownloadInvoiceImage}
-                      disabled={factoryLoads.length === 0}
+                      disabled={filteredLiveLoads.length === 0}
                       className="w-full bg-indigo-50 text-[#1A365D] hover:bg-indigo-100 disabled:bg-[#F7FAFC] disabled:text-gray-400 py-3 rounded-lg text-xs font-bold flex justify-center items-center gap-1.5 active:scale-95 transition-all cursor-pointer border border-indigo-200/50"
                     >
                       <Image className="h-4 w-4" />
@@ -1970,7 +2144,7 @@ export default function FactoryTab({
                     <button
                       type="button"
                       onClick={handlePrintCurrentLoads}
-                      disabled={factoryLoads.length === 0}
+                      disabled={filteredLiveLoads.length === 0}
                       className="w-full bg-rose-50 text-rose-700 hover:bg-rose-100 disabled:bg-[#F7FAFC] disabled:text-gray-400 py-3 rounded-lg text-xs font-bold flex justify-center items-center gap-1.5 active:scale-95 transition-all cursor-pointer border border-rose-200/50"
                     >
                       <Printer className="h-4 w-4" />
@@ -2005,7 +2179,7 @@ export default function FactoryTab({
                 </div>
               </div>
 
-              {factoryLoads.length === 0 ? (
+              {filteredLiveLoads.length === 0 ? (
                 <p className="text-center py-5">لا توجد شحنات محملة حالياً.</p>
               ) : (
                 <div className="flex flex-col gap-5">
@@ -2022,7 +2196,7 @@ export default function FactoryTab({
                       </tr>
                     </thead>
                     <tbody>
-                      {factoryLoads.map((load, index) => {
+                      {filteredLiveLoads.map((load, index) => {
                         const prod = products.find(p => p.id === load.productId);
                         const weights = prod ? getProductWeightsFallback(prod) : [];
                         const weight = weights.find(w => w.id === load.weightId) || weights[0];
@@ -2038,7 +2212,8 @@ export default function FactoryTab({
                             <td className="border border-slate-800 p-1.5 text-center">{index + 1}</td>
                             <td className="border border-slate-800 p-1.5">{formattedDateStr}</td>
                             <td className="border border-slate-800 p-1.5 font-bold">
-                              {prod ? prod.name : 'صنف غير معرف'} - ({weight?.size || 'وزن مجهول'})
+                              <div>{prod ? prod.name : 'صنف غير معرف'} - ({weight?.size || 'وزن مجهول'})</div>
+                              <div className="text-gray-500 font-normal mt-0.5 text-[10px]">المندوب: {load.delegateName || 'مجهول'}</div>
                             </td>
                             <td className="border border-slate-800 p-1.5 text-center font-bold" dir="rtl">
                               {loadedCartons} كرتونة
@@ -2058,24 +2233,24 @@ export default function FactoryTab({
                   <div className="border border-slate-800 p-3 rounded mt-3 text-[11.5px] font-bold bg-[#F7FAFC] flex flex-col gap-2 w-full ml-auto">
                     <div className="flex justify-between">
                       <span>إجمالي عدد شحنات السحب:</span>
-                      <span>{factoryLoads.length} شحنة تحميل</span>
+                      <span>{filteredLiveLoads.length} شحنة تحميل</span>
                     </div>
                     <div className="flex justify-between border-t border-slate-300 pt-1">
                       <span>إجمالي قيم البضائع المسحوبة من المصنع الحالية:</span>
                       <span className="text-md">
-                        {formatNum(factoryBalanceDetails.rawLoadedValue)}ج.م
+                        {formatNum(filteredLiveLoadsSummary.grandFactoryCost)}ج.م
                       </span>
                     </div>
                     <div className="flex justify-between border-t border-slate-300 pt-1 text-emerald-800">
                       <span>إجمالي الدفعات المقدمة والمباشرة:</span>
                       <span>
-                        {formatNum(factoryBalanceDetails.totalAdvancePayments)}ج.م
+                        {formatNum(filteredLiveLoads.reduce((s, l) => s + (l.advanceAmount || 0), 0))}ج.م
                       </span>
                     </div>
                     <div className="flex justify-between border-t border-slate-300 pt-1 text-rose-800 text-sm">
                       <span>المتبقي للمصنع (المدين الباقي):</span>
                       <span>
-                        {formatNum(factoryBalanceDetails.netRemainingDueToFactory)}ج.م
+                        {formatNum(filteredLiveLoadsSummary.grandFactoryCost - filteredLiveLoads.reduce((s, l) => s + (l.advanceAmount || 0), 0))}ج.م
                       </span>
                     </div>
                   </div>
@@ -2135,10 +2310,26 @@ export default function FactoryTab({
                   فلترة وتحديد فترة الأرشيف للتصفح والطباعة
                 </span>
 
+                {archiveDelegates.length > 0 && (
+                  <div className="flex items-center gap-2">
+                    <label className="text-[10px] font-bold text-gray-500">المندوب:</label>
+                    <select
+                      value={archiveDelegateFilter}
+                      onChange={(e) => setArchiveDelegateFilter(e.target.value)}
+                      className="bg-white border border-slate-200 rounded-lg p-1.5 text-[11px] font-bold text-[#1A365D] focus:outline-none flex-1"
+                    >
+                      <option value="all">الكل (جميع المناديب)</option>
+                      {archiveDelegates.map(del => (
+                        <option key={del} value={del}>{del}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
                 <div className="grid grid-cols-5 bg-[#FFFFFF] border border-slate-205 p-1 rounded-xl text-center gap-1">
                   <button
                     type="button"
-                    onClick={() => setArchiveFilter('all')}
+                    onClick={() => { setArchiveFilter('all'); setArchiveDayFilters([]); }}
                     className={`py-1.5 px-0.5 rounded-lg text-[10.5px] font-bold transition-all cursor-pointer ${
                       archiveFilter === 'all' ? 'bg-[#FFFFFF] text-[#1A365D] border-b-2 border-[#DD6B20] shadow-sm' : 'text-[#9CA3AF] hover:bg-slate-55'
                     }`}
@@ -2147,7 +2338,7 @@ export default function FactoryTab({
                   </button>
                   <button
                     type="button"
-                    onClick={() => setArchiveFilter('daily')}
+                    onClick={() => { setArchiveFilter('daily'); setArchiveDayFilters([]); }}
                     className={`py-1.5 px-0.5 rounded-lg text-[10.5px] font-bold transition-all cursor-pointer ${
                       archiveFilter === 'daily' ? 'bg-[#FFFFFF] text-[#1A365D] border-b-2 border-[#DD6B20] shadow-sm' : 'text-[#9CA3AF] hover:bg-slate-55'
                     }`}
@@ -2156,7 +2347,7 @@ export default function FactoryTab({
                   </button>
                   <button
                     type="button"
-                    onClick={() => setArchiveFilter('weekly')}
+                    onClick={() => { setArchiveFilter('weekly'); setArchiveDayFilters([]); }}
                     className={`py-1.5 px-0.5 rounded-lg text-[10.5px] font-bold transition-all cursor-pointer ${
                       archiveFilter === 'weekly' ? 'bg-[#FFFFFF] text-[#1A365D] border-b-2 border-[#DD6B20] shadow-sm' : 'text-[#9CA3AF] hover:bg-slate-55'
                     }`}
@@ -2165,7 +2356,7 @@ export default function FactoryTab({
                   </button>
                   <button
                     type="button"
-                    onClick={() => setArchiveFilter('monthly')}
+                    onClick={() => { setArchiveFilter('monthly'); setArchiveDayFilters([]); }}
                     className={`py-1.5 px-0.5 rounded-lg text-[10.5px] font-bold transition-all cursor-pointer ${
                       archiveFilter === 'monthly' ? 'bg-[#FFFFFF] text-[#1A365D] border-b-2 border-[#DD6B20] shadow-sm' : 'text-[#9CA3AF] hover:bg-slate-55'
                     }`}
@@ -2174,7 +2365,7 @@ export default function FactoryTab({
                   </button>
                   <button
                     type="button"
-                    onClick={() => setArchiveFilter('custom')}
+                    onClick={() => { setArchiveFilter('custom'); setArchiveDayFilters([]); }}
                     className={`py-1.5 px-0.5 rounded-lg text-[10.5px] font-bold transition-all cursor-pointer ${
                       archiveFilter === 'custom' ? 'bg-[#FFFFFF] text-[#1A365D] border-b-2 border-[#DD6B20] shadow-sm' : 'text-[#9CA3AF] hover:bg-slate-55'
                     }`}
@@ -2182,6 +2373,24 @@ export default function FactoryTab({
                     مخصص
                   </button>
                 </div>
+
+                {archiveFilter === 'weekly' && (
+                  <div className="flex bg-[#FFFFFF] border border-slate-200 rounded-lg overflow-hidden flex-wrap gap-px p-0.5 animate-fade-in" dir="rtl">
+                    <button onClick={() => setArchiveDayFilters([])} className={`flex-1 text-[10px] py-1.5 rounded font-bold transition-colors ${archiveDayFilters.length === 0 ? 'bg-[#1A365D] text-white shadow-xs' : 'text-slate-600 hover:bg-slate-100 bg-white'}`}>الكل</button>
+                    {['Saturday', 'Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'].map(day => {
+                       const arabicDays: Record<string, string> = { 'Saturday':'السبت', 'Sunday':'الأحد', 'Monday':'الإثنين', 'Tuesday':'الثلاثاء', 'Wednesday':'الأربعاء', 'Thursday':'الخميس', 'Friday':'الجمعة' };
+                       return (
+                         <button
+                           key={day}
+                           onClick={() => setArchiveDayFilters(prev => prev.includes(day) ? prev.filter(d => d !== day) : [...prev, day])}
+                           className={`flex-1 text-[10px] py-1.5 rounded font-bold transition-colors ${archiveDayFilters.includes(day) ? 'bg-[#1A365D] text-white shadow-xs' : 'text-slate-600 hover:bg-slate-100 bg-white'}`}
+                         >
+                           {arabicDays[day]}
+                         </button>
+                       )
+                    })}
+                  </div>
+                )}
 
                 {/* Date Inputs if Custom is selected */}
                 {archiveFilter === 'custom' && (
@@ -2838,6 +3047,11 @@ export default function FactoryTab({
                           <div>
                             <span className="block font-black text-[#1A365D] text-sm">{prod ? prod.name : 'صنف مجهول'}</span>
                             <span className="block text-[11px] text-[#2B6CB0] font-bold mt-0.5">الوزن / الحجم: {weight ? weight.size : 'حجم مبدئي'}</span>
+                            {load.delegateName && (
+                              <span className="inline-block text-[10px] text-indigo-700 bg-indigo-50 px-1.5 py-0.5 rounded font-bold mt-1 border border-indigo-100">
+                                المندوب: {load.delegateName}
+                              </span>
+                            )}
                           </div>
                           <span className="text-xs bg-indigo-100/60 text-indigo-950 px-2.5 py-1 rounded-md font-extrabold border border-indigo-200/55 font-mono">
                             سعر المصنع للكرتونة: {cartonPrice}ج.م
@@ -3071,7 +3285,8 @@ export default function FactoryTab({
                             <td className="border border-slate-800 p-1.5 text-center">{index + 1}</td>
                             <td className="border border-slate-800 p-1.5 text-center" dir="rtl">{formattedDateStr}</td>
                             <td className="border border-slate-800 p-1.5">
-                              {prod?.name || 'مجهول'} <span className="text-[9px] text-[#2B6CB0]">({weight?.size || ''})</span>
+                              <div>{prod?.name || 'مجهول'} <span className="text-[9px] text-[#2B6CB0]">({weight?.size || ''})</span></div>
+                              <div className="text-gray-500 text-[10px] mt-0.5">المندوب: {load.delegateName || 'مجهول'}</div>
                             </td>
                             <td className="border border-slate-800 p-1.5 text-center font-bold">
                               {loadedCartons}
