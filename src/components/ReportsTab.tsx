@@ -478,7 +478,7 @@ function ReportsTabComponent({
                       <td>${idx + 1}</td>
                       <td><b>#${inv.invoiceNumber}</b></td>
                       <td>${cust ? cust.name : 'عميل غير مسجل'}</td>
-                      <td>${inv.delegateName || 'غير محدد'}</td>
+              <td>${inv.delegateName?.replace(/ \(.*?\)/g, '').trim() || 'غير محدد'}</td>
                       <td><b>${totalAfter.toLocaleString('ar-EG')} ج.م</b></td>
                       <td style="color: #16a34a;">${paid.toLocaleString('ar-EG')} ج.م</td>
                       <td style="color: ${remaining > 0 ? '#dc2626' : '#64748b'}; font-weight: ${remaining > 0 ? 'bold' : 'normal'}">${remaining.toLocaleString('ar-EG')} ج.م</td>
@@ -1608,8 +1608,8 @@ function ReportsTabComponent({
                 <div className="flex flex-col gap-1 mt-1 border-slate-100 max-h-40 overflow-y-auto">
                   <span className="text-[10px] font-bold text-slate-400 mb-1">تفاصيل البضاعة المباعة:</span>
                   {itemsList.map((it, i) => {
-                    const prod = products.find(p => p.id === it.productId);
-                    const weight = prod?.weights?.find(w => w.id === it.weightId);
+                    const prod = products.find(p => String(p.id).trim() === String(it.productId).trim());
+                    const weight = prod?.weights?.find(w => String(w.id).trim() === String(it.weightId).trim());
                     const multiplier = weight?.unitsPerCarton || 12;
                     const cartonsText = formatCartonsAndPieces(it.quantity, multiplier);
                     const cartonPrice = Number(((it.finalPrice || 0) * multiplier).toFixed(2));
@@ -2079,20 +2079,20 @@ function ReportsTabComponent({
 
                           <div className="p-3 flex flex-col gap-4 bg-slate-50/50">
                             {activeCombinations.map(combo => {
-                              const product = products.find(p => p.id === combo.productId);
+                              const product = products.find(p => String(p.id).trim() === String(combo.productId).trim());
                               if (!product) return null;
 
                               const activeWeights = getProductWeightsFallback(product);
-                              const weight = activeWeights.find(w => w.id === combo.weightId) || activeWeights[0];
+                              const weight = activeWeights.find(w => String(w.id).trim() === String(combo.weightId).trim()) || activeWeights[0];
                               if (!weight) return null;
 
                               // Recalculate local quantities under this group
                               const groupLoaded = groupData.loads
-                                ?.filter(l => l.productId === product.id && l.weightId === weight.id)
+                                ?.filter(l => String(l.productId).trim() === String(product.id).trim() && String(l.weightId).trim() === String(weight.id).trim())
                                 .reduce((sum, l) => sum + (l.quantity || 0), 0) || 0;
 
                               const groupSold = groupData.invItems
-                                ?.filter(item => item.productId === product.id && item.weightId === weight.id)
+                                ?.filter(item => String(item.productId).trim() === String(product.id).trim() && String(item.weightId).trim() === String(weight.id).trim())
                                 .reduce((sum, item) => sum + (item.quantity || 0), 0) || 0;
 
                               const remainingUnits = groupLoaded - groupSold;
@@ -2456,8 +2456,8 @@ function ReportsTabComponent({
                   ) : (
                     <div className="flex flex-col gap-2 max-h-48 overflow-y-auto">
                       {editItems.map((it, idx) => {
-                        const prod = products.find(p => p.id === it.productId);
-                        const weight = prod?.weights?.find(w => w.id === it.weightId);
+                        const prod = products.find(p => String(p.id).trim() === String(it.productId).trim());
+                        const weight = prod?.weights?.find(w => String(w.id).trim() === String(it.weightId).trim());
                         const multiplier = weight?.unitsPerCarton || 12;
                         const totalPieces = it.quantity;
                         const cartons = Math.floor(totalPieces / multiplier);
@@ -2557,7 +2557,7 @@ function ReportsTabComponent({
                         onChange={(e) => {
                           const pid = e.target.value;
                           setEditAddProductId(pid);
-                          const pObj = products.find(p => p.id === pid);
+                          const pObj = products.find(p => String(p.id).trim() === String(pid).trim());
                           if (pObj && pObj.weights?.length > 0) {
                             setEditAddWeightId(pObj.weights[0].id);
                           } else {

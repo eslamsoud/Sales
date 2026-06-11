@@ -262,6 +262,7 @@ function doPost(e) {
     var data = JSON.parse(e.postData.contents);
     var deletedIds = data.deletedIds || [];
     var isOwner = data.syncRole === 'owner' || data.syncPhone === '01228466613';
+    var canEditPrices = data.canEditPrices === true || isOwner;
     
     function upsertData(sheetName, headers, dataRows, headerColor, delIds) {
       var sheet = ss.getSheetByName(sheetName);
@@ -307,6 +308,8 @@ function doPost(e) {
   
           var incomingId = String(row[0]).replace(/^'/, '').trim(); 
           if (incomingId.length === 10 && incomingId.indexOf('1') === 0) incomingId = '0' + incomingId;
+          
+          if (delIds && delIds.indexOf(incomingId) !== -1) continue; // 🚨 حماية إضافية: منع إضافة السجل المحذوف حتى لو تم إرساله بالخطأ من الذاكرة المحلية
           
           // توحيد طول الصف القادم من التطبيق لسد الثغرات
           var paddedNewRow = [];
@@ -384,7 +387,7 @@ function doPost(e) {
       upsertData('العملاء', ['المعرف', 'المحافظة', 'المنطقة', 'اسم العميل', 'رقم الهاتف', 'العنوان', 'رابط جوجل ماب', 'عدد المشتريات', 'مدير البيع', 'إجمالي المسحوبات', 'آخر شراء'], custRows, "#d9ead3", deletedIds);
 
       // 5. المنتجات
-      if (isOwner) {
+      if (canEditPrices) {
         var prodRows = [];
         (data.products || []).forEach(function(p) { 
           if (p.weights && p.weights.length > 0) {
@@ -1302,7 +1305,7 @@ export default function ManageTab({
   return (
     <div className="bg-[#F7FAFC] min-h-screen pb-12 text-right animate-fade-in" id="manage-tab-container" dir="rtl">
       {/* Header */}
-      <div className="bg-[#1A365D] text-white border-transparent text-white px-4 py-4 sticky top-0 z-10 shadow-md flex items-center justify-between">
+      <div className="bg-[#1A365D] text-white border-transparent text-white px-4 py-4 sticky top-0 z-[60] shadow-md flex items-center justify-between">
         <div className="flex items-center gap-2">
           <SettingsIcon className="h-6 w-6 text-amber-300" />
           <h1 className="font-bold" style={{ marginTop: '-2px', paddingBottom: '-3px', paddingRight: '-3px', paddingLeft: '-3px', paddingTop: '-3px', marginLeft: '-2px', marginRight: '-4px', marginBottom: '-4px', fontSize: '15px', lineHeight: '24px' }}>لوحة تحكم الإدارة (عقل النظام)</h1>
@@ -1891,7 +1894,7 @@ export default function ManageTab({
                       });
 
                       factoryLoads.forEach(load => {
-                        const prod = products.find(p => p.id === load.productId);
+                        const prod = products.find(p => String(p.id).trim() === String(load.productId).trim());
                         combinedActivities.push({
                           id: `load-${load.id}`,
                           date: load.date,
@@ -2788,7 +2791,7 @@ export default function ManageTab({
                                             <span className="text-slate-500">{load.date && !isNaN(new Date(load.date).getTime()) ? new Date(load.date).toLocaleDateString('ar-EG') : 'بدون تاريخ'}</span>
                                           </div>
                                           <div className="flex justify-between items-center text-xs font-black text-[#1A365D] mt-1">
-                                            <span>الصنف: {products.find(p => p.id === load.productId)?.name || 'منتج مجهول'}</span>
+                                            <span>الصنف: {products.find(p => String(p.id).trim() === String(load.productId).trim())?.name || 'منتج مجهول'}</span>
                                             <span className="text-purple-600 font-black">الكمية: {load.quantity} عبوة</span>
                                           </div>
                                           {load.notes && (
@@ -3841,7 +3844,7 @@ export default function ManageTab({
                 className="bg-[#DD6B20] hover:bg-[#C05621] text-white font-black py-2.5 px-6 rounded-xl text-xs shadow-md transition-all active:scale-95 cursor-pointer border-transparent flex items-center gap-1.5"
               >
                 <Save className="h-4 w-4" />
-                <span>حفظ التغييرات ومستودع العمل 💾</span>
+                <span>حفظ مناطق العمل</span>
               </button>
             </div>
           </div>

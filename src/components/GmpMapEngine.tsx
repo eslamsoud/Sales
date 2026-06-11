@@ -6,10 +6,11 @@ import { showToast } from '../utils/toast';
 
 const API_KEY =
   import.meta.env.VITE_GOOGLE_MAPS_PLATFORM_KEY ||
-  process.env.GOOGLE_MAPS_PLATFORM_KEY ||
+  (globalThis as any).process?.env?.GOOGLE_MAPS_PLATFORM_KEY ||
   (globalThis as any).GOOGLE_MAPS_PLATFORM_KEY ||
-  '';
-const hasValidKey = Boolean(API_KEY) && API_KEY !== 'YOUR_API_KEY';
+  localStorage.getItem('GMP_API_KEY_FALLBACK') || '';
+
+let hasValidKey = Boolean(API_KEY) && API_KEY !== 'YOUR_API_KEY';
 
 const EGYPT_CITIES: Record<string, string[]> = {
   'القاهرة': ['مصر الجديدة', 'مدينة نصر', 'المعادي', 'التجمع الخامس', 'شبرا', 'المرج', 'حلوان', 'المطرية', 'الزيتون', 'السلام', 'البساتين', 'دار السلام', 'الخليفة', 'المقطم', 'القاهرة الجديدة', 'بدر', 'الشروق', '15 مايو', 'وسط البلد', 'عين شمس', 'الزمالك'],
@@ -53,10 +54,9 @@ interface GmpMapEngineProps {
 function MapCircle({ center, radius }: { center: any, radius: number }) {
   const map = useMap();
   const circleRef = useRef<any>(null);
-  const geometryLib = useMapsLibrary('geometry'); // إجبار انتظار تحميل مكتبة الهندسة
 
   useEffect(() => {
-    if (!map || !window.google || !window.google.maps || !window.google.maps.Circle || !geometryLib) return;
+    if (!map || !window.google || !window.google.maps || !window.google.maps.Circle) return;
 
     circleRef.current = new window.google.maps.Circle({
       strokeColor: '#DD6B20',
@@ -89,7 +89,7 @@ function MapCircle({ center, radius }: { center: any, radius: number }) {
 
 // Inner component to use maps library
 function MapSearchInner({ storeType, batchSize, onResults, isSearching, setIsSearching }: GmpMapEngineProps) {
-  const map = useMap();
+  const map = useMap("GMP_DEMO_MAP");
   const placesLib = useMapsLibrary('places');
   const geocodingLib = useMapsLibrary('geocoding');
   const geometryLib = useMapsLibrary('geometry'); // تأمين محرك البحث
@@ -385,14 +385,19 @@ function MapSearchInner({ storeType, batchSize, onResults, isSearching, setIsSea
               mapTypeControl={false}
               streetViewControl={false}
               fullscreenControl={false}
-              onDragEnd={() => {
-                 if (map) {
-                     const c = map.getCenter();
+              onCameraChanged={(e) => {
+                 // تزامن سلس وفوري لحركة الدبوس والدائرة مع حركة إصبعك على الخريطة
+                 setCenter(e.detail.center);
+              }}
+              onDragEnd={(e) => {
+                 if (e.map) {
+                     const c = e.map.getCenter();
                      if (c) {
-                        const newC = { lat: c.lat(), lng: c.lng() };
-                        setCenter(newC);
-                        reverseGeocode(newC.lat, newC.lng);
+                        reverseGeocode(c.lat(), c.lng());
                      }
+                 } else if (map) {
+                     const c = map.getCenter();
+                     if (c) reverseGeocode(c.lat(), c.lng());
                  }
               }}
               style={{ width: '100%', height: '100%' }}
@@ -473,11 +478,43 @@ function MapSearchInner({ storeType, batchSize, onResults, isSearching, setIsSea
 const MAPS_LIBRARIES: any[] = ['places', 'geocoding', 'geometry', 'marker'];
 
 export default function GmpMapEngine(props: GmpMapEngineProps) {
+  const [localKey, setLocalKey] = useState('');
+  
+  hasValidKey = Boolean(API_KEY) && API_KEY !== 'YOUR_API_KEY';
+
   if (!hasValidKey) {
     return (
       <div className="bg-rose-50 border border-rose-200 p-6 rounded-xl flex flex-col items-center justify-center text-center gap-2 mt-4 shadow-sm">
         <span className="text-rose-700 font-bold text-sm">مفتاح خرائط جوجل غير متوفر ⚠️</span>
         <span className="text-rose-500 text-xs leading-relaxed">يرجى إضافة <code className="font-mono bg-rose-100 px-1 rounded text-rose-800">VITE_GOOGLE_MAPS_PLATFORM_KEY</code> في ملف <code className="font-mono bg-rose-100 px-1 rounded text-rose-800">.env</code> الخاص بك وتفعيل خدمات (Places, Geocoding, Maps JavaScript) من لوحة تحكم Google Cloud.</span>
+        
+        <div className="mt-4 flex flex-col gap-2 w-full max-w-md border-t border-rose-200/50 pt-4">
+          <span className="text-xs font-bold text-[#1A365D]">أو أدخل مفتاح الخرائط (API Key) الخاص بك هنا مباشرة للتفعيل:</span>
+          <div className="flex gap-2">
+            <input 
+              type="text" 
+              placeholder="AIzaSy..." 
+              value={localKey}
+              onChange={(e) => setLocalKey(e.target.value)}
+              className="flex-1 bg-white border border-rose-200 rounded-lg px-3 py-2 text-xs font-mono text-left focus:outline-none focus:ring-1 focus:ring-rose-400"
+              dir="ltr"
+            />
+            <button 
+              type="button"
+              onClick={() => {
+                if (localKey.trim().length > 20) {
+                  localStorage.setItem('GMP_API_KEY_FALLBACK', localKey.trim());
+                  window.location.reload();
+                } else {
+                  showToast('⚠️ المفتاح المدخل غير صالح');
+                }
+              }}
+              className="bg-[#1A365D] hover:bg-slate-800 text-white px-3 py-2 rounded-lg text-xs font-bold transition-colors cursor-pointer shrink-0 shadow-sm"
+            >
+              حفظ وتنشيط الخريطة
+            </button>
+          </div>
+        </div>
       </div>
     );
   }

@@ -158,6 +158,12 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
   const [discoveredAreaFilter, setDiscoveredAreaFilter] = useState('');
   const [discoveredTypesFilter, setDiscoveredTypesFilter] = useState<string[]>([]);
   const [selectedLeads, setSelectedLeads] = useState<string[]>([]);
+  // New multi-select states
+  const [discoveredGovsFilter, setDiscoveredGovsFilter] = useState<string[]>([]);
+  const [discoveredAreasFilter, setDiscoveredAreasFilter] = useState<string[]>([]);
+  const [discoveredSearchQuery, setDiscoveredSearchQuery] = useState('');
+  const [hideVisitedLeads, setHideVisitedLeads] = useState(false);
+
   const [sortBy, setSortBy] = useState<'none' | 'alpha' | 'purchases'>('none');
   const [pendingLeadToCustomer, setPendingLeadToCustomer] = useState<any>(null);
 
@@ -235,13 +241,64 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
     localStorage.setItem('google_leads_staging_sys', JSON.stringify(googleLeads));
   }, [googleLeads]);
 
+  // فلتر ذكي لعزل العملاء الذين تم تحويلهم لعملاء فعليين ومنع ظهورهم نهائياً
+  const activeGoogleLeads = React.useMemo(() => {
+    return googleLeads.filter(lead => {
+      const leadName = (lead.name || '').trim().toLowerCase();
+      const leadPhone = (lead.phone || '').trim();
+      const alreadyRealCustomer = customers.some(c => 
+        (c.phone || '').trim() === leadPhone || 
+        (c.name || '').trim().toLowerCase() === leadName
+      );
+      return !lead.confirmed && !alreadyRealCustomer;
+    });
+  }, [googleLeads, customers]);
+
+  // حصر المحافظات المكتشفة للتصفية السريعة
+  const discoveredGovCounts = React.useMemo(() => {
+    return activeGoogleLeads.reduce((acc, lead) => {
+        const gov = lead.governorate || getGovernorateForArea(lead.area || '') || 'أخرى';
+        acc[gov] = (acc[gov] || 0) + 1;
+        return acc;
+    }, {} as Record<string, number>);
+  }, [activeGoogleLeads]);
+
+  // 1. Filter by selected Governorates
+  const leadsFilteredByGov = React.useMemo(() => {
+    if (discoveredGovsFilter.length === 0) return activeGoogleLeads;
+    return activeGoogleLeads.filter(lead => {
+        const gov = lead.governorate || getGovernorateForArea(lead.area || '') || 'أخرى';
+        return discoveredGovsFilter.includes(gov);
+    });
+  }, [activeGoogleLeads, discoveredGovsFilter]);
+
+  // 2. Get available areas from the governorate-filtered leads
+  const discoveredAreaCounts = React.useMemo(() => {
+    return leadsFilteredByGov.reduce((acc, lead) => {
+        const area = (lead.area || '').trim() || 'غير محدد';
+        if (area !== 'غير محدد') {
+            acc[area] = (acc[area] || 0) + 1;
+        }
+        return acc;
+    }, {} as Record<string, number>);
+  }, [leadsFilteredByGov]);
+
+  // 3. Filter by selected Areas
+  const leadsFilteredByArea = React.useMemo(() => {
+    if (discoveredAreasFilter.length === 0) return leadsFilteredByGov;
+    return leadsFilteredByGov.filter(lead => {
+        const area = (lead.area || '').trim() || 'غير محدد';
+        return discoveredAreasFilter.includes(area);
+    });
+  }, [leadsFilteredByGov, discoveredAreasFilter]);
+
   const discoveredLeadTypeCounts = React.useMemo(() => {
-    return googleLeads.reduce((acc, lead) => {
+    return leadsFilteredByArea.reduce((acc, lead) => {
         const type = lead.type || 'غير محدد';
         acc[type] = (acc[type] || 0) + 1;
         return acc;
     }, {} as Record<string, number>);
-  }, [googleLeads]);
+  }, [leadsFilteredByArea]);
 
   const DEFAULT_AREAS = ['الزقازيق', 'ميت غمر', 'بدر', 'العاشر من رمضان', 'بلبيس', 'القاهرة'];
   const configuredAreas = (settings.workAreas || []).map(w => w.area);
@@ -256,6 +313,7 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
   const [isSearchingMaps, setIsSearchingMaps] = useState(false);
   const [mapsResults, setMapsResults] = useState<any[]>([]);
   const [addedLeadIds, setAddedLeadIds] = useState<string[]>([]);
+  const [selectedMapResults, setSelectedMapResults] = useState<string[]>([]);
 
   // Slicing/segmenting capabilities for large maps list
   const [batchSize, setBatchSize] = useState<number>(10);
@@ -303,6 +361,35 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
     } else {
       showToast(`⚠️ جميع النتائج الحالية مضافة مسبقاً بقواعد البيانات!`);
     }
+  };
+
+  const handleAddSelectedMapLeads = () => {
+    if (selectedMapResults.length === 0) return;
+    
+    const newLeads = [...googleLeads];
+    const newAddedIds = [...addedLeadIds];
+    let addedCount = 0;
+
+    mapsResults.filter(l => selectedMapResults.includes(l.id)).forEach(lead => {
+      if (newAddedIds.includes(lead.id)) return;
+      
+      const existsInReal = customers.some(c => c.phone === lead.phone || c.name.toLowerCase() === lead.name.toLowerCase());
+      const existsInDraft = newLeads.some(g => g.phone === lead.phone || g.name.toLowerCase() === lead.name.toLowerCase());
+      
+      if (!existsInReal && !existsInDraft) {
+        const finalArea = (lead.detailedAddress || lead.area || 'أخرى').trim();
+        const gov = getGovernorateForArea(finalArea);
+        newLeads.push({ ...lead, governorate: gov, dateAdded: new Date().toLocaleDateString('ar-EG'), confirmed: false });
+        addedCount++;
+      }
+      newAddedIds.push(lead.id);
+    });
+
+    setGoogleLeads(newLeads);
+    setAddedLeadIds(newAddedIds);
+    setSelectedMapResults([]);
+    showToast(`✓ تم إضافة ${addedCount} عميل محدد للمسودة بنجاح!`);
+    setActiveTab('google_leads');
   };
 
   const handleBulkDeleteAllGoogleLeads = async () => {
@@ -754,7 +841,7 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
   return (
     <div className="bg-[#F7FAFC] min-h-screen pb-12 text-right animate-fade-in" dir="rtl" id="customers-tab-container">
       {/* Header */}
-      <div className="bg-[#1A365D] text-white border-transparent text-white px-4 py-4 sticky top-0 z-10 shadow-md flex items-center justify-between">
+      <div className="bg-[#1A365D] text-white border-transparent text-white px-4 py-4 sticky top-0 z-[60] shadow-md flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Users className="h-6 w-6 text-indigo-200" />
           <h1 className="text-xl font-bold">قاعدة بيانات العملاء</h1>
@@ -810,10 +897,10 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                 }`}
               >
                 <span className="relative flex h-2 w-2">
-                  <span className={`animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75 ${googleLeads.filter(g => !g.confirmed).length === 0 ? 'hidden' : ''}`}></span>
-                  <span className={`relative inline-flex rounded-full h-2 w-2 bg-red-500 ${googleLeads.filter(g => !g.confirmed).length === 0 ? 'hidden' : ''}`}></span>
+                  <span className={`animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75 ${activeGoogleLeads.length === 0 ? 'hidden' : ''}`}></span>
+                  <span className={`relative inline-flex rounded-full h-2 w-2 bg-red-500 ${activeGoogleLeads.length === 0 ? 'hidden' : ''}`}></span>
                 </span>
-                <span>عملاء مكتشفين ({googleLeads.length})</span>
+                <span>عملاء مكتشفين ({activeGoogleLeads.length})</span>
               </button>
             </div>
           );
@@ -1379,6 +1466,28 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                     <p className="text-[10.5px] text-slate-450 font-bold mt-0.5">سجل المحل بمسودة "العملاء المقترحين" لمتابعته والاتصال به.</p>
                   </div>
                   <div className="flex items-center gap-2">
+                    <label className="flex items-center gap-1 text-[10px] font-bold text-[#1A365D] cursor-pointer ml-2 bg-slate-50 px-2 py-1.5 rounded-lg border border-slate-200">
+                      <input
+                        type="checkbox"
+                        checked={mapsResults.length > 0 && selectedMapResults.length === mapsResults.length}
+                        onChange={(e) => {
+                          if (e.target.checked) setSelectedMapResults(mapsResults.map(r => r.id));
+                          else setSelectedMapResults([]);
+                        }}
+                        className="h-3.5 w-3.5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                      />
+                      تحديد الكل
+                    </label>
+                    {selectedMapResults.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={handleAddSelectedMapLeads}
+                        className="text-[10px] bg-emerald-600 text-white hover:bg-emerald-700 font-extrabold px-3 py-1.5 rounded-lg shadow-sm transition-colors cursor-pointer flex items-center gap-1 active:scale-95"
+                      >
+                        <Plus className="h-3 w-3" />
+                        حفظ المحدد ({selectedMapResults.length})
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={handleBulkAddMapLeads}
@@ -1394,24 +1503,40 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
 
                 <div className="flex flex-col gap-5">
                   {mapsResults.map((lead) => {
-                    const isAdded = googleLeads.some(g => g.name.toLowerCase() === lead.name.toLowerCase() || g.phone === lead.phone || addedLeadIds.includes(lead.id));
+                    const addedLead = googleLeads.find(g => g.name.toLowerCase() === lead.name.toLowerCase() || g.phone === lead.phone || addedLeadIds.includes(lead.id));
+                    const isAdded = !!addedLead;
                     const isLeadExpanded = !!expandedGoogleLeads[lead.id];
                     const isNoPhone = hasNoPhone(lead.phone);
-                    const themeClass = getLeadCardTheme(lead.type);
+                    const isVisited = addedLead?.visited;
+                    const themeClass = isVisited 
+                      ? 'bg-teal-50/80 border-teal-400 shadow-sm ring-1 ring-teal-300' 
+                      : getLeadCardTheme(lead.type);
                     const badgeClass = getLeadBadgeTheme(lead.type);
 
                     return (
-                      <div key={lead.id} className={`border rounded-xl overflow-hidden transition-all flex flex-col ${isNoPhone ? 'bg-rose-50/40 border-rose-200 hover:border-rose-300 shadow-sm' : themeClass}`}>
+                      <div key={lead.id} className={`border rounded-xl overflow-hidden transition-all flex flex-col ${isVisited ? 'bg-teal-50/80 border-teal-400 shadow-sm' : isNoPhone ? 'bg-rose-50/40 border-rose-200 hover:border-rose-300 shadow-sm' : themeClass}`}>
                         
                         {/* Interactive Header for Toggle */}
                         <div 
                           onClick={() => setExpandedGoogleLeads(prev => prev[lead.id] ? {} : { [lead.id]: true })}
-                          className={`p-4 flex items-center justify-between gap-4 cursor-pointer transition-colors ${isNoPhone ? 'bg-rose-50/30 hover:bg-rose-50/60' : 'bg-[#F7FAFC]/60 hover:bg-[#F7FAFC]'}`}
+                          className={`p-4 flex items-center justify-between gap-4 cursor-pointer transition-colors ${isVisited ? 'bg-teal-50/30 hover:bg-teal-50/60' : isNoPhone ? 'bg-rose-50/30 hover:bg-rose-50/60' : 'bg-[#F7FAFC]/60 hover:bg-[#F7FAFC]'}`}
                         >
                           <div className="flex flex-col gap-1.5 text-sm select-none">
-                            <span className={`font-extrabold text-base flex items-center gap-1.5 leading-snug ${isNoPhone ? 'text-rose-700' : 'text-slate-850'}`}>
+                            <span className={`font-extrabold text-base flex items-center gap-1.5 leading-snug ${isNoPhone && !isVisited ? 'text-rose-700' : 'text-slate-850'}`}>
+                              <input
+                                type="checkbox"
+                                checked={selectedMapResults.includes(lead.id)}
+                                onChange={(e) => {
+                                  e.stopPropagation();
+                                  if (e.target.checked) setSelectedMapResults(prev => [...prev, lead.id]);
+                                  else setSelectedMapResults(prev => prev.filter(id => id !== lead.id));
+                                }}
+                                onClick={e => e.stopPropagation()}
+                                className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer mr-1"
+                              />
                               <span className={`h-2.5 w-2.5 rounded-full shrink-0 transition-all ${isLeadExpanded ? 'bg-[#FFFFFF] text-[#1A365D] border-b-2 border-[#DD6B20] shadow-sm' : 'bg-slate-350'}`}></span>
-                              {isNoPhone && <PhoneOff className="h-4 w-4 text-rose-500 shrink-0" />}
+                              {isVisited && <span className="text-teal-600 text-[10px]" title="تمت الزيارة">✅</span>}
+                              {isNoPhone && !isVisited && <PhoneOff className="h-4 w-4 text-rose-500 shrink-0" />}
                               {lead.name}
                             </span>
                             <div className="flex flex-wrap gap-1.5 mt-0.5">
@@ -1494,6 +1619,27 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                                     <span>اتصل بالعميل</span>
                                   </a>
                                 )}
+
+                                {/* Visited Action */}
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (isAdded && addedLead) {
+                                      setGoogleLeads(prev => prev.map(l => l.id === addedLead.id ? { ...l, visited: !l.visited } : l));
+                                      showToast(addedLead.visited ? 'تم إلغاء علامة الزيارة' : '✓ تم تسجيل المحل كمُزار');
+                                    } else {
+                                      const finalArea = (lead.detailedAddress || lead.area || 'أخرى').trim();
+                                      const gov = getGovernorateForArea(finalArea);
+                                      const updated = [...googleLeads, { ...lead, governorate: gov, dateAdded: new Date().toLocaleDateString('ar-EG'), confirmed: false, visited: true }];
+                                      setGoogleLeads(updated);
+                                      setAddedLeadIds(prev => [...prev, lead.id]);
+                                      showToast(`تم الحفظ وتحديد "${lead.name}" كـ مُزار ✅`);
+                                    }
+                                  }}
+                                  className={`px-3.5 py-2 rounded-xl text-xs font-black flex items-center justify-center gap-1.5 transition-colors active:scale-95 text-center border ${isVisited ? 'bg-teal-100 text-teal-800 border-teal-300' : 'bg-slate-50 text-slate-500 border-slate-200 hover:bg-teal-50 hover:text-teal-700'}`}
+                                >
+                                  {isVisited ? '✅ تمت الزيارة' : '🚶‍♂️ تسجيل كزيارة'}
+                                </button>
 
                                 {/* WhatsApp Button */}
                                 {isNoPhone ? (
@@ -1688,7 +1834,7 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                     <button
                       type="button"
                       onClick={() => {
-                        const exportData = googleLeads.map(l => ({ 'المعرف': l.id, 'المحافظة': l.governorate || '', 'المنطقة': l.area || '', 'اسم العميل': l.name, 'رقم الهاتف': l.phone, 'العنوان': l.detailedAddress || '', 'النشاط': l.type || '', 'رابط جوجل ماب': l.locationLink }));
+                        const exportData = activeGoogleLeads.map(l => ({ 'المعرف': l.id, 'المحافظة': l.governorate || '', 'المنطقة': l.area || '', 'اسم العميل': l.name, 'رقم الهاتف': l.phone, 'العنوان': l.detailedAddress || '', 'النشاط': l.type || '', 'رابط جوجل ماب': l.locationLink }));
                         exportToCSV(exportData, `العملاء_المكتشفين_${new Date().toLocaleDateString('ar-EG')}.csv`);
                       }}
                       className="text-[10px] bg-emerald-600 hover:bg-emerald-700 text-white font-black px-2 py-1.5 rounded-lg flex items-center gap-1 cursor-pointer shadow-sm transition-colors"
@@ -1697,55 +1843,78 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                       <span>تصدير CSV</span>
                     </button>
                     <span className="text-xs bg-indigo-50 text-indigo-750 font-black px-2.5 py-1.5 rounded-lg border border-indigo-150">
-                      {googleLeads.length} مكتشف
+                      {activeGoogleLeads.length} مكتشف
                     </span>
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 w-full mt-2">
-                  <div className="relative leading-none">
-                    <Search className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-teal-400" />
-                    <input
-                      type="text"
-                      list="search-discovered-gov-list"
-                      placeholder="تصفية بالمحافظة (الشرقية، القاهرة...)"
-                      value={discoveredGovFilter}
-                      onChange={(e) => setDiscoveredGovFilter(e.target.value)}
-                      className="w-full bg-[#F7FAFC] pr-9 pl-3 py-2 border border-slate-200 rounded-lg text-xs font-medium focus:ring-1 focus:ring-indigo-500 text-right font-bold text-[#1A365D]"
-                    />
-                    <datalist id="search-discovered-gov-list">
-                      {finalGovernorates.map(gov => (
-                        <option key={gov} value={gov}>{gov}</option>
-                      ))}
-                    </datalist>
-                  </div>
-
-                  <div className="relative leading-none">
-                    <Search className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-sky-400" />
-                    <input
-                      type="text"
-                      list="search-discovered-area-list"
-                      placeholder="تصفية بالمنطقة أو الاسم..."
-                      value={discoveredAreaFilter}
-                      onChange={(e) => setDiscoveredAreaFilter(e.target.value)}
-                      className="w-full bg-[#F7FAFC] pr-9 pl-3 py-2 border border-slate-200 rounded-lg text-xs font-medium focus:ring-1 focus:ring-indigo-500 text-right font-bold text-[#1A365D]"
-                    />
-                    <datalist id="search-discovered-area-list">
-                      {Array.from(new Set([
-                        ...googleLeads
-                          .filter(l => !discoveredGovFilter || (l.governorate || getGovernorateForArea(l.area || '')).includes(discoveredGovFilter))
-                          .map(l => (l.area || '').trim())
-                          .filter(Boolean),
-                        ...(discoveredGovFilter && EGYPT_CITIES[discoveredGovFilter] ? EGYPT_CITIES[discoveredGovFilter] : [])
-                      ])).map(area => (
-                        <option key={area} value={area}>{area}</option>
-                      ))}
-                    </datalist>
-                  </div>
+                {/* حقل البحث النصي السريع */}
+                <div className="relative leading-none w-full mt-2">
+                  <Search className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-teal-500" />
+                  <input
+                    type="text"
+                    placeholder="ابحث سريعاً بالاسم، رقم الهاتف، أو المنطقة..."
+                    value={discoveredSearchQuery}
+                    onChange={(e) => setDiscoveredSearchQuery(e.target.value)}
+                    className="w-full bg-[#F7FAFC] pr-9 pl-3 py-2 border border-slate-200 rounded-lg text-xs font-bold focus:ring-1 focus:ring-indigo-500 text-right text-[#1A365D]"
+                  />
                 </div>
 
+                {/* أزرار التصفية السريعة للمحافظات المكتشفة */}
+                {Object.keys(discoveredGovCounts).length > 1 && (
+                  <div className="flex flex-wrap gap-1.5 mt-2 bg-[#F7FAFC] p-2.5 rounded-xl border border-slate-150">
+                    <span className="text-[10px] font-bold text-[#2B6CB0] w-full mb-0.5">تصفية حسب المحافظة (يمكنك اختيار أكثر من محافظة):</span>
+                    <button
+                      type="button"
+                      onClick={() => { setDiscoveredGovsFilter([]); setDiscoveredAreasFilter([]); }}
+                      className={`px-2.5 py-1.5 rounded-lg text-[10px] font-bold transition-all cursor-pointer select-none ${discoveredGovsFilter.length === 0 ? 'bg-[#1A365D] text-white shadow-sm' : 'bg-white text-[#1A365D] border border-slate-200 hover:bg-slate-50'}`}
+                    >
+                      الكل ({activeGoogleLeads.length})
+                    </button>
+                    {Object.entries(discoveredGovCounts).sort(([, a], [, b]) => b - a).map(([gov, count]) => (
+                      <button
+                        key={gov}
+                        type="button"
+                        onClick={() => {
+                          setDiscoveredGovsFilter(prev => prev.includes(gov) ? prev.filter(x => x !== gov) : [...prev, gov]);
+                          setDiscoveredAreasFilter([]);
+                        }}
+                        className={`px-2.5 py-1.5 rounded-lg text-[10px] font-bold transition-all cursor-pointer select-none ${discoveredGovsFilter.includes(gov) ? 'bg-[#DD6B20] text-white shadow-sm' : 'bg-white text-[#1A365D] border border-slate-200 hover:bg-slate-50'}`}
+                      >
+                        {gov} ({count})
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {/* أزرار التصفية للمناطق (تظهر فقط عند اختيار محافظة) */}
+                {discoveredGovsFilter.length > 0 && Object.keys(discoveredAreaCounts).length > 1 && (
+                  <div className="flex flex-wrap gap-1.5 mt-2 bg-[#F7FAFC] p-2.5 rounded-xl border border-slate-150">
+                    <span className="text-[10px] font-bold text-[#2B6CB0] w-full mb-0.5">تصفية حسب المنطقة (داخل المحافظات المحددة):</span>
+                    <button
+                      type="button"
+                      onClick={() => setDiscoveredAreasFilter([])}
+                      className={`px-2.5 py-1.5 rounded-lg text-[10px] font-bold transition-all cursor-pointer select-none ${discoveredAreasFilter.length === 0 ? 'bg-[#1A365D] text-white shadow-sm' : 'bg-white text-[#1A365D] border border-slate-200 hover:bg-slate-50'}`}
+                    >
+                      الكل ({leadsFilteredByGov.length})
+                    </button>
+                    {Object.entries(discoveredAreaCounts).sort(([, a], [, b]) => b - a).map(([area, count]) => (
+                      <button
+                        key={area}
+                        type="button"
+                        onClick={() => {
+                          setDiscoveredAreasFilter(prev => prev.includes(area) ? prev.filter(x => x !== area) : [...prev, area]);
+                        }}
+                        className={`px-2.5 py-1.5 rounded-lg text-[10px] font-bold transition-all cursor-pointer select-none ${discoveredAreasFilter.includes(area) ? 'bg-[#DD6B20] text-white shadow-sm' : 'bg-white text-[#1A365D] border border-slate-200 hover:bg-slate-50'}`}
+                      >
+                        {area} ({count})
+                      </button>
+                    ))}
+                  </div>
+                )}
+
                 {/* أزرار التصفية حسب النشاط التجاري (تحديد متعدد) */}
-                {googleLeads.length > 0 && (
+                {activeGoogleLeads.length > 0 && (
                   <div className="flex flex-wrap gap-1.5 mt-1 bg-[#F7FAFC] p-2.5 rounded-xl border border-slate-150">
                     <span className="text-[10px] font-bold text-[#2B6CB0] w-full mb-0.5">تصفية حسب النشاط التجاري (يمكنك اختيار أكثر من نشاط):</span>
                     <button
@@ -1753,7 +1922,7 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                       onClick={() => setDiscoveredTypesFilter([])}
                       className={`px-2.5 py-1.5 rounded-lg text-[10px] font-bold transition-all cursor-pointer select-none ${discoveredTypesFilter.length === 0 ? 'bg-[#1A365D] text-white shadow-sm' : 'bg-white text-[#1A365D] border border-slate-200 hover:bg-slate-50'}`}
                     >
-                      الكل ({googleLeads.length})
+                      الكل ({leadsFilteredByArea.length})
                     </button>
                     {Object.entries(discoveredLeadTypeCounts).sort(([, a], [, b]) => b - a).map(([type, count]) => (
                       <button
@@ -1769,22 +1938,35 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                     ))}
                   </div>
                 )}
+
+                {/* فلتر إخفاء العملاء المزارين */}
+                {activeGoogleLeads.length > 0 && (
+                  <div className="flex items-center justify-start mt-2 bg-[#F7FAFC] p-2.5 rounded-xl border border-slate-150">
+                    <label className="flex items-center gap-2 text-xs font-bold text-teal-800 cursor-pointer">
+                      <input type="checkbox" checked={hideVisitedLeads} onChange={(e) => setHideVisitedLeads(e.target.checked)} className="h-4 w-4 rounded border-slate-300 text-teal-600 focus:ring-teal-500" />
+                      <span>إخفاء العملاء الذين تمت زيارتهم للتركيز على الجدد</span>
+                    </label>
+                  </div>
+                )}
               </div>
 
               {(() => {
-                const filteredGoogleLeads = googleLeads.filter(lead => {
-                  const gov = getGovernorateForArea(lead.area || '').toLowerCase();
-                  const qGov = discoveredGovFilter.trim().toLowerCase();
-                  const matchesGov = !qGov || gov.includes(qGov);
-
-                  const qArea = discoveredAreaFilter.trim().toLowerCase();
-                  const matchesArea = !qArea || (lead.area || '').toLowerCase().includes(qArea) || (lead.name || '').toLowerCase().includes(qArea);
-
+                const filteredGoogleLeads = leadsFilteredByArea.filter(lead => {
                   const leadType = lead.type || 'غير محدد';
                   const matchesType = discoveredTypesFilter.length === 0 || discoveredTypesFilter.includes(leadType);
 
-                  return matchesGov && matchesArea && matchesType;
-                });
+                  const q = discoveredSearchQuery.trim().toLowerCase();
+                  const matchesSearch = !q || 
+                    (lead.name && lead.name.toLowerCase().includes(q)) ||
+                    (lead.phone && lead.phone.includes(q)) ||
+                    (lead.area && lead.area.toLowerCase().includes(q)) ||
+                    (lead.detailedAddress && lead.detailedAddress.toLowerCase().includes(q));
+
+                  // فلتر إخفاء العملاء الذين تمت زيارتهم
+                  const matchesVisited = !hideVisitedLeads || !lead.visited;
+
+                  return matchesType && matchesSearch && matchesVisited;
+                }).reverse(); // ترتيب الأحدث أولاً (التاريخ التنازلي بناءً على وقت الإضافة)
 
                 if (filteredGoogleLeads.length === 0) {
                   return (
@@ -1824,13 +2006,16 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                     const showConfirmed = lead.confirmed || alreadyRealCustomer;
                     const isStagedExpanded = !!expandedStagedLeads[lead.id];
                     const isNoPhone = hasNoPhone(lead.phone);
-                    const themeClass = getLeadCardTheme(lead.type);
+                    const isVisited = lead.visited;
+                    const themeClass = isVisited ? 'bg-teal-50/80 border-teal-400 shadow-sm ring-1 ring-teal-300' : getLeadCardTheme(lead.type);
                     const badgeClass = getLeadBadgeTheme(lead.type);
 
                     return (
                       <div key={lead.id} className={`border rounded-xl overflow-hidden transition-all flex flex-col ${ showConfirmed 
                           ? 'bg-emerald-50/40 border-emerald-150/60' 
-                          : isNoPhone 
+                          : isVisited
+                              ? 'bg-teal-50/80 border-teal-400 shadow-sm'
+                              : isNoPhone 
                               ? 'bg-rose-50/40 border-rose-200 hover:border-rose-300'
                               : themeClass
                       }`}>
@@ -1860,7 +2045,8 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                               ) : (
                                 <span className={`h-2.5 w-2.5 rounded-full shrink-0 transition-all ${isStagedExpanded ? 'bg-[#FFFFFF] text-[#1A365D] border-b-2 border-[#DD6B20] shadow-sm' : 'bg-amber-400'}`}></span>
                               )}
-                                {isNoPhone && !showConfirmed && <PhoneOff className="h-4 w-4 text-rose-600 shrink-0" />}
+                                {isVisited && !showConfirmed && <span className="text-teal-600 text-[10px]" title="تمت الزيارة">✅</span>}
+                                {isNoPhone && !showConfirmed && !isVisited && <PhoneOff className="h-4 w-4 text-rose-600 shrink-0" />}
                               {lead.name}
                             </span>
                             <div className="flex flex-wrap gap-1.5 mt-0.5">
@@ -1885,6 +2071,31 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                               >
                                 <Edit className="h-3 w-3" />
                               </button>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setGoogleLeads(prevLeads => prevLeads.map(l => l.id === lead.id ? { ...l, visited: !l.visited } : l));
+                                  showToast(lead.visited ? 'تم إلغاء علامة الزيارة' : '✓ تم تسجيل المحل كمُزار');
+                                }}
+                                className={`text-[10px] font-bold px-2 py-0.5 rounded border transition-colors ${lead.visited ? 'bg-teal-100 text-teal-800 border-teal-300' : 'bg-white text-slate-500 border-slate-200 hover:bg-teal-50 hover:text-teal-700'}`}
+                                title={lead.visited ? "إلغاء الزيارة" : "تحديد كمزار"}
+                              >
+                                {lead.visited ? '✅ تمت الزيارة' : '🚶‍♂️ تسجيل كزيارة'}
+                              </button>
+                              {!showConfirmed && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleConfirmGoogleLead(lead);
+                                  }}
+                                  className="text-[10px] font-bold px-2 py-0.5 rounded border transition-colors bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100"
+                                  title="نقل إلى دليل العملاء الفعليين"
+                                >
+                                  <Plus className="h-3 w-3 inline-block ml-0.5" /> نقل للعملاء
+                                </button>
+                              )}
                               </div>
                               {lead.dateAdded && (
                                 <span className="text-[9.5px] text-[#2B6CB0] bg-[#FFFFFF] py-0.5 px-1.5 rounded border border-slate-150 font-mono font-bold">

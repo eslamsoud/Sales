@@ -88,13 +88,13 @@ export default function AiChatAssistant({
         const weights = product.weights || [];
         weights.forEach(w => {
           const loaded = factoryLoads
-            .filter(load => load.productId === product.id && load.weightId === w.id)
+            .filter(load => String(load.productId).trim() === String(product.id).trim() && String(load.weightId).trim() === String(w.id).trim())
             .reduce((sum, load) => sum + load.quantity, 0);
 
           let sold = 0;
           invoices.forEach(invoice => {
             invoice.items.forEach(item => {
-              if (item.productId === product.id && item.weightId === w.id) {
+              if (String(item.productId).trim() === String(product.id).trim() && String(item.weightId).trim() === String(w.id).trim()) {
                 sold += item.quantity;
               }
             });

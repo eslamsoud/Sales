@@ -249,6 +249,12 @@ export default function App() {
   const [syncLogs, setSyncLogs] = useState<SyncLog[]>([]);
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
 
+  // مرجع لتخزين أحدث حالة للبيانات لمنع مشكلة (Stale Closure) أثناء المزامنة التلقائية
+  const latestDataRef = useRef({ products, factoryLoads, customers, invoices, expenses, trips, usersList });
+  useEffect(() => {
+    latestDataRef.current = { products, factoryLoads, customers, invoices, expenses, trips, usersList };
+  }, [products, factoryLoads, customers, invoices, expenses, trips, usersList]);
+
   const [showScrollTop, setShowScrollTop] = useState(false);
 
   // Inactivity tracking (Auto-lock after 5 minutes of no keyboard/mouse/touch)
@@ -314,7 +320,27 @@ export default function App() {
           return local ? JSON.parse(local) : defaultData;
         };
 
-        setProducts(migrate(prod, 'products_sys', DEFAULT_PRODUCTS));
+        let rawProducts = migrate(prod, 'products_sys', DEFAULT_PRODUCTS);
+        // 🚨 تنظيف وإزالة التكرار من قاعدة البيانات المحلية للأصناف
+        const uniqueProductsMap = new Map();
+        rawProducts.forEach((p: any) => {
+          const nameKey = p.name.trim().toLowerCase();
+          if (!uniqueProductsMap.has(nameKey)) {
+            uniqueProductsMap.set(nameKey, { ...p });
+          } else {
+            // دمج الأوزان لو الصنف مكرر لتجنب فقدان أي بيانات
+            const existing = uniqueProductsMap.get(nameKey);
+            if (p.weights && Array.isArray(p.weights)) {
+              existing.weights = existing.weights || [];
+              p.weights.forEach((w: any) => {
+                if (!existing.weights.find((ew: any) => ew.size === w.size || ew.id === w.id)) {
+                  existing.weights.push(w);
+                }
+              });
+            }
+          }
+        });
+        setProducts(Array.from(uniqueProductsMap.values()));
         setFactoryLoads(migrate(fact, 'factory_sys', DEFAULT_FACTORY_LOADS));
         setCustomers(migrate(cust, 'customers_sys', DEFAULT_CUSTOMERS));
         
@@ -472,8 +498,38 @@ export default function App() {
 
   const handleAddProduct = (newProd: Omit<Product, 'id'>) => {
     if (checkSimulationGuard()) return;
-    const id = `prod-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
-    setProducts(prev => [{ ...newProd, id }, ...prev]);
+    
+    setProducts(prev => {
+      const existingProductIndex = prev.findIndex(p => p.name.trim().toLowerCase() === newProd.name.trim().toLowerCase());
+      if (existingProductIndex > -1) {
+        // دمج الأوزان في حال كان الصنف موجود مسبقاً لمنع التكرار في القوائم المنسدلة
+        const updatedProducts = [...prev];
+        const existingProduct = updatedProducts[existingProductIndex];
+        const mergedWeights = [...(existingProduct.weights || [])];
+        
+        if (newProd.weights) {
+           newProd.weights.forEach(nw => {
+             if (!mergedWeights.find(ew => ew.size === nw.size)) {
+                mergedWeights.push({ ...nw, id: `weight-${Date.now()}-${Math.floor(Math.random() * 1000)}` });
+             }
+           });
+        }
+        
+        updatedProducts[existingProductIndex] = {
+           ...existingProduct,
+           weights: mergedWeights,
+           price: newProd.price,
+           minStockAlert: newProd.minStockAlert,
+           accountingUnit: newProd.accountingUnit
+        };
+        showToast('⚠️ الصنف موجود مسبقاً! تم دمج الأوزان الجديدة لمنع التكرار.');
+        return updatedProducts;
+      } else {
+        const id = `prod-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+        return [{ ...newProd, id }, ...prev];
+      }
+    });
+
     promptForSync('إضافة صنف جديد');
   };
 
@@ -488,11 +544,13 @@ export default function App() {
     setProducts(products.filter(p => p.id !== id));
     // Also delete loads corresponding to it to preserve data honesty
     setFactoryLoads(factoryLoads.filter(load => load.productId !== id));
+    markAsDeleted(id);
     promptForSync('حذف صنف من المصنع');
   };
 
   const handleDeleteAllProducts = () => {
     if (checkSimulationGuard()) return;
+    products.forEach(p => markAsDeleted(p.id));
     setProducts([]);
     setFactoryLoads([]);
     promptForSync('مسح جميع الأصناف');
@@ -504,7 +562,7 @@ export default function App() {
     setFactoryLoads(prev => [...prev, { 
       ...newLoad, 
       id,
-      delegateName: currentUser?.name || 'مجهول',
+      delegateName: currentUser?.name?.replace(/ \(.*?\)/g, '').trim() || 'مجهول',
       delegatePhone: currentUser?.phone || ''
     }]);
     promptForSync('سحب/تنزيل حمولة مصنع');
@@ -574,7 +632,7 @@ export default function App() {
     setInvoices(prev => [...prev, { 
       ...newInvoice, 
       id,
-      delegateName: currentUser?.name || 'مجهول',
+      delegateName: currentUser?.name?.replace(/ \(.*?\)/g, '').trim() || 'مجهول',
       delegatePhone: currentUser?.phone || ''
     }]);
 
@@ -632,7 +690,7 @@ export default function App() {
     setExpenses(prev => [...prev, { 
       ...newExpense, 
       id,
-      delegateName: currentUser?.name || 'مجهول',
+      delegateName: currentUser?.name?.replace(/ \(.*?\)/g, '').trim() || 'مجهول',
       delegatePhone: currentUser?.phone || ''
     }]);
 
@@ -652,7 +710,7 @@ export default function App() {
     setTrips(prev => [...prev, { 
       ...newTrip, 
       id,
-      delegateName: currentUser?.name || 'مجهول',
+      delegateName: currentUser?.name?.replace(/ \(.*?\)/g, '').trim() || 'مجهول',
       delegatePhone: currentUser?.phone || ''
     }]);
 
@@ -710,12 +768,23 @@ export default function App() {
     try {
       setIsHeaderSyncing(true);
       
+      // استخدام المرجع لضمان الحصول على البيانات الجديدة التي تم إضافتها للتو
+      const { 
+        invoices: currentInvoices, 
+        expenses: currentExpenses, 
+        factoryLoads: currentLoads, 
+        trips: currentTrips, 
+        products: currentProducts, 
+        customers: currentCustomers, 
+        usersList: currentUsers 
+      } = latestDataRef.current;
+
       // 🚨 تعريف متغير مدير المزامنة الذي كان مفقوداً ويسبب انهيار صامت أثناء الرفع
       const isSyncManager = currentUser?.role === 'owner' || currentUser?.phone === '01228466613';
 
-      const totalSales = invoices.reduce((sum, inv) => sum + (inv.totalAfterDiscount || 0), 0);
-      const totalSpent = expenses.filter(e => e.type !== 'revenue').reduce((sum, exp) => sum + (exp.amount || 0), 0);
-      const extraRevenues = expenses.filter(e => e.type === 'revenue').reduce((sum, exp) => sum + (exp.amount || 0), 0);
+      const totalSales = currentInvoices.reduce((sum, inv) => sum + (inv.totalAfterDiscount || 0), 0);
+      const totalSpent = currentExpenses.filter(e => e.type !== 'revenue').reduce((sum, exp) => sum + (exp.amount || 0), 0);
+      const extraRevenues = currentExpenses.filter(e => e.type === 'revenue').reduce((sum, exp) => sum + (exp.amount || 0), 0);
       const netProfit = totalSales + extraRevenues - totalSpent;
 
       let deletedIds: string[] = [];
@@ -723,8 +792,8 @@ export default function App() {
         deletedIds = JSON.parse(localStorage.getItem('deleted_records_sys') || '[]');
       } catch(e) {}
 
-      const customersMap = new Map(customers.map(c => [c.id, c]));
-      const productsMap = new Map(products.map(p => [p.id, p]));
+      const customersMap = new Map(currentCustomers.map(c => [c.id, c]));
+      const productsMap = new Map(currentProducts.map(p => [p.id, p]));
 
       let discoveredLeads: any[] = [];
       try {
@@ -733,13 +802,13 @@ export default function App() {
       } catch (e) {}
 
       const invoicesByCustomer = new Map();
-      invoices.forEach(inv => {
+      currentInvoices.forEach(inv => {
         if (!invoicesByCustomer.has(inv.customerId)) invoicesByCustomer.set(inv.customerId, []);
         invoicesByCustomer.get(inv.customerId).push(inv);
       });
 
       // جلب أحدث قائمة مناديب من الذاكرة مباشرة لتجنب تأخير حالة React وعدم رفعهم
-      let freshUsersList = usersList;
+      let freshUsersList = currentUsers;
       try {
         const localUsers = JSON.parse(localStorage.getItem('users_permissions_sys') || '[]');
         if (localUsers && localUsers.length > 0) freshUsersList = localUsers;
@@ -749,6 +818,7 @@ export default function App() {
         type: 'تقرير_كامل',
         syncPhone: currentUser?.phone || '01228466613',
         syncRole: currentUser?.role || 'owner',
+        canEditPrices: currentUser?.canEditPrices !== false,
         deletedIds: deletedIds,
         metadata: {
           syncedAt: new Date().toISOString(),
@@ -757,7 +827,7 @@ export default function App() {
           totalExpenses: Number(totalSpent) || 0,
           netProfit: Number(netProfit) || 0
         },
-        invoices: invoices.map(inv => {
+        invoices: currentInvoices.map(inv => {
           const cust = customersMap.get(inv.customerId);
           return {
             id: inv.id,
@@ -776,7 +846,7 @@ export default function App() {
             isDelivered: inv.isDelivered || false
           };
         }),
-        expenses: (expenses || []).filter(e => e.amount > 0).map(e => ({
+        expenses: (currentExpenses || []).filter(e => e.amount > 0).map(e => ({
           id: e.id,
           date: e.date,
           amount: e.amount,
@@ -786,7 +856,7 @@ export default function App() {
           delegateName: e.delegateName || 'مجهول',
           delegatePhone: e.delegatePhone || ''
         })),
-        trips: (trips || []).map(t => ({
+        trips: (currentTrips || []).map(t => ({
           id: t.id,
           description: t.description,
           price: t.price,
@@ -797,14 +867,14 @@ export default function App() {
           odometerStart: t.odometerStart || '',
           odometerEnd: t.odometerEnd || ''
         })),
-        products: isSyncManager ? products.map(p => ({
+        products: (isSyncManager || currentUser?.canEditPrices !== false) ? currentProducts.map(p => ({
           id: p.id,
           name: p.name,
           price: p.price,
           count: p.weights ? p.weights.length : 0,
           weights: p.weights || []
         })) : [],
-        customers: customers.map(c => {
+        customers: currentCustomers.map(c => {
           return {
             id: c.id,
             name: c.name,
@@ -837,7 +907,7 @@ export default function App() {
             lastLng: u.lastLng || '',
             canUseAiAssistant: u.canUseAiAssistant !== false
         })) : [],
-        factoryLoads: (factoryLoads || []).map(fl => {
+        factoryLoads: (currentLoads || []).map(fl => {
           const prod = productsMap.get(fl.productId);
           const activeWeights = prod ? (prod.weights && prod.weights.length > 0 ? prod.weights : getProductWeightsFallback(prod)) : [];
           const wt = activeWeights.find(w => w.id === fl.weightId);
@@ -1131,6 +1201,11 @@ export default function App() {
       }
       const data = await response.json();
 
+      let deletedIds: string[] = [];
+      try {
+        deletedIds = JSON.parse(localStorage.getItem('deleted_records_sys') || '[]');
+      } catch(e) {}
+
       if (data && (data.users || data.products || data.customers)) {
         // 1. Update users permissions list (highly sensitive, managed by general manager)
         if (data.users && Array.isArray(data.users)) {
@@ -1222,28 +1297,45 @@ export default function App() {
               };
             }
             
-            productGroups[pid].weights!.push({
-              id: String(fp.weightId || 'w-' + Math.random().toString(36).substr(2, 9)),
-              size: String(fp.size || 'كرتونة'),
-              cartonPriceFromFactory: Number(fp.cartonPriceFromFactory || 0),
-              unitsPerCarton: Number(fp.unitsPerCarton || 12),
-              factoryPricePerUnit: Number(fp.factoryPricePerUnit || 0),
-              profitMarginPercent: 0,
-              addedValue: Number(fp.addedValue || 0),
-              retailPricePerUnit: Number(fp.retailPricePerUnit || 0)
-            });
+            const weightId = String(fp.weightId || 'w-' + Math.random().toString(36).substr(2, 9));
+            const weightSize = String(fp.size || 'كرتونة');
+            
+            const existingWeight = productGroups[pid].weights!.find(w => w.id === weightId || w.size === weightSize);
+            
+            if (!existingWeight) {
+                productGroups[pid].weights!.push({
+                  id: weightId,
+                  size: weightSize,
+                  cartonPriceFromFactory: Number(fp.cartonPriceFromFactory || 0),
+                  unitsPerCarton: Number(fp.unitsPerCarton || 12),
+                  factoryPricePerUnit: Number(fp.factoryPricePerUnit || 0),
+                  profitMarginPercent: 0,
+                  addedValue: Number(fp.addedValue || 0),
+                  retailPricePerUnit: Number(fp.retailPricePerUnit || 0)
+                });
+            } else {
+                existingWeight.cartonPriceFromFactory = Number(fp.cartonPriceFromFactory || existingWeight.cartonPriceFromFactory);
+                existingWeight.unitsPerCarton = Number(fp.unitsPerCarton || existingWeight.unitsPerCarton);
+                existingWeight.factoryPricePerUnit = Number(fp.factoryPricePerUnit || existingWeight.factoryPricePerUnit);
+                existingWeight.addedValue = Number(fp.addedValue || existingWeight.addedValue);
+                existingWeight.retailPricePerUnit = Number(fp.retailPricePerUnit || existingWeight.retailPricePerUnit);
+            }
           });
           
-          const mappedProducts = Object.values(productGroups);
+          const mappedProducts = Object.values(productGroups).filter((p: any) => !deletedIds.includes(p.id));
           if (shouldReplace) {
             setProducts(mappedProducts);
           } else {
             setProducts(prev => {
               const merged = [...prev];
               mappedProducts.forEach(np => {
-                const idx = merged.findIndex(p => p.id === np.id);
-                if (idx > -1) merged[idx] = np;
-                else merged.push(np as Product);
+                // الاعتماد على الاسم بجانب الـ ID لمنع تكرار الصنف نهائياً
+                const idx = merged.findIndex(p => p.id === np.id || p.name.trim().toLowerCase() === np.name.trim().toLowerCase());
+                if (idx > -1) {
+                    merged[idx] = { ...np, id: merged[idx].id } as Product;
+                } else {
+                    merged.push(np as Product);
+                }
               });
               return merged;
             });
@@ -1258,7 +1350,7 @@ export default function App() {
             count: Number(p.count || 0),
             category: p.category || 'عام',
             weights: Array.isArray(p.weights) && p.weights.length > 0 ? p.weights : [{ id: '1', size: 'كرتونة', cartonPriceFromFactory: Number(p.price || 0)*12, unitsPerCarton: 12, factoryPricePerUnit: Number(p.price || 0), profitMarginPercent: 0, retailPricePerUnit: Number(p.price || 0) }]
-          }));
+          })).filter((p: any) => !deletedIds.includes(p.id));
           if (shouldReplace) {
             setProducts(mappedProducts);
           } else {
@@ -1288,7 +1380,7 @@ export default function App() {
             salesManager: c.salesManager || '',
             totalSpent: Number(c.totalSpent || 0),
             lastPurchaseDate: c.lastPurchaseDate || ''
-          }));
+          })).filter((c: any) => !deletedIds.includes(c.id));
           if (shouldReplace) {
             setCustomers(mappedCustomers);
           } else {
@@ -1330,7 +1422,7 @@ export default function App() {
               delegatePhone: inv.delegatePhone || '',
               isDelivered: inv.isDelivered === 'true' || inv.isDelivered === true
             };
-          }).filter((inv: any) => {
+          }).filter((inv: any) => !deletedIds.includes(inv.id)).filter((inv: any) => {
             // تصفية الفواتير القديمة (أكثر من 30 يوم ومسددة بالكامل) لتوفير المساحة
             const invDate = new Date(inv.date);
             const isPaid = (inv.paidAmount ?? inv.totalAfterDiscount) >= inv.totalAfterDiscount;
@@ -1404,7 +1496,7 @@ export default function App() {
               delegateName: e.delegateName || 'مجهول',
               delegatePhone: e.delegatePhone || ''
             };
-          }).filter((e: any) => e.amount > 0 && e.description);
+          }).filter((e: any) => e.amount > 0 && e.description && !deletedIds.includes(e.id));
           if (shouldReplace) {
             setExpenses(mappedExpenses);
           } else {
@@ -1431,7 +1523,7 @@ export default function App() {
             delegatePhone: t.delegatePhone || '',
             odometerStart: t.odometerStart ? Number(t.odometerStart) : undefined,
             odometerEnd: t.odometerEnd ? Number(t.odometerEnd) : undefined
-          }));
+          })).filter((t: any) => !deletedIds.includes(t.id));
           if (shouldReplace) {
             setTrips(mappedTrips);
           } else {
@@ -1451,6 +1543,8 @@ export default function App() {
           const mappedLoads = data.factoryLoads.map((fl: any) => ({
             id: fl.id || fl.date + '-' + fl.productId || String(Math.random()),
             date: fl.date,
+            productId: fl.productId,
+            weightId: fl.weightId,
             productName: fl.productName,
             weightSize: fl.weightSize || 'كرتونة',
             cartonsCount: Number(fl.cartonsCount || 0),
@@ -1459,7 +1553,7 @@ export default function App() {
             warehouseKeeper: fl.warehouseKeeper || '',
             delegateName: fl.delegateName || '',
             delegatePhone: fl.delegatePhone || ''
-          }));
+          })).filter((fl: any) => !deletedIds.includes(fl.id));
           if (shouldReplace) {
             setFactoryLoads(mappedLoads);
           } else {

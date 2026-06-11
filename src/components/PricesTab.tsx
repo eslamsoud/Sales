@@ -27,8 +27,8 @@ export default function PricesTab({ products: rawProducts, onGoBack, permittedSu
   });
   const products = useMemo(() => {
     return rawProducts.map(p => {
-      // فلترة صارمة: إخفاء الأصناف التي لا تحتوي على سعر مصنع أو قيمة مضافة
-      const activeWeights = getProductWeightsFallback(p).filter(w => w.cartonPriceFromFactory > 0 && (w.addedValue || 0) > 0);
+      // إزالة الفلترة الصارمة لإظهار جميع الأصناف للعميل حتى لو كانت مسعرة بصفر مؤقتاً
+      const activeWeights = getProductWeightsFallback(p);
       return {
         ...p,
         weights: activeWeights

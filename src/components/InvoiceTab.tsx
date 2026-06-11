@@ -88,8 +88,8 @@ export default function InvoiceTab({
   // Filter products and their weights matching active non-zero price condition
   const products = useMemo(() => {
     return rawProducts.map(p => {
-      // فلترة صارمة: إخفاء الأوزان إذا كان سعر المصنع صفر أو القيمة المضافة غير محددة/صفر
-      const activeWeights = getProductWeightsFallback(p).filter(w => w.cartonPriceFromFactory > 0 && (w.addedValue || 0) > 0);
+      // إزالة الفلترة الصارمة بالكامل لمنع اختفاء الأصناف المضافة حديثاً قبل تسعيرها
+      const activeWeights = getProductWeightsFallback(p);
       return {
         ...p,
         weights: activeWeights
@@ -205,14 +205,14 @@ export default function InvoiceTab({
 
         // 1. Sum loaded from factory loads of this product and weight size
         const loaded = factoryLoads
-          .filter(l => l.productId === p.id && l.weightId === w.id)
+          .filter(l => String(l.productId).trim() === String(p.id).trim() && String(l.weightId).trim() === String(w.id).trim())
           .reduce((sum, l) => sum + l.quantity, 0);
 
         // 2. Sum sold in all previous saved invoices
         let sold = 0;
         invoices.forEach(inv => {
           inv.items.forEach(item => {
-            if (item.productId === p.id && item.weightId === w.id) {
+            if (String(item.productId).trim() === String(p.id).trim() && String(item.weightId).trim() === String(w.id).trim()) {
               sold += item.quantity;
             }
           });
@@ -220,7 +220,7 @@ export default function InvoiceTab({
 
         // 3. Draft items currently on screen
         const drafted = billItems
-          .filter(it => it.productId === p.id && it.weightId === w.id)
+          .filter(it => String(it.productId).trim() === String(p.id).trim() && String(it.weightId).trim() === String(w.id).trim())
           .reduce((sum, it) => sum + it.quantity, 0);
 
         stocks[key] = {
@@ -331,6 +331,11 @@ export default function InvoiceTab({
       if (qty <= 0) {
         showToast('⚠️ الرجاء كتابة كمية بيع صحيحة أكبر من الصفر.');
         return;
+      }
+
+      const retailCartonPrice = weight.cartonPriceFromFactory + (weight.addedValue || 0);
+      if (retailCartonPrice <= 0) {
+         showToast('⚠️ تنبيه: هذا الصنف غير مسعر بالكامل (السعر صفر)! تأكد من مراجعة تسعيره مع الإدارة.');
       }
 
       const discountPerc = parseFloat(currentDiscount) || 0;
@@ -595,7 +600,7 @@ export default function InvoiceTab({
     // Retrieve settings
     const storedSetStr = localStorage.getItem('app_settings_sys');
     let invoiceAppName = 'فاتورة مبيعات معتمدة';
-    let invoiceRepName = inv.delegateName || '';
+    let invoiceRepName = inv.delegateName?.replace(/ \(.*?\)/g, '').trim() || '';
     let invoiceRepPhone = inv.delegatePhone || '';
     if (storedSetStr) {
       try {
@@ -688,9 +693,9 @@ export default function InvoiceTab({
     // Loop through bill items
     y += 15;
     inv.items.forEach((item: InvoiceItem, idx: number) => {
-      const prod = products.find(p => p.id === item.productId);
+      const prod = products.find(p => String(p.id).trim() === String(item.productId).trim());
       const ws = prod ? getProductWeightsFallback(prod) : [];
-      const weight = ws.find(w => w.id === item.weightId) || ws[0];
+      const weight = ws.find(w => String(w.id).trim() === String(item.weightId).trim()) || ws[0];
       const prodName = prod ? prod.name : 'منتج غير معروف';
       const sizeLabel = weight ? weight.size : '';
 
@@ -883,13 +888,13 @@ export default function InvoiceTab({
     // Retrieve settings
     const storedSetStr = localStorage.getItem('app_settings_sys');
     let invoiceAppName = 'سمن وزيت سوفانا الفاخر';
-    let invoiceRepName = '';
+    let invoiceRepName = inv.delegateName?.replace(/ \(.*?\)/g, '').trim() || '';
     let invoiceRepPhone = '';
     if (storedSetStr) {
       try {
         const parsed = JSON.parse(storedSetStr);
         if (parsed.appName) invoiceAppName = parsed.appName;
-        if (parsed.representativeName) invoiceRepName = parsed.representativeName;
+        if (parsed.representativeName && !invoiceRepName) invoiceRepName = parsed.representativeName;
         if (parsed.representativePhone) invoiceRepPhone = parsed.representativePhone;
       } catch (e) {
         console.error(e);
@@ -971,9 +976,9 @@ export default function InvoiceTab({
             </thead>
             <tbody>
               ${inv.items.map((item: any, idx: number) => {
-                const prod = products.find((p: any) => p.id === item.productId);
+                const prod = products.find((p: any) => String(p.id).trim() === String(item.productId).trim());
                 const ws = prod ? getProductWeightsFallback(prod) : [];
-                const weight = ws.find((w: any) => w.id === item.weightId) || ws[0];
+                const weight = ws.find((w: any) => String(w.id).trim() === String(item.weightId).trim()) || ws[0];
                 const prodName = prod ? prod.name : 'صنف مبيعات';
                 const sizeLabel = weight ? weight.size : '';
                 
@@ -1065,9 +1070,9 @@ export default function InvoiceTab({
     msg += `--------------------------------\n`;
     
     inv.items.forEach((item: InvoiceItem, index: number) => {
-      const prod = products.find(p => p.id === item.productId);
+      const prod = products.find(p => String(p.id).trim() === String(item.productId).trim());
       const ws = prod ? getProductWeightsFallback(prod) : [];
-      const weight = ws.find(w => w.id === item.weightId) || ws[0];
+      const weight = ws.find(w => String(w.id).trim() === String(item.weightId).trim()) || ws[0];
       const prodName = prod ? prod.name : 'صنف';
       const sizeStr = weight ? weight.size : '';
       const totalItem = item.finalPrice * item.quantity;
@@ -1154,7 +1159,7 @@ export default function InvoiceTab({
   return (
     <div className="bg-[#F7FAFC] min-h-screen pb-12 text-right" dir="rtl" id="invoice-tab-container">
       {/* Header */}
-      <div className="bg-[#1A365D] text-white border-transparent text-white px-4 py-4 sticky top-0 z-10 shadow-md flex items-center justify-between">
+      <div className="bg-[#1A365D] text-white border-transparent text-white px-4 py-4 sticky top-0 z-[60] shadow-md flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Receipt className="h-6 w-6 text-indigo-200" />
           <h1 className="text-xl font-bold">الفواتير والأرشيف</h1>
@@ -1499,9 +1504,9 @@ export default function InvoiceTab({
               <p className="text-center text-gray-400 py-10 text-xs">لا توجد أصناف مضافة في الفاتورة الحالية بعد.</p>
             ) : (
               billItems.map((item, index) => {
-                const prod = products.find(p => p.id === item.productId);
+                const prod = products.find(p => String(p.id).trim() === String(item.productId).trim());
                 const weights = prod ? getProductWeightsFallback(prod) : [];
-                const weight = weights.find(w => w.id === item.weightId) || weights[0];
+                const weight = weights.find(w => String(w.id).trim() === String(item.weightId).trim()) || weights[0];
                 const itemTotal = item.finalPrice * item.quantity;
                 
                 const multiplier = weight ? (weight.unitsPerCarton || 12) : 12;
@@ -1749,8 +1754,8 @@ export default function InvoiceTab({
                         <div className="text-[10px] bg-white p-2 rounded-lg border border-slate-150 flex flex-col gap-1 max-h-24 overflow-y-auto">
                           <span className="font-bold text-gray-400">البضاعة بالفاتورة:</span>
                           {inv.items.map((it, idx) => {
-                            const p = products.find(prod => prod.id === it.productId);
-                            const w = p?.weights?.find(wt => wt.id === it.weightId);
+                        const p = products.find(prod => String(prod.id).trim() === String(it.productId).trim());
+                        const w = p?.weights?.find(wt => String(wt.id).trim() === String(it.weightId).trim());
                             const multiplier = w?.unitsPerCarton || 12;
                             const cartons = formatCartonsAndPieces(it.quantity, multiplier);
                             return (
