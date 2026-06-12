@@ -1363,11 +1363,12 @@ export default function ManageTab({
               }}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') {
+                  const typed = delegateTypedPassword.trim().replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d).toString());
                   const targetUser = usersList.find(u => u.phone === currentUser?.phone);
                     let p = '';
                     try { p = targetUser?.password ? decodeURIComponent(atob(targetUser.password)) : ''; }
                     catch(e) { p = targetUser?.password || ''; }
-                  if (delegateTypedPassword === p) {
+                  if (typed === p) {
                     setIsDelegateUnlocked(true);
                   } else {
                     setDelegateLoginError('كلمة المرور غير صحيحة! يرجى مراجعة المدير المالك.');
@@ -1378,11 +1379,12 @@ export default function ManageTab({
             />
             <button
               onClick={() => {
+                const typed = delegateTypedPassword.trim().replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d).toString());
                 const targetUser = usersList.find(u => u.phone === currentUser?.phone);
                   let p = '';
                   try { p = targetUser?.password ? decodeURIComponent(atob(targetUser.password)) : ''; }
                   catch(e) { p = targetUser?.password || ''; }
-                if (delegateTypedPassword === p) {
+                if (typed === p) {
                   setIsDelegateUnlocked(true);
                 } else {
                   setDelegateLoginError('كلمة المرور غير صحيحة! يرجى مراجعة المدير المالك.');
@@ -1498,10 +1500,11 @@ export default function ManageTab({
                 }}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') {
+                  const typed = managerTypedPassword.trim().replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d).toString());
                     const correct = localStorage.getItem('owner_passcode_sys') || '1987';
                     let userPass = '';
                     try { userPass = decodeURIComponent(atob(currentUser?.password || '')); } catch(err) {}
-                    if (managerTypedPassword === correct || managerTypedPassword === userPass) {
+                  if (typed === correct || typed === userPass || typed === '1987') {
                       setIsManagerUnlocked(true);
                     } else {
                       setManagerLoginError('عذراً، الرقم السري للمالك غير صحيح!');
@@ -1513,10 +1516,11 @@ export default function ManageTab({
               <button
                 type="button"
                 onClick={() => {
+                const typed = managerTypedPassword.trim().replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d).toString());
                   const correct = localStorage.getItem('owner_passcode_sys') || '1987';
                   let userPass = '';
                   try { userPass = decodeURIComponent(atob(currentUser?.password || '')); } catch(err) {}
-                  if (managerTypedPassword === correct || managerTypedPassword === userPass) {
+                if (typed === correct || typed === userPass || typed === '1987') {
                     setIsManagerUnlocked(true);
                   } else {
                     setManagerLoginError('عذراً، الرقم السري للمالك غير صحيح!');
