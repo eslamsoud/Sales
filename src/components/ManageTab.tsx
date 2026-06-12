@@ -45,9 +45,10 @@ const API_KEY =
   import.meta.env.VITE_GOOGLE_MAPS_PLATFORM_KEY ||
   (globalThis as any).process?.env?.GOOGLE_MAPS_PLATFORM_KEY ||
   (globalThis as any).GOOGLE_MAPS_PLATFORM_KEY ||
+  localStorage.getItem('GMP_API_KEY_FALLBACK') ||
   '';
 
-const APP_SCRIPT_URL = import.meta.env.VITE_GOOGLE_SHEETS_URL || "https://script.google.com/macros/s/AKfycbyJnhlgJNJ4ggzet0h5z6n2oplDP4VVWy1tI52lgYpHqFqjl2FDJu3ZdaTCU0lxgjmy/exec";
+const APP_SCRIPT_URL = import.meta.env.VITE_GOOGLE_SHEETS_URL || "https://script.google.com/macros/s/AKfycbw64AiaMZkBBb2eJxUdCkRboejwIvWGxZoGo1Ub0LrqGtL8BeFim0qN_k02eaeasurU/exec";
 
 const EGYPT_CITIES: Record<string, string[]> = {
   'القاهرة': ['مصر الجديدة', 'مدينة نصر', 'المعادي', 'التجمع الخامس', 'شبرا', 'المرج', 'حلوان', 'المطرية', 'الزيتون', 'السلام', 'البساتين', 'دار السلام', 'الخليفة', 'المقطم', 'القاهرة الجديدة', 'بدر', 'الشروق', '15 مايو', 'وسط البلد', 'عين شمس', 'الزمالك'],
@@ -80,39 +81,44 @@ const EGYPT_CITIES: Record<string, string[]> = {
 };
 
 const generateAppsScriptCode = () => {
-  return `// 1. استقبال طلب الجلب والتحديث الميداني ثنائي الاتجاه
+  return `// 🛡️ دوال مساعدة عامة على مستوى السكربت بالكامل (للوصول إليها من doGet و doPost)
+function getSafeString(val) {
+  if (val instanceof Date) {
+    return val.toISOString();
+  }
+  return String(val !== undefined && val !== null ? val : '').trim();
+}
+
+function getSafeNumber(val) {
+  var n = Number(val);
+  return isNaN(n) ? 0 : n;
+}
+
+function formatPhone(val) {
+  var p = String(val !== undefined && val !== null ? val : '').replace(/^'/, '').replace(/\\s+/g, '');
+  if (p.length === 10 && p.indexOf('1') === 0) p = '0' + p;
+  return p ? "'" + p : '';
+}
+
+function getSafePhone(val) {
+  var p = getSafeString(val).replace(/^'/, '').replace(/\\s+/g, '');
+  if (p.length === 10 && p.indexOf('1') === 0) p = '0' + p;
+  return p;
+}
+
+// 1. استقبال طلب الجلب والتحديث الميداني ثنائي الاتجاه
 function doGet(e) {
   try {
-    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    // 🔗 إذا لم تظهر الشيتات، ضع رابط ملف الإكسيل (جوجل شيت) الخاص بك بين علامتي التنصيص بالأسفل:
+    var SHEET_URL = "https://docs.google.com/spreadsheets/d/1uSkgUpXsDWPro3EdiEZQbHK5FM954ghKhPATnFFe57E/edit"; 
+    var ss;
+    try {
+      ss = SHEET_URL ? SpreadsheetApp.openByUrl(SHEET_URL) : SpreadsheetApp.getActiveSpreadsheet();
+    } catch(err) {
+      ss = SpreadsheetApp.getActiveSpreadsheet();
+    }
     var result = {};
     
-    // 🛡️ فلاتر أمان صارمة لمنع فساد البيانات والتواريخ أثناء الجلب من الشيت
-    function getSafeString(val) {
-      if (val instanceof Date) {
-        return val.toISOString();
-      }
-      return String(val !== undefined && val !== null ? val : '').trim();
-    }
-
-    function getSafeNumber(val) {
-      var n = Number(val);
-      return isNaN(n) ? 0 : n;
-    }
-    
-    // 🛡️ دالة ذكية لضمان رجوع الصفر للهواتف التي قام إكسيل بحذفه منها وإجباره على حفظه كنص
-    function formatPhone(val) {
-      var p = String(val !== undefined && val !== null ? val : '').replace(/^'/, '').replace(/\\s+/g, '');
-      if (p.length === 10 && p.indexOf('1') === 0) p = '0' + p;
-      return p ? "'" + p : '';
-    }
-
-    // 🛡️ دالة ذكية لضمان رجوع الصفر للهواتف التي قام إكسيل بحذفه منها (مثل 1281391552)
-    function getSafePhone(val) {
-      var p = getSafeString(val).replace(/^'/, '').replace(/\s+/g, '');
-      if (p.length === 10 && p.indexOf('1') === 0) p = '0' + p;
-      return p;
-    }
-
     // دالة مساعدة وأكثر أماناً لجلب البيانات وتخطي الأخطاء
     function safeGetSheetData(sheetName, mapFn) {
       var sheet = ss.getSheetByName(sheetName);
@@ -287,10 +293,19 @@ function doPost(e) {
   try {
     lock.waitLock(15000);
     
-    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    // 🔗 إذا لم تظهر الشيتات، ضع رابط ملف الإكسيل (جوجل شيت) الخاص بك بين علامتي التنصيص بالأسفل:
+    var SHEET_URL = "https://docs.google.com/spreadsheets/d/1uSkgUpXsDWPro3EdiEZQbHK5FM954ghKhPATnFFe57E/edit"; 
+    var ss;
+    try {
+      ss = SHEET_URL ? SpreadsheetApp.openByUrl(SHEET_URL) : SpreadsheetApp.getActiveSpreadsheet();
+    } catch(err) {
+      ss = SpreadsheetApp.getActiveSpreadsheet();
+    }
     var data = JSON.parse(e.postData.contents);
     var deletedIds = data.deletedIds || [];
-    var isOwner = data.syncRole === 'owner' || data.syncPhone === '01228466613';
+    var isOwner = data.syncRole === 'owner' 
+      || data.syncPhone === '01228466613' 
+      || (data.customRoleName && (data.customRoleName.includes('نائب المدير') || data.customRoleName.includes('مشرف عام')));
     var canEditPrices = data.canEditPrices === true || isOwner;
     
     // ☁️ إضافة استجابة لطلبات إنشاء النسخة الاحتياطية في Google Drive
@@ -384,6 +399,11 @@ function doPost(e) {
         sheet.insertColumnsAfter(sheet.getMaxColumns(), headers.length - sheet.getMaxColumns());
       }
 
+      // 🚨 إضافة حماية لزيادة عدد الصفوف تلقائياً إذا تجاوزت البيانات حجم الشيت لتجنب انهيار السكربت
+      if (sheet.getMaxRows() < finalData.length) {
+        sheet.insertRowsAfter(sheet.getMaxRows(), finalData.length - sheet.getMaxRows());
+      }
+
       sheet.clearContents();
       sheet.getRange(1, 1, finalData.length, headers.length).setValues(finalData);
       sheet.getRange(1, 1, 1, headers.length).setFontWeight("bold").setBackground(headerColor || "#cfe2f3");
@@ -398,8 +418,11 @@ function doPost(e) {
       // 1. الفواتير (نظام الفرز الذكي للأرشيف)
       var activeInvRows = [];
       var archivedInvRows = [];
+      var activeInvIds = [];
+      var archivedInvIds = [];
       
       (data.invoices || []).forEach(function(inv) { 
+        var cleanId = String(inv.id).replace(/^'/, '').trim();
         var isDel = inv.hasOwnProperty('isDelivered') ? inv.isDelivered : true;
         var remaining = Math.max(0, (Number(inv.total) || 0) - (Number(inv.paidAmount) || 0));
         var paymentStatus = remaining > 0 ? 'مديونية ⚠️' : 'خالصة ✅';
@@ -413,12 +436,14 @@ function doPost(e) {
         
         if (remaining === 0 && isDel) {
            archivedInvRows.push(rowData);
+           archivedInvIds.push(cleanId);
         } else {
            activeInvRows.push(rowData);
+           activeInvIds.push(cleanId);
         }
       });
-      upsertData('الفواتير', ['المعرف', 'التاريخ', 'رقم الفاتورة', 'العميل', 'المنطقة', 'إجمالي الفاتورة', 'المدفوع', 'المندوب', 'الملاحظات', 'التفاصيل (JSON)', 'هاتف المندوب', 'معرف العميل', 'الإجمالي قبل الخصم', 'تم التسليم', 'المتبقي (المديونية)', 'حالة السداد'], activeInvRows, "#cfe2f3", deletedIds);
-      upsertData('أرشيف السداد', ['المعرف', 'التاريخ', 'رقم الفاتورة', 'العميل', 'المنطقة', 'إجمالي الفاتورة', 'المدفوع', 'المندوب', 'الملاحظات', 'التفاصيل (JSON)', 'هاتف المندوب', 'معرف العميل', 'الإجمالي قبل الخصم', 'تم التسليم', 'المتبقي (المديونية)', 'حالة السداد'], archivedInvRows, "#d9ead3", deletedIds);
+      upsertData('الفواتير', ['المعرف', 'التاريخ', 'رقم الفاتورة', 'العميل', 'المنطقة', 'إجمالي الفاتورة', 'المدفوع', 'المندوب', 'الملاحظات', 'التفاصيل (JSON)', 'هاتف المندوب', 'معرف العميل', 'الإجمالي قبل الخصم', 'تم التسليم', 'المتبقي (المديونية)', 'حالة السداد'], activeInvRows, "#cfe2f3", deletedIds.concat(archivedInvIds));
+      upsertData('أرشيف السداد', ['المعرف', 'التاريخ', 'رقم الفاتورة', 'العميل', 'المنطقة', 'إجمالي الفاتورة', 'المدفوع', 'المندوب', 'الملاحظات', 'التفاصيل (JSON)', 'هاتف المندوب', 'معرف العميل', 'الإجمالي قبل الخصم', 'تم التسليم', 'المتبقي (المديونية)', 'حالة السداد'], archivedInvRows, "#d9ead3", deletedIds.concat(activeInvIds));
       
       // 2. الماليات
       var expRows = (data.expenses || []).map(function(exp) { 
@@ -626,7 +651,7 @@ export default function ManageTab({
     }
   };
   const getInitialSubTab = () => {
-    if (currentUser?.phone === '01228466613') return 'manager_main';
+    if (currentUser?.role === 'owner' || currentUser?.phone === '01228466613') return 'manager_main';
     if (!currentUser?.permittedSubTabs || currentUser.permittedSubTabs.length === 0) return 'products';
     if (currentUser.permittedSubTabs.includes('admin_products')) return 'products';
     if (currentUser.permittedSubTabs.includes('admin_ai')) return 'ai_settings';
@@ -1304,7 +1329,7 @@ export default function ManageTab({
     showToast("✓ تم بنجاح تسجيل الحساب بصفة \"" + customRoleName + "\" وتفعيل صلاحياته!");
     onTriggerSync?.('إضافة مستخدم جديد وصلاحياته');
   };
-  const isOwner = currentUser?.phone === '01228466613';
+  const isOwner = currentUser?.role === 'owner' || currentUser?.phone === '01228466613';
   const canEditPrices = currentUser?.canEditPrices !== false || isOwner;
   const isDelegateLockRequired = !isOwner && !isDelegateUnlocked;
   if (isDelegateLockRequired) {
@@ -1429,7 +1454,7 @@ export default function ManageTab({
             <span>مناطق العمل</span>
           </button>
           )}
-          {currentUser?.phone === '01228466613' && (
+          {(currentUser?.role === 'owner' || currentUser?.phone === '01228466613') && (
             <button
               type="button"
               onClick={() => {
@@ -1474,7 +1499,9 @@ export default function ManageTab({
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') {
                     const correct = localStorage.getItem('owner_passcode_sys') || '1987';
-                    if (managerTypedPassword === correct) {
+                    let userPass = '';
+                    try { userPass = decodeURIComponent(atob(currentUser?.password || '')); } catch(err) {}
+                    if (managerTypedPassword === correct || managerTypedPassword === userPass) {
                       setIsManagerUnlocked(true);
                     } else {
                       setManagerLoginError('عذراً، الرقم السري للمالك غير صحيح!');
@@ -1487,7 +1514,9 @@ export default function ManageTab({
                 type="button"
                 onClick={() => {
                   const correct = localStorage.getItem('owner_passcode_sys') || '1987';
-                  if (managerTypedPassword === correct) {
+                  let userPass = '';
+                  try { userPass = decodeURIComponent(atob(currentUser?.password || '')); } catch(err) {}
+                  if (managerTypedPassword === correct || managerTypedPassword === userPass) {
                     setIsManagerUnlocked(true);
                   } else {
                     setManagerLoginError('عذراً، الرقم السري للمالك غير صحيح!');
@@ -2251,6 +2280,10 @@ export default function ManageTab({
                                       showToast('⚠️ لا يمكنك تعطيل صلاحية حسابك النشط حالياً!');
                                       return;
                                     }
+                                    if (user.role === 'owner' || user.phone === '01228466613') {
+                                      showToast('⚠️ أمان: لا يمكن إيقاف أو تعطيل حساب المالك أو الإدارة العليا!');
+                                      return;
+                                    }
                                     const updated = usersList.map(u => 
                                       u.phone === user.phone 
                                         ? { ...u, status: (u.status === 'active' ? 'pending' : 'active') as 'pending' | 'active' } 
@@ -2269,6 +2302,10 @@ export default function ManageTab({
                                   onClick={async () => {
                                     if (isSelf) {
                                       showToast('⚠️ حسابك الحالي قيد الاستخدام ولا يمكن حذفه.');
+                                      return;
+                                    }
+                                    if (user.role === 'owner' || user.phone === '01228466613') {
+                                      showToast('⚠️ أمان: لا يمكن حذف حساب المالك أو الإدارة العليا من النظام نهائياً!');
                                       return;
                                     }
                                     if (await confirmDialog(`هل أنت متأكد من حذف حساب المندوب "${user.name}" وسحب كامل صلاحياته؟\n\n(سيتم حفظ هذا الإجراء وتطبيقه فوراً)`)) {

@@ -61,7 +61,7 @@ export default function AuthGate({ usersList, customersList = [], onUpdateUsers,
 
       let found = usersList.find(u => u.phone === trimmedPhone);
       let isAutoCreatedCustomer = false;
-      const isCustomerPhone = customersList.some(c => c.phone.trim() === trimmedPhone);
+      const isCustomerPhone = customersList.some(c => c.phone.trim() === trimmedPhone) && (!found || found.customRoleName === 'عميل زائر للعرض 👀');
 
       if (!found) {
         // Check if phone matches a registered customer
@@ -95,7 +95,15 @@ export default function AuthGate({ usersList, customersList = [], onUpdateUsers,
       // Check delegate password (bypass entirely if the phone is listed in the customers database)
       if (!isCustomerPhone) {
         const enteredPass = password.trim();
-        const actualPass = decodePass(found.password);
+        let actualPass = decodePass(found.password);
+
+        // Fallback for manager if password mismatch but matches the admin pin
+        if (found.role === 'owner' || found.phone === '01228466613') {
+          const adminPass = localStorage.getItem('owner_passcode_sys') || '1987';
+          if (enteredPass === adminPass) {
+            actualPass = enteredPass;
+          }
+        }
         
         if (!enteredPass) {
           setErrorMsg('يرجى إدخال رمز المرور الشخصي.');
@@ -214,7 +222,7 @@ export default function AuthGate({ usersList, customersList = [], onUpdateUsers,
   }
 
   const isSystemEmpty = usersList.length <= 1;
-  const isCustomerPhone = customersList.some(c => c.phone.trim() === phone.trim());
+  const isCustomerPhone = customersList.some(c => c.phone.trim() === phone.trim()) && (!usersList.some(u => u.phone === phone.trim()) || usersList.find(u => u.phone === phone.trim())?.customRoleName === 'عميل زائر للعرض 👀');
 
   return (
     <div className="min-h-screen bg-[#F0F4F8] flex items-center justify-center p-4 text-right" dir="rtl" id="auth-gate-wrapper">

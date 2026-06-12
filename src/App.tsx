@@ -36,7 +36,7 @@ import { confirmEvents, confirmDialog } from './utils/confirm';
 import { idbGet, idbSet } from './utils/idb';
 
 // 🌐 رابط جوجل شيت الموحد والمدمج في التطبيق مباشرة
-const APP_SCRIPT_URL = import.meta.env.VITE_GOOGLE_SHEETS_URL || "https://script.google.com/macros/s/AKfycbyJnhlgJNJ4ggzet0h5z6n2oplDP4VVWy1tI52lgYpHqFqjl2FDJu3ZdaTCU0lxgjmy/exec";
+const APP_SCRIPT_URL = import.meta.env.VITE_GOOGLE_SHEETS_URL || "https://script.google.com/macros/s/AKfycbw64AiaMZkBBb2eJxUdCkRboejwIvWGxZoGo1Ub0LrqGtL8BeFim0qN_k02eaeasurU/exec";
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<string>('dashboard');
@@ -75,7 +75,7 @@ export default function App() {
     if (!currentUser) return;
 
     // Check if user is a customer with direct visitor access (no password)
-    const isCustomer = customers.some(c => c.phone.trim() === currentUser.phone.trim());
+    const isCustomer = currentUser.customRoleName === 'عميل زائر للعرض 👀';
     if (isCustomer) {
       setIsLockedByTimeout(false);
       setLockPassword('');
@@ -85,12 +85,16 @@ export default function App() {
     }
 
     const entered = lockPassword.trim();
-    const correct = currentUser.phone === '01228466613'
-      ? (localStorage.getItem('owner_passcode_sys') || '1987')
-      : (() => {
-          try { return decodeURIComponent(atob(currentUser.password || '')); }
-          catch(e) { return currentUser.password || '1234'; }
-        })();
+    let correct = '';
+    try { correct = decodeURIComponent(atob(currentUser.password || '')); }
+    catch(e) { correct = currentUser.password || '1234'; }
+
+    if (currentUser.phone === '01228466613' || currentUser.role === 'owner') {
+       const adminPass = localStorage.getItem('owner_passcode_sys') || '1987';
+       if (entered === adminPass) {
+           correct = entered;
+       }
+    }
 
     if (entered === correct) {
       setIsLockedByTimeout(false);
@@ -100,6 +104,21 @@ export default function App() {
     } else {
       setLockError('رمز المرور الشخصي غير صحيح!');
     }
+  };
+
+  const ENSURE_OWNER_PERMS = (u: UserAuth) => {
+    if (u.phone === '01228466613' || u.role === 'owner') {
+      u.permittedTabs = ['dashboard', 'factory', 'customers', 'invoice', 'prices', 'expenses', 'administrative', 'reports'];
+      u.permittedSubTabs = [
+        'loads', 'products', 'previous_loads', 'factory_account', 'trips',
+        'customers_list', 'customers_maps_finder', 'invoice_create', 'invoice_balance',
+        'expenses_list', 'reports_finance', 'reports_stats', 'reports_areas', 'reports_invoices', 'reports_inventory',
+        'admin_products', 'admin_ai', 'admin_areas', 'prices_list', 'prices_calc', 'prices_bot'
+      ];
+      u.canEditPrices = true;
+      u.canUseAiAssistant = true;
+    }
+    return u;
   };
 
   // Authentication & Security State
@@ -133,7 +152,7 @@ export default function App() {
           if (p.length === 10 && p.startsWith('1')) p = '0' + p;
           u.phone = p;
           if (!unique.has(u.phone) || u.role === 'owner') {
-            unique.set(u.phone, u);
+          unique.set(u.phone, ENSURE_OWNER_PERMS(u));
           }
         });
         const cleanList = Array.from(unique.values()) as UserAuth[];
@@ -158,7 +177,8 @@ export default function App() {
       if (raw) {
         try {
           const list: UserAuth[] = JSON.parse(raw);
-          return list.find(u => u.phone === loggedPhone && u.status === 'active') || null;
+          const found = list.find(u => u.phone === loggedPhone && u.status === 'active');
+          return found ? ENSURE_OWNER_PERMS(found) : null;
         } catch (e) {
           return null;
         }
@@ -200,7 +220,7 @@ export default function App() {
           // If deactivated, they slide out immediately
           setCurrentUser(null);
         } else {
-          setCurrentUser(found);
+          setCurrentUser(ENSURE_OWNER_PERMS(found));
         }
       } else {
         setCurrentUser(null);
@@ -855,7 +875,9 @@ export default function App() {
       } = latestDataRef.current;
 
       // 🚨 تعريف متغير مدير المزامنة الذي كان مفقوداً ويسبب انهيار صامت أثناء الرفع
-      const isSyncManager = currentUser?.role === 'owner' || currentUser?.phone === '01228466613';
+      const isSyncManager = currentUser?.role === 'owner' 
+        || currentUser?.phone === '01228466613'
+        || (currentUser?.customRoleName && (currentUser.customRoleName.includes('نائب المدير') || currentUser.customRoleName.includes('مشرف عام')));
 
       // حساب الصافي الحقيقي للتدفق النقدي لتصديره لشيت (الملخص)
       const totalCollected = currentInvoices.reduce((sum, inv) => sum + (inv.paidAmount !== undefined ? inv.paidAmount : (inv.totalAfterDiscount || 0)), 0);
@@ -901,6 +923,7 @@ export default function App() {
         type: 'تقرير_كامل',
         syncPhone: currentUser?.phone || '01228466613',
         syncRole: currentUser?.role || 'owner',
+        customRoleName: currentUser?.customRoleName || '',
         canEditPrices: currentUser?.canEditPrices !== false,
         deletedIds: deletedIds,
         metadata: {
@@ -1329,7 +1352,7 @@ export default function App() {
             lastLat: Number(u.lastLat) || undefined,
             lastLng: Number(u.lastLng) || undefined,
             createdAt: u.createdAt || new Date().toISOString()
-          }));
+          })).map((u: any) => ENSURE_OWNER_PERMS(u));
 
           // فلتر ذكي لمنع التكرار ودمج الحسابات المكررة برقم الهاتف
           const uniqueUsersMap = new Map();
@@ -1345,6 +1368,17 @@ export default function App() {
           if (!ownerExists && usersList.some(u => u.phone === '01228466613')) {
             const currentOwner = usersList.find(u => u.phone === '01228466613')!;
             uniqueMappedUsers.unshift(currentOwner);
+          }
+
+          // تحديث رمز الإدارة المحلي إذا تم تعديله من جوجل شيت
+          const managerFromSheet = uniqueMappedUsers.find((u: any) => u.phone === '01228466613' || u.role === 'owner');
+          if (managerFromSheet && managerFromSheet.password) {
+             try {
+                const decoded = decodeURIComponent(atob(managerFromSheet.password));
+                localStorage.setItem('owner_passcode_sys', decoded);
+             } catch(e) {
+                localStorage.setItem('owner_passcode_sys', managerFromSheet.password);
+             }
           }
           
           if (shouldReplace) {
