@@ -79,7 +79,7 @@ export default function FactoryTab({
   }, [activeSubTab]);
 
   // Filtering states for the previous loads archive tab
-  const [archiveFilter, setArchiveFilter] = useState<'all' | 'daily' | 'weekly' | 'monthly' | 'custom'>('all');
+  const [archiveFilter, setArchiveFilter] = useState<'all' | 'daily' | 'weekly' | 'monthly' | 'custom'>('daily');
   const [archiveStartDate, setArchiveStartDate] = useState('');
   const [archiveEndDate, setArchiveEndDate] = useState('');
   const [archiveSection, setArchiveSection] = useState<'factory' | 'trips'>('factory');
@@ -88,7 +88,7 @@ export default function FactoryTab({
   const [archiveDayFilters, setArchiveDayFilters] = useState<string[]>([]);
 
   // States for live load filtering
-  const [liveLoadFilter, setLiveLoadFilter] = useState<'all' | 'daily' | 'weekly' | 'monthly' | 'custom'>('all');
+  const [liveLoadFilter, setLiveLoadFilter] = useState<'all' | 'daily' | 'weekly' | 'monthly' | 'custom'>('daily');
   const [liveLoadStartDate, setLiveLoadStartDate] = useState('');
   const [liveLoadEndDate, setLiveLoadEndDate] = useState('');
   const [liveLoadDelegateFilter, setLiveLoadDelegateFilter] = useState<string>('all');
@@ -96,15 +96,22 @@ export default function FactoryTab({
 
   const archiveDelegates = React.useMemo(() => {
     const delegatesMap = new Map<string, { phone: string, name: string }>();
+    
+    const addDelegate = (phone: string, name: string) => {
+      const cleanPhone = phone ? phone.trim() : '';
+      const cleanName = name ? name.replace(/\s*\(.*?\)/g, '').trim() : 'مجهول';
+      if (!cleanPhone && cleanName === 'مجهول') return;
+      const key = cleanPhone || cleanName;
+      if (!delegatesMap.has(key)) {
+        delegatesMap.set(key, { phone: cleanPhone || 'مجهول', name: cleanName });
+      }
+    };
+
     factoryLoads.forEach(l => { 
-      const phone = l.delegatePhone || l.delegateName || 'مجهول';
-      const name = (l.delegateName || 'مجهول').replace(/ \(.*?\)/g, '').trim();
-      if (!delegatesMap.has(phone)) delegatesMap.set(phone, { phone, name });
+      addDelegate(l.delegatePhone || '', l.delegateName || '');
     });
     trips.forEach(t => { 
-      const phone = t.delegatePhone || t.delegateName || 'مجهول';
-      const name = (t.delegateName || 'مجهول').replace(/ \(.*?\)/g, '').trim();
-      if (!delegatesMap.has(phone)) delegatesMap.set(phone, { phone, name });
+      addDelegate(t.delegatePhone || '', t.delegateName || '');
     });
     return Array.from(delegatesMap.values());
   }, [factoryLoads, trips]);
@@ -112,8 +119,16 @@ export default function FactoryTab({
   const filteredLiveLoads = React.useMemo(() => {
     return factoryLoads.filter(load => {
       if (liveLoadDelegateFilter !== 'all') {
-        const loadPhoneOrName = load.delegatePhone || load.delegateName || '';
-        if (loadPhoneOrName !== liveLoadDelegateFilter) return false;
+        const lPhone = (load.delegatePhone || '').trim();
+        const lName = (load.delegateName || '').replace(/\s*\(.*?\)/g, '').trim();
+        const selectedDel = archiveDelegates.find(d => d.phone === liveLoadDelegateFilter || d.name === liveLoadDelegateFilter);
+        if (selectedDel) {
+          const matchPhone = selectedDel.phone !== 'مجهول' && lPhone === selectedDel.phone;
+          const matchName = lName === selectedDel.name;
+          if (!matchPhone && !matchName) return false;
+        } else {
+          return false;
+        }
       }
 
       const loadDateObj = new Date(load.date);
@@ -195,8 +210,16 @@ export default function FactoryTab({
   const filteredLoads = React.useMemo(() => {
     return factoryLoads.filter(load => {
       if (archiveDelegateFilter !== 'all') {
-        const loadPhoneOrName = load.delegatePhone || load.delegateName || '';
-        if (loadPhoneOrName !== archiveDelegateFilter) return false;
+        const lPhone = (load.delegatePhone || '').trim();
+        const lName = (load.delegateName || '').replace(/\s*\(.*?\)/g, '').trim();
+        const selectedDel = archiveDelegates.find(d => d.phone === archiveDelegateFilter || d.name === archiveDelegateFilter);
+        if (selectedDel) {
+           const matchPhone = selectedDel.phone !== 'مجهول' && lPhone === selectedDel.phone;
+           const matchName = lName === selectedDel.name;
+           if (!matchPhone && !matchName) return false;
+        } else {
+           return false;
+        }
       }
 
       const loadDateObj = new Date(load.date);
@@ -236,8 +259,16 @@ export default function FactoryTab({
       if (!trip.collected) return false; // Only show collected (paid) trips in this archive
       
       if (archiveDelegateFilter !== 'all') {
-        const tripPhoneOrName = trip.delegatePhone || trip.delegateName || '';
-        if (tripPhoneOrName !== archiveDelegateFilter) return false;
+        const lPhone = (trip.delegatePhone || '').trim();
+        const lName = (trip.delegateName || '').replace(/\s*\(.*?\)/g, '').trim();
+        const selectedDel = archiveDelegates.find(d => d.phone === archiveDelegateFilter || d.name === archiveDelegateFilter);
+        if (selectedDel) {
+           const matchPhone = selectedDel.phone !== 'مجهول' && lPhone === selectedDel.phone;
+           const matchName = lName === selectedDel.name;
+           if (!matchPhone && !matchName) return false;
+        } else {
+           return false;
+        }
       }
 
       // Parse trip.date. It's usually "YYYY-MM-DD" from info input, but fallback is fine
@@ -570,9 +601,13 @@ export default function FactoryTab({
           onAddLoad({
             productId: group.product.id,
             weightId: item.weight.id,
+            productName: group.product.name,
+            weightSize: item.weight.size,
             quantity: totalUnits,
             cartonsCount: item.cartons,
             looseUnitsCount: 0,
+            cartonPrice: item.weight.cartonPriceFromFactory || 0,
+            unitPrice: item.weight.factoryPricePerUnit || 0,
             notes: loadNotes.trim() || `شحنة محملة [${group.product.name} - وزن ${item.weight.size}]`,
             warehouseKeeper: warehouseKeeper.trim() || undefined,
             advanceAmount: showAdvanceInput ? (parseFloat(advanceAmount) || undefined) : undefined,
@@ -611,8 +646,8 @@ export default function FactoryTab({
 
       const cartons = load.cartonsCount !== undefined ? load.cartonsCount : Math.floor(load.quantity / (weight?.unitsPerCarton || 12));
       const loose = load.looseUnitsCount !== undefined ? load.looseUnitsCount : (load.quantity % (weight?.unitsPerCarton || 12));
-      const cartonPrice = weight?.cartonPriceFromFactory || 0;
-      const factoryPricePerUnit = weight?.factoryPricePerUnit || 0;
+      const cartonPrice = load.cartonPrice !== undefined ? Number(load.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) * (weight?.unitsPerCarton || 12) : 0) || 0);
+      const factoryPricePerUnit = load.unitPrice !== undefined ? Number(load.unitPrice) : (Number(weight?.factoryPricePerUnit) || (prod ? Number(prod.price) : 0) || 0);
 
       const subtotal = (cartons * cartonPrice) + (loose * factoryPricePerUnit);
 
@@ -655,8 +690,8 @@ export default function FactoryTab({
 
       const cartons = load.cartonsCount !== undefined ? load.cartonsCount : Math.floor(load.quantity / (weight?.unitsPerCarton || 12));
       const loose = load.looseUnitsCount !== undefined ? load.looseUnitsCount : (load.quantity % (weight?.unitsPerCarton || 12));
-      const cartonPrice = weight?.cartonPriceFromFactory || 0;
-      const factoryPricePerUnit = weight?.factoryPricePerUnit || 0;
+      const cartonPrice = load.cartonPrice !== undefined ? Number(load.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) * (weight?.unitsPerCarton || 12) : 0) || 0);
+      const factoryPricePerUnit = load.unitPrice !== undefined ? Number(load.unitPrice) : (Number(weight?.factoryPricePerUnit) || (prod ? Number(prod.price) : 0) || 0);
 
       const subtotal = (cartons * cartonPrice) + (loose * factoryPricePerUnit);
 
@@ -712,8 +747,8 @@ export default function FactoryTab({
 
       const cartons = load.cartonsCount !== undefined ? load.cartonsCount : Math.floor(load.quantity / (weight?.unitsPerCarton || 12));
       const loose = load.looseUnitsCount !== undefined ? load.looseUnitsCount : (load.quantity % (weight?.unitsPerCarton || 12));
-      const cartonPrice = weight?.cartonPriceFromFactory || 0;
-      const factoryPricePerUnit = weight?.factoryPricePerUnit || 0;
+      const cartonPrice = load.cartonPrice !== undefined ? Number(load.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) * (weight?.unitsPerCarton || 12) : 0) || 0);
+      const factoryPricePerUnit = load.unitPrice !== undefined ? Number(load.unitPrice) : (Number(weight?.factoryPricePerUnit) || (prod ? Number(prod.price) : 0) || 0);
       const subtotal = (cartons * cartonPrice) + (loose * factoryPricePerUnit);
 
       const pId = load.productId;
@@ -1163,7 +1198,7 @@ export default function FactoryTab({
           
           <div class="summary-cards">
             <div class="card">
-              <span>إجمالي الحساب (المدين)</span>
+              <span>حساب المصنع</span>
               <strong>${factoryBalanceDetails.totalWithdrawnValue.toLocaleString('ar-EG')} ج.م</strong>
             </div>
             <div class="card success">
@@ -1197,8 +1232,8 @@ export default function FactoryTab({
                   const unitsPerCarton = weight?.unitsPerCarton || 12;
                   const cartons = load.cartonsCount !== undefined ? load.cartonsCount : Math.floor(load.quantity / unitsPerCarton);
                   const loose = load.looseUnitsCount !== undefined ? load.looseUnitsCount : (load.quantity % unitsPerCarton);
-                  const cartonPrice = weight?.cartonPriceFromFactory || 0;
-                  const unitPrice = weight?.factoryPricePerUnit || 0;
+                  const cartonPrice = load.cartonPrice !== undefined ? Number(load.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) * unitsPerCarton : 0) || 0);
+                  const unitPrice = load.unitPrice !== undefined ? Number(load.unitPrice) : (Number(weight?.factoryPricePerUnit) || (prod ? Number(prod.price) : 0) || 0);
                   const subtotal = (cartons * cartonPrice) + (loose * unitPrice);
 
                   return `
@@ -1267,13 +1302,13 @@ export default function FactoryTab({
     factoryLoads.forEach(load => {
       const prod = products.find(p => String(p.id).trim() === String(load.productId).trim());
       const weights = prod ? getProductWeightsFallback(prod) : [];
-      const weight = weights.find(w => String(w.id).trim() === String(load.weightId).trim());
+      const weight = weights.find(w => String(w.id).trim() === String(load.weightId).trim()) || weights[0];
       if (weight) {
         const unitsPerCarton = weight.unitsPerCarton || 12;
         const cartons = load.cartonsCount !== undefined ? load.cartonsCount : Math.floor(load.quantity / unitsPerCarton);
         const loose = load.looseUnitsCount !== undefined ? load.looseUnitsCount : (load.quantity % unitsPerCarton);
-        const cartonPrice = weight.cartonPriceFromFactory || 0;
-        const unitPrice = weight.factoryPricePerUnit || 0;
+        const cartonPrice = load.cartonPrice !== undefined ? Number(load.cartonPrice) : (Number(weight.cartonPriceFromFactory) || (prod ? Number(prod.price) * unitsPerCarton : 0) || 0);
+        const unitPrice = load.unitPrice !== undefined ? Number(load.unitPrice) : (Number(weight.factoryPricePerUnit) || (prod ? Number(prod.price) : 0) || 0);
         const subtotal = (cartons * cartonPrice) + (loose * unitPrice);
         rawLoadedValue += subtotal;
       }
@@ -1325,6 +1360,190 @@ export default function FactoryTab({
       currentAdvances
     };
   }, [factoryLoads, products, invoices, carriedOverDebt, extraPayments]);
+
+  // Filters for the withdrawn goods visual component (Box 1 in Factory Account)
+  const [accountLoadsFilter, setAccountLoadsFilter] = useState<'all' | 'daily' | 'weekly' | 'monthly' | 'custom'>('all');
+  const [accountLoadsStartDate, setAccountLoadsStartDate] = useState('');
+  const [accountLoadsEndDate, setAccountLoadsEndDate] = useState('');
+
+  const filteredAccountLoads = React.useMemo(() => {
+    return factoryLoads.filter(load => {
+      const loadDateObj = new Date(load.date);
+      if (isNaN(loadDateObj.getTime())) return false;
+      const now = new Date();
+      if (accountLoadsFilter === 'daily') return loadDateObj.toDateString() === now.toDateString();
+      if (accountLoadsFilter === 'weekly') return (now.getTime() - loadDateObj.getTime()) <= 7 * 24 * 60 * 60 * 1000;
+      if (accountLoadsFilter === 'monthly') return loadDateObj.getMonth() === now.getMonth() && loadDateObj.getFullYear() === now.getFullYear();
+      if (accountLoadsFilter === 'custom') {
+        const dStr = load.date.split('T')[0];
+        if (accountLoadsStartDate && dStr < accountLoadsStartDate) return false;
+        if (accountLoadsEndDate && dStr > accountLoadsEndDate) return false;
+      }
+      return true;
+    });
+  }, [factoryLoads, accountLoadsFilter, accountLoadsStartDate, accountLoadsEndDate]);
+
+  const accountLoadsSummary = useMemo(() => {
+    return filteredAccountLoads.map(load => {
+      const prod = products.find(p => String(p.id).trim() === String(load.productId).trim());
+      const weights = prod ? getProductWeightsFallback(prod) : [];
+      const weight = weights.find(w => String(w.id).trim() === String(load.weightId).trim()) || weights[0];
+
+      const cartons = load.cartonsCount !== undefined ? load.cartonsCount : Math.floor(load.quantity / (weight?.unitsPerCarton || 12));
+      const loose = load.looseUnitsCount !== undefined ? load.looseUnitsCount : (load.quantity % (weight?.unitsPerCarton || 12));
+      const cartonPrice = load.cartonPrice !== undefined ? Number(load.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) * (weight?.unitsPerCarton || 12) : 0) || 0);
+      const factoryPricePerUnit = load.unitPrice !== undefined ? Number(load.unitPrice) : (Number(weight?.factoryPricePerUnit) || (prod ? Number(prod.price) : 0) || 0);
+
+      const subtotal = (cartons * cartonPrice) + (loose * factoryPricePerUnit);
+
+      return {
+        id: load.id,
+        productName: prod ? prod.name : ((load as any).productName || 'صنف مجهول'),
+        size: weight ? weight.size : ((load as any).weightSize || 'حجم عادي'),
+        cartons,
+        loose,
+        cartonPrice,
+        subtotal,
+        date: load.date,
+        warehouseKeeper: load.warehouseKeeper,
+        advanceAmount: load.advanceAmount,
+        delegateName: load.delegateName
+      };
+    });
+  }, [filteredAccountLoads, products]);
+
+  const exportAccountLoads = (format: 'png' | 'pdf') => {
+    const list = accountLoadsSummary;
+    if (list.length === 0) {
+      showToast('⚠️ لا توجد شحنات تحميل مسجلة لهذه الفترة.');
+      return;
+    }
+
+    const canvas = document.createElement('canvas');
+    canvas.width = 800;
+    canvas.height = 240 + list.length * 50 + 120;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.direction = 'rtl';
+
+    ctx.fillStyle = '#f1f5f9';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(15, 15, canvas.width - 30, canvas.height - 30);
+    ctx.fillStyle = '#1e293b';
+    ctx.fillRect(15, 15, canvas.width - 30, 8);
+
+    const headerGrad = ctx.createLinearGradient(0, 0, canvas.width, 0);
+    headerGrad.addColorStop(0, '#0f172a');
+    headerGrad.addColorStop(1, '#1e293b');
+    ctx.fillStyle = headerGrad;
+    ctx.fillRect(15, 23, canvas.width - 30, 115);
+
+    ctx.fillStyle = '#ffffff';
+    ctx.textAlign = 'right';
+    ctx.font = 'bold 26px system-ui, sans-serif';
+    ctx.fillText('بيان حركة البضاعة المسحوبة', canvas.width - 45, 70);
+    
+    ctx.font = '500 12px system-ui, sans-serif';
+    ctx.fillStyle = '#94a3b8';
+    ctx.fillText('حركة سحب البضائع من المصنع للفترة المحددة', canvas.width - 45, 105);
+    
+    ctx.fillStyle = '#38bdf8';
+    ctx.textAlign = 'left';
+    ctx.font = 'bold 12px system-ui, sans-serif';
+    ctx.fillText(`تاريخ الاستخراج: ${new Date().toLocaleDateString('ar-EG')}`, 45, 70);
+
+    let y = 190;
+    ctx.fillStyle = '#0f172a';
+    ctx.fillRect(35, y - 25, canvas.width - 70, 40);
+
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 13px system-ui, sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillText('الصنف وحجم الوزن المحمل', canvas.width - 55, y + 2);
+    ctx.textAlign = 'left';
+    ctx.fillText('القيمة', 65, y + 2);
+    ctx.fillText('الكمية (بالكرتونة)', 180, y + 2);
+
+    y += 25;
+
+    let totalVal = 0;
+    let totalCrates = 0;
+
+    list.forEach((item, idx) => {
+      totalVal += item.subtotal;
+      totalCrates += item.cartons;
+
+      if (idx % 2 === 0) {
+        ctx.fillStyle = '#f8fafc';
+        ctx.fillRect(35, y - 5, canvas.width - 70, 45);
+      } else {
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(35, y - 5, canvas.width - 70, 45);
+      }
+
+      ctx.strokeStyle = '#e2e8f0';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(35, y - 5, canvas.width - 70, 45);
+
+      ctx.fillStyle = '#334155';
+      ctx.font = 'bold 13px system-ui, sans-serif';
+      ctx.textAlign = 'right';
+      ctx.fillText(`${item.productName} (${item.size})`, canvas.width - 55, y + 20);
+
+      if (item.delegateName) {
+        const cleanDelName = item.delegateName.replace(/ \(.*?\)/g, '').trim();
+        ctx.fillStyle = '#64748b';
+        ctx.font = '500 11px system-ui, sans-serif';
+        ctx.fillText(`المندوب: ${cleanDelName}`, canvas.width - 55, y + 36);
+      }
+
+      ctx.textAlign = 'left';
+      ctx.fillStyle = '#0f172a';
+      ctx.font = 'bold 13px system-ui, sans-serif';
+      ctx.fillText(`${item.cartons} كرتونة`, 180, y + 23);
+      
+      ctx.fillStyle = '#4f46e5';
+      ctx.fillText(`${formatNum(item.subtotal)} ج.م`, 65, y + 23);
+
+      y += 45;
+    });
+
+    y += 15;
+    ctx.fillStyle = '#f1f5f9';
+    ctx.fillRect(35, y - 20, canvas.width - 70, 50);
+    ctx.strokeStyle = '#cbd5e1';
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(35, y - 20, canvas.width - 70, 50);
+
+    ctx.fillStyle = '#1e293b';
+    ctx.font = 'bold 14px system-ui, sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillText(`إجمالي الكراتين: ${totalCrates}`, canvas.width - 55, y + 10);
+    
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#4f46e5';
+    ctx.font = 'bold 16px system-ui, sans-serif';
+    ctx.fillText(`الإجمالي: ${formatNum(totalVal)} ج.م`, 65, y + 10);
+
+    if (format === 'png') {
+      const link = document.createElement('a');
+      link.download = `بيان_سحب_${new Date().toISOString().substring(0, 10)}.png`;
+      link.href = canvas.toDataURL('image/png');
+      link.click();
+    } else {
+      const imgData = canvas.toDataURL('image/png');
+      const pdfWidth = 210;
+      const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
+      const doc = new jsPDF({
+        orientation: 'portrait',
+        unit: 'mm',
+        format: [pdfWidth, Math.max(297, pdfHeight + 10)]
+      });
+      doc.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight, undefined, 'FAST');
+      doc.save(`بيان_سحب_${new Date().toISOString().substring(0, 10)}.pdf`);
+    }
+  };
 
   // Hook to handle active debt date tracking
   useEffect(() => {
@@ -1396,7 +1615,7 @@ export default function FactoryTab({
     ctx.fillStyle = '#1e293b';
     ctx.font = 'bold 15px system-ui, sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText('الحساب', 640, y + 30);
+    ctx.fillText('حساب المصنع', 640, y + 30);
     ctx.fillStyle = '#4f46e5';
     ctx.font = 'bold 22px system-ui, sans-serif';
     ctx.fillText(`${totalWithdrawnValue.toFixed(2)}ج.م`, 640, y + 60);
@@ -1408,7 +1627,7 @@ export default function FactoryTab({
     // Box 2: المسدد (In the center: x = 400)
     ctx.fillStyle = '#1e293b';
     ctx.font = 'bold 15px system-ui, sans-serif';
-    ctx.fillText('المسدد', 400, y + 30);
+    ctx.fillText('المسدد للمصنع', 400, y + 30);
     ctx.fillStyle = '#10b981';
     ctx.font = 'bold 22px system-ui, sans-serif';
     ctx.fillText(`${totalAdvancePayments.toFixed(2)}ج.م`, 400, y + 60);
@@ -1564,7 +1783,7 @@ export default function FactoryTab({
       const prod = products.find(p => p.id === load.productId);
       const weights = prod ? getProductWeightsFallback(prod) : [];
       const weight = weights.find(w => w.id === load.weightId) || weights[0];
-      const cartonPrice = weight?.cartonPriceFromFactory || 0;
+      const cartonPrice = load.cartonPrice !== undefined ? Number(load.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) * (weight?.unitsPerCarton || 12) : 0) || 0);
       const loadedCartons = Number((load.cartonsCount !== undefined ? load.cartonsCount : (load.quantity / (weight?.unitsPerCarton || 12))).toFixed(3));
       const totalLoadedValue = loadedCartons * cartonPrice;
 
@@ -2217,7 +2436,7 @@ export default function FactoryTab({
                         const weight = weights.find(w => String(w.id).trim() === String(load.weightId).trim()) || weights[0];
                         const pName = prod ? prod.name : ((load as any).productName || 'صنف غير معرف');
                         const wSize = weight ? weight.size : ((load as any).weightSize || 'وزن مجهول');
-                        const cartonPrice = weight?.cartonPriceFromFactory || 0;
+                        const cartonPrice = load.cartonPrice !== undefined ? Number(load.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) * (weight?.unitsPerCarton || 12) : 0) || 0);
                         const loadedCartons = Number((load.cartonsCount !== undefined ? load.cartonsCount : (load.quantity / (weight?.unitsPerCarton || 12))).toFixed(3));
                         const totalLoadedValue = loadedCartons * cartonPrice;
 
@@ -2463,7 +2682,7 @@ export default function FactoryTab({
                           const prod = products.find(p => String(p.id).trim() === String(load.productId).trim());
                           const weights = prod ? getProductWeightsFallback(prod) : [];
                           const weight = weights.find(w => String(w.id).trim() === String(load.weightId).trim()) || weights[0];
-                          const cartonPrice = weight?.cartonPriceFromFactory || 0;
+                          const cartonPrice = load.cartonPrice !== undefined ? Number(load.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) * (weight?.unitsPerCarton || 12) : 0) || 0);
                           const loadedCartons = Number((load.cartonsCount !== undefined ? load.cartonsCount : (load.quantity / (weight?.unitsPerCarton || 12))).toFixed(3));
                           const loadVal = loadedCartons * cartonPrice;
                           const paidVal = load.advanceAmount || 0;
@@ -2482,7 +2701,7 @@ export default function FactoryTab({
                           const prod = products.find(p => String(p.id).trim() === String(load.productId).trim());
                           const weights = prod ? getProductWeightsFallback(prod) : [];
                           const weight = weights.find(w => String(w.id).trim() === String(load.weightId).trim()) || weights[0];
-                          const cartonPrice = weight?.cartonPriceFromFactory || 0;
+                          const cartonPrice = load.cartonPrice !== undefined ? Number(load.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) * (weight?.unitsPerCarton || 12) : 0) || 0);
                           const loadedCartons = Number((load.cartonsCount !== undefined ? load.cartonsCount : (load.quantity / (weight?.unitsPerCarton || 12))).toFixed(3));
                           const loadVal = loadedCartons * cartonPrice;
                           const paidVal = load.advanceAmount || 0;
@@ -2576,7 +2795,7 @@ export default function FactoryTab({
                           const prod = products.find(p => String(p.id).trim() === String(load.productId).trim());
                            const weights = prod ? getProductWeightsFallback(prod) : [];
                            const weight = weights.find(w => String(w.id).trim() === String(load.weightId).trim()) || weights[0];
-                           const cartonPrice = weight?.cartonPriceFromFactory || 0;
+                           const cartonPrice = load.cartonPrice !== undefined ? Number(load.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) * (weight?.unitsPerCarton || 12) : 0) || 0);
                            const loadedCartons = Number((load.cartonsCount !== undefined ? load.cartonsCount : (load.quantity / (weight?.unitsPerCarton || 12))).toFixed(3));
                            
                            const loadVal = loadedCartons * cartonPrice;
@@ -2747,7 +2966,7 @@ export default function FactoryTab({
                           const prod = products.find(p => String(p.id).trim() === String(load.productId).trim());
                           const weights = prod ? getProductWeightsFallback(prod) : [];
                           const weight = weights.find(w => String(w.id).trim() === String(load.weightId).trim()) || weights[0];
-                          const cartonPrice = weight?.cartonPriceFromFactory || 0;
+                          const cartonPrice = load.cartonPrice !== undefined ? Number(load.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) * (weight?.unitsPerCarton || 12) : 0) || 0);
                           const loadedCartons = Number((load.cartonsCount !== undefined ? load.cartonsCount : (load.quantity / (weight?.unitsPerCarton || 12))).toFixed(3));
                           const loadVal = loadedCartons * cartonPrice;
                           const paidVal = load.advanceAmount || 0;
@@ -2845,7 +3064,7 @@ export default function FactoryTab({
                           const prod = products.find(p => String(p.id).trim() === String(load.productId).trim());
                            const weights = prod ? getProductWeightsFallback(prod) : [];
                            const weight = weights.find(w => String(w.id).trim() === String(load.weightId).trim()) || weights[0];
-                           const cartonPrice = weight?.cartonPriceFromFactory || 0;
+                           const cartonPrice = load.cartonPrice !== undefined ? Number(load.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) * (weight?.unitsPerCarton || 12) : 0) || 0);
                            const loadedCartons = Number((load.cartonsCount !== undefined ? load.cartonsCount : (load.quantity / (weight?.unitsPerCarton || 12))).toFixed(3));
                            
                            const loadVal = loadedCartons * cartonPrice;
@@ -3006,7 +3225,7 @@ export default function FactoryTab({
                     const wSize = weight ? weight.size : ((load as any).weightSize || 'حجم مبدئي');
                     const accountingUnitLabel = prod?.accountingUnit || 'كرتونة';
 
-                    const cartonPrice = weight?.cartonPriceFromFactory || 0;
+                    const cartonPrice = load.cartonPrice !== undefined ? Number(load.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) * (weight?.unitsPerCarton || 12) : 0) || 0);
                     const loadedCartons = Number((load.cartonsCount !== undefined ? load.cartonsCount : (load.quantity / (weight?.unitsPerCarton || 12))).toFixed(3));
                     const totalLoadedValue = loadedCartons * cartonPrice;
 
@@ -3108,7 +3327,7 @@ export default function FactoryTab({
                           const prod = products.find(p => String(p.id).trim() === String(l.productId).trim());
                           const weights = prod ? getProductWeightsFallback(prod) : [];
                           const weight = weights.find(w => String(w.id).trim() === String(l.weightId).trim()) || weights[0];
-                          const cartonPrice = weight?.cartonPriceFromFactory || 0;
+                          const cartonPrice = l.cartonPrice !== undefined ? Number(l.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) * (weight?.unitsPerCarton || 12) : 0) || 0);
                           const loadedCartons = Number((l.cartonsCount !== undefined ? l.cartonsCount : (l.quantity / (weight?.unitsPerCarton || 12))).toFixed(3));
                           return sum + (loadedCartons * cartonPrice);
                         }, 0).toLocaleString('ar-EG', {minimumFractionDigits: 2, maximumFractionDigits: 2})}ج.م</span>
@@ -3125,7 +3344,7 @@ export default function FactoryTab({
                         const prod = products.find(p => String(p.id).trim() === String(l.productId).trim());
                         const weights = prod ? getProductWeightsFallback(prod) : [];
                         const weight = weights.find(w => String(w.id).trim() === String(l.weightId).trim()) || weights[0];
-                        const cartonPrice = weight?.cartonPriceFromFactory || 0;
+                        const cartonPrice = l.cartonPrice !== undefined ? Number(l.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) * (weight?.unitsPerCarton || 12) : 0) || 0);
                         const loadedCartons = Number((l.cartonsCount !== undefined ? l.cartonsCount : (l.quantity / (weight?.unitsPerCarton || 12))).toFixed(3));
                         return sum + (loadedCartons * cartonPrice);
                       }, 0) - filteredLoads.reduce((sum, l) => sum + (l.advanceAmount || 0), 0)).toLocaleString('ar-EG', {minimumFractionDigits: 2, maximumFractionDigits: 2})}ج.م</span>
@@ -3279,7 +3498,7 @@ export default function FactoryTab({
                         const weight = weights.find(w => String(w.id).trim() === String(load.weightId).trim()) || weights[0];
                         const pName = prod ? prod.name : ((load as any).productName || 'مجهول');
                         const wSize = weight ? weight.size : ((load as any).weightSize || '');
-                        const cartonPrice = weight?.cartonPriceFromFactory || 0;
+                        const cartonPrice = load.cartonPrice !== undefined ? Number(load.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) * (weight?.unitsPerCarton || 12) : 0) || 0);
                         const loadedCartons = Number((load.cartonsCount !== undefined ? load.cartonsCount : (load.quantity / (weight?.unitsPerCarton || 12))).toFixed(3));
                         const totalLoadedValue = loadedCartons * cartonPrice;
 
@@ -3339,7 +3558,7 @@ export default function FactoryTab({
                           const prod = products.find(p => String(p.id).trim() === String(l.productId).trim());
                           const weights = prod ? getProductWeightsFallback(prod) : [];
                           const weight = weights.find(w => String(w.id).trim() === String(l.weightId).trim()) || weights[0];
-                          const cartonPrice = weight?.cartonPriceFromFactory || 0;
+                          const cartonPrice = l.cartonPrice !== undefined ? Number(l.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) * (weight?.unitsPerCarton || 12) : 0) || 0);
                           const loadedCartons = Number((l.cartonsCount !== undefined ? l.cartonsCount : (l.quantity / (weight?.unitsPerCarton || 12))).toFixed(3));
                           return sum + (loadedCartons * cartonPrice);
                         }, 0).toFixed(2)}ج.م
@@ -3358,7 +3577,7 @@ export default function FactoryTab({
                             const prod = products.find(p => String(p.id).trim() === String(l.productId).trim());
                             const weights = prod ? getProductWeightsFallback(prod) : [];
                             const weight = weights.find(w => String(w.id).trim() === String(l.weightId).trim()) || weights[0];
-                            const cartonPrice = weight?.cartonPriceFromFactory || 0;
+                            const cartonPrice = l.cartonPrice !== undefined ? Number(l.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) * (weight?.unitsPerCarton || 12) : 0) || 0);
                             const loadedCartons = Number((l.cartonsCount !== undefined ? l.cartonsCount : (l.quantity / (weight?.unitsPerCarton || 12))).toFixed(3));
                             return sum + (loadedCartons * cartonPrice);
                           }, 0) - filteredLoads.reduce((sum, l) => sum + (l.advanceAmount || 0), 0)).toFixed(2)}ج.م
@@ -3903,13 +4122,13 @@ export default function FactoryTab({
             {/* Top Grid of Balance sheet */}
             <div className="grid grid-cols-3 gap-2 font-sans">
               <div className="bg-[#1A365D] text-white p-3 rounded-2xl shadow-sm flex flex-col justify-between">
-                <span className="text-[10px] text-indigo-205 font-bold">الحساب (المدين)</span>
+                <span className="text-[10px] text-indigo-205 font-bold">حساب المصنع</span>
                 <span className="text-sm font-black mt-2 font-mono">
                   {formatNum(factoryBalanceDetails.totalWithdrawnValue)} <span className="text-[10px]">ج.م</span>
                 </span>
               </div>
               <div className="bg-[#10B981] text-white p-3 rounded-2xl shadow-sm flex flex-col justify-between">
-                <span className="text-[10px] text-emerald-100 font-bold">المسدد للمورد</span>
+                <span className="text-[10px] text-emerald-100 font-bold">المسدد للمصنع</span>
                 <span className="text-sm font-black mt-2 font-mono">
                   {formatNum(factoryBalanceDetails.totalAdvancePayments)} <span className="text-[10px]">ج.م</span>
                 </span>
@@ -4104,12 +4323,37 @@ export default function FactoryTab({
                   <Truck className="h-4.5 w-4.5 text-[#2B6CB0]" />
                   حركة البضاعة المسحوبة من المصنع
                 </h4>
+                
+                <div className="flex flex-wrap items-center gap-2 mb-2 bg-slate-50 p-2 rounded-xl border border-slate-150 text-right">
+                  <span className="text-[10px] font-bold text-slate-500">الفترة:</span>
+                  <select value={accountLoadsFilter} onChange={e => setAccountLoadsFilter(e.target.value as any)} className="bg-white border border-slate-200 rounded p-1 text-[11px] font-bold outline-none focus:ring-1 focus:ring-indigo-500">
+                    <option value="all">الكل</option>
+                    <option value="daily">اليوم</option>
+                    <option value="weekly">الأسبوع</option>
+                    <option value="monthly">الشهر</option>
+                    <option value="custom">مخصص</option>
+                  </select>
+                  {accountLoadsFilter === 'custom' && (
+                    <div className="flex gap-1.5">
+                      <input type="date" value={accountLoadsStartDate} onChange={e => setAccountLoadsStartDate(e.target.value)} className="bg-white border border-slate-200 rounded p-1 text-[10px]" />
+                      <input type="date" value={accountLoadsEndDate} onChange={e => setAccountLoadsEndDate(e.target.value)} className="bg-white border border-slate-200 rounded p-1 text-[10px]" />
+                    </div>
+                  )}
+                  <div className="flex gap-1.5 mr-auto">
+                    <button type="button" onClick={() => exportAccountLoads('png')} className="bg-indigo-50 text-indigo-700 p-1.5 rounded-lg border border-indigo-100 hover:bg-indigo-100 transition-colors" title="تنزيل صورة">
+                      <Image className="w-3.5 h-3.5"/>
+                    </button>
+                    <button type="button" onClick={() => exportAccountLoads('pdf')} className="bg-rose-50 text-rose-700 p-1.5 rounded-lg border border-rose-100 hover:bg-rose-100 transition-colors" title="تنزيل PDF">
+                      <FileText className="w-3.5 h-3.5"/>
+                    </button>
+                  </div>
+                </div>
 
                 <div className="max-h-80 overflow-y-auto custom-scroll flex flex-col gap-2.5">
-                  {factoryInvoiceSummary.itemsList.length === 0 ? (
+                  {accountLoadsSummary.length === 0 ? (
                     <p className="text-center text-gray-400 py-6 text-xs font-medium">لا توجد مسحوبات مسجلة.</p>
                   ) : (
-                    factoryInvoiceSummary.itemsList.map((item, idx) => (
+                    accountLoadsSummary.map((item, idx) => (
                       <div key={'with_' + item.id + '_' + idx} className="bg-[#F7FAFC] border border-slate-100 rounded-xl p-3.5 flex flex-col gap-1 text-xs">
                         <div className="flex justify-between items-center font-bold text-[#1A365D]">
                           <span>{item.productName} ({item.size})</span>
@@ -4152,6 +4396,7 @@ export default function FactoryTab({
                       let pName = 'منتج غير محدد';
                       let sizeStr = 'عبوة مجهولة';
                       let accountingUnitLabel = 'كرتونة';
+                      let unitsPerC = 12;
 
                       products.forEach(p => {
                         const weights = getProductWeightsFallback(p);
@@ -4160,17 +4405,22 @@ export default function FactoryTab({
                           pName = p.name;
                           sizeStr = weight.size;
                           accountingUnitLabel = p.accountingUnit || 'كرتونة';
+                          unitsPerC = weight.unitsPerCarton || 12;
                         }
                       });
+                      
+                      const fullC = Math.floor(info.units / unitsPerC);
+                      const loose = info.units % unitsPerC;
+                      const qtyText = `${fullC > 0 ? fullC + ' ' + accountingUnitLabel : ''} ${loose > 0 ? (fullC > 0 ? 'و ' : '') + loose + ' عبوة' : ''}`.trim() || '0 عبوة';
 
                       return (
                         <div key={'sold_' + weightId} className="bg-emerald-50/40 border border-emerald-100 rounded-xl p-3.5 flex flex-col gap-1 text-xs">
                           <div className="flex justify-between items-center font-bold">
                             <span className="text-emerald-950">{pName} ({sizeStr})</span>
-                            <span className="text-emerald-800">{info.cartons} {accountingUnitLabel}</span>
+                            <span className="text-emerald-800">{qtyText}</span>
                           </div>
                           <div className="flex justify-between items-center text-[10px] text-[#2B6CB0] mt-0.5 font-medium">
-                            <span>إجمالي المبيعات الفردية: {info.units} قطعة</span>
+                            <span>إجمالي المبيعات الفردية: {info.units} عبوة</span>
                             <span className="font-mono text-[#DD6B20] font-extrabold">قيمة البيع: {formatNum(info.value)}ج.م</span>
                           </div>
                         </div>

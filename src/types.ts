@@ -39,6 +39,10 @@ export interface FactoryLoad {
   delegatePhone?: string; // رقم هاتف المندوب المسجل للعملية
   lat?: number; // خط العرض
   lng?: number; // خط الطول
+  cartonPrice?: number; // السعر المضاف أثناء التحميل
+  unitPrice?: number;   // سعر العبوة أثناء التحميل
+  productName?: string; // لحفظ اسم الصنف وقت التحميل ومنع ظهوره كمجهول مستقبلاً
+  weightSize?: string;  // لحفظ حجم العبوة وقت التحميل
 }
 
 export interface Customer {

@@ -26,18 +26,21 @@ interface ReportsTabProps {
 
 const formatCartonsAndPieces = (rawQty: number, unitsPerCarton: number): string => {
   const raw = Number(rawQty) || 0;
+  const isNeg = raw < 0;
+  const absRaw = Math.abs(raw);
   const units = Number(unitsPerCarton) || 12;
-  const cartons = Math.floor(raw / units);
-  const pieces = raw % units;
+  const cartons = Math.floor(absRaw / units);
+  const pieces = absRaw % units;
   
   const parts: string[] = [];
   if (cartons > 0) {
     parts.push(`${cartons} كرتونة`);
   }
   if (pieces > 0) {
-    parts.push(`${pieces} قطعة`);
+    parts.push(`${pieces} عبوة`);
   }
-  return parts.length > 0 ? parts.join(' و ') : '0 قطعة';
+  const res = parts.length > 0 ? parts.join(' و ') : '0 عبوة';
+  return isNeg ? `-(${res})` : res;
 };
 
 class ReportsErrorBoundary extends React.Component<{children: React.ReactNode}, { hasError: boolean; errorInfo: string }> {
@@ -115,7 +118,7 @@ function ReportsTabComponent({
   }, [activeSubTab]);
 
   // Filter states
-  const [periodFilter, setPeriodFilter] = useState<'today' | 'week'>('today');
+  const [periodFilter, setPeriodFilter] = useState<'all' | 'today' | 'week' | 'month'>('all');
   const [inventoryMatchFilter, setInventoryMatchFilter] = useState<'daily' | 'weekly' | 'monthly'>('daily');
   const [delegateFilter, setDelegateFilter] = useState<string>('all');
 
@@ -151,12 +154,29 @@ function ReportsTabComponent({
     paymentMethod: string;
   }>({ isOpen: false, invoice: null, type: 'full', amount: '', paymentMethod: 'نقدي (كاش)' });
 
+  const delegate = isManager && delegateFilter !== 'all' ? (usersList || []).find(u => u.phone === delegateFilter) : null;
+  const cleanDelegateName = delegate ? delegate.name.replace(/\s*\(.*?\)/g, '').trim() : '';
+
+  const filterItemByDelegate = (item: any) => {
+    if (!isManager || !delegate) return true;
+    return item.delegatePhone === delegate.phone || (item.delegateName && item.delegateName.includes(cleanDelegateName));
+  };
+
+  const delFilteredInvoices = React.useMemo(() => invoices.filter(filterItemByDelegate), [invoices, delegate, isManager]);
+  const delFilteredExpenses = React.useMemo(() => expenses.filter(filterItemByDelegate), [expenses, delegate, isManager]);
+  const delFilteredTrips = React.useMemo(() => trips.filter(filterItemByDelegate), [trips, delegate, isManager]);
+  const delFilteredFactoryLoads = React.useMemo(() => factoryLoads.filter(filterItemByDelegate), [factoryLoads, delegate, isManager]);
+
   const currentFilteredData = React.useMemo(() => {
     const isWithinPeriod = (dateString: string) => {
       if (!dateString || typeof dateString !== 'string') return false;
       const d = new Date(dateString);
       if (isNaN(d.getTime())) return false;
       const now = new Date();
+      
+      if (periodFilter === 'all') {
+        return true;
+      }
       if (periodFilter === 'today') {
         return d.toDateString() === now.toDateString();
       }
@@ -164,15 +184,10 @@ function ReportsTabComponent({
         const msInWeek = 7 * 24 * 60 * 60 * 1000;
         return now.getTime() - d.getTime() < msInWeek;
       }
+      if (periodFilter === 'month') {
+        return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+      }
       return true;
-    };
-
-    const delegate = isManager && delegateFilter !== 'all' ? usersList.find(u => u.phone === delegateFilter) : null;
-    const cleanDelegateName = delegate ? delegate.name.replace(/ \(.*?\)/, '').trim() : '';
-
-    const filterItem = (item: any) => {
-      if (!isManager || !delegate) return true; // Don't filter if not manager or "All" is selected
-      return item.delegatePhone === delegate.phone || (item.delegateName && item.delegateName.includes(cleanDelegateName));
     };
 
     const { carriedOverDebt, extraPayments } = (() => {
@@ -186,15 +201,15 @@ function ReportsTabComponent({
     })();
 
     return {
-      invoices: (invoices || []).filter(i => i && isWithinPeriod(i.date) && filterItem(i)),
-      expenses: (expenses || []).filter(e => e && isWithinPeriod(e.date) && filterItem(e)),
-      trips: (trips || []).filter(t => t && isWithinPeriod(t.date || new Date().toISOString()) && filterItem(t)),
-      factoryLoads: (factoryLoads || []).filter(fl => fl && isWithinPeriod(fl.date) && filterItem(fl)),
+      invoices: delFilteredInvoices.filter(i => isWithinPeriod(i.date)),
+      expenses: delFilteredExpenses.filter(e => isWithinPeriod(e.date)),
+      trips: delFilteredTrips.filter(t => isWithinPeriod(t.date || new Date().toISOString())),
+      factoryLoads: delFilteredFactoryLoads.filter(fl => isWithinPeriod(fl.date)),
       extraPayments: (extraPayments || []).filter((ep: any) => ep && isWithinPeriod(ep.date)),
       allExtraPayments: extraPayments || [], // for cumulative calculation
       carriedOverDebt
     };
-  }, [invoices, expenses, trips, factoryLoads, periodFilter, delegateFilter, isManager, usersList]);
+  }, [delFilteredInvoices, delFilteredExpenses, delFilteredTrips, delFilteredFactoryLoads, periodFilter]);
 
   // 1. Calculations based on period filter
   const salesStats = React.useMemo(() => {
@@ -218,8 +233,6 @@ function ReportsTabComponent({
     const extraRevenues = currentFilteredData.expenses.filter(e => e.type === 'revenue').reduce((sum, exp) => sum + (exp.amount || 0), 0);
     const totalTripsCollectedProfit = currentFilteredData.trips.filter(t => t.collected).reduce((sum, t) => sum + (t.price || 0), 0);
     
-    // final netProfit = product profits + extraRevenues - totalSpent + trips
-    const netProfit = totalProfit + extraRevenues - totalSpent + totalTripsCollectedProfit;
 
     // Factory stats calculations
     const periodAdvances = currentFilteredData.factoryLoads.reduce((sum, fl) => sum + (fl.advanceAmount ?? 0), 0);
@@ -228,26 +241,29 @@ function ReportsTabComponent({
 
     // Cumulative overall remaining debt due to factory
     let rawAllLoadedValue = 0;
-    (factoryLoads || []).forEach(load => {
-      const prod = products.find(p => p.id === load.productId);
+    delFilteredFactoryLoads.forEach(load => {
+      const prod = products.find(p => String(p.id).trim() === String(load.productId).trim());
       const weights = prod ? getProductWeightsFallback(prod) : [];
-      const weight = weights.find(w => w.id === load.weightId);
+      const weight = weights.find(w => String(w.id).trim() === String(load.weightId).trim()) || weights[0];
       if (weight) {
         const unitsPerCarton = weight.unitsPerCarton || 12;
         const qty = Number(load.quantity) || 0;
         const cartons = load.cartonsCount !== undefined ? load.cartonsCount : Math.floor(qty / unitsPerCarton);
         const loose = load.looseUnitsCount !== undefined ? load.looseUnitsCount : (qty % unitsPerCarton);
-        const cartonPrice = weight.cartonPriceFromFactory || 0;
-        const unitPrice = weight.factoryPricePerUnit || 0;
+        const cartonPrice = load.cartonPrice !== undefined ? Number(load.cartonPrice) : (Number(weight.cartonPriceFromFactory) || (prod ? Number(prod.price) * unitsPerCarton : 0) || 0);
+        const unitPrice = load.unitPrice !== undefined ? Number(load.unitPrice) : (Number(weight.factoryPricePerUnit) || (prod ? Number(prod.price) : 0) || 0);
         rawAllLoadedValue += (cartons * cartonPrice) + (loose * unitPrice);
       }
     });
 
     const totalWithdrawnValue = rawAllLoadedValue + currentFilteredData.carriedOverDebt;
-    const currentAdvancesTotal = (factoryLoads || []).reduce((sum, fl) => sum + (fl.advanceAmount ?? 0), 0);
+    const currentAdvancesTotal = delFilteredFactoryLoads.reduce((sum, fl) => sum + (fl.advanceAmount ?? 0), 0);
     const manualPaymentsSumTotal = currentFilteredData.allExtraPayments.reduce((sum, p) => sum + ((p.amount || 0) - (p.appliedToCarriedDebt || 0)), 0);
     const totalOverallPaidToFactory = currentAdvancesTotal + manualPaymentsSumTotal;
     const remainingDebtToFactory = Math.max(0, totalWithdrawnValue - totalOverallPaidToFactory);
+
+    // final netProfit based on Cash Flow (الصافي = كل ما تم تحصيله - كل ما تم سداده للمصنع والمصروفات)
+    const netProfit = totalCollected + extraRevenues + totalTripsCollectedProfit - totalPaidToFactoryInPeriod - totalSpent;
 
     return {
       totalSales: trueTotalSales,
@@ -266,7 +282,7 @@ function ReportsTabComponent({
 
   // Calculate unpaid debt / debtor customers list 
   const debtorCustomers = React.useMemo(() => {
-    const unpaidInvoices = (invoices || []).filter(inv => {
+    const unpaidInvoices = delFilteredInvoices.filter(inv => {
       if (!inv) return false;
       const paid = inv.paidAmount !== undefined ? inv.paidAmount : (inv.totalAfterDiscount || 0);
       return ((inv.totalAfterDiscount || 0) - paid) > 0.05; // has outstanding debt
@@ -329,9 +345,15 @@ function ReportsTabComponent({
   };
 
   const formatCartonsAr = (rawUnits: number, unitsPerCarton: number): string => {
-    const c = rawUnits / unitsPerCarton;
-    const formattedVal = Number(c.toFixed(2)).toLocaleString('ar-EG');
-    return `${formattedVal} كرتونة`;
+    const isNeg = rawUnits < 0;
+    const absRaw = Math.abs(rawUnits);
+    const c = Math.floor(absRaw / unitsPerCarton);
+    const p = absRaw % unitsPerCarton;
+    let txt = '';
+    if (c > 0) txt += `${c} كرتونة`;
+    if (p > 0) txt += (txt ? ' و ' : '') + `${p} عبوة`;
+    if (!txt) txt = '0 عبوة';
+    return isNeg ? `-(${txt})` : txt;
   };
 
   const delegateDebtBreakdown = React.useMemo(() => {
@@ -358,7 +380,7 @@ function ReportsTabComponent({
     document.body.appendChild(iframe);
 
     // Filter displays
-    let periodLabel = periodFilter === 'today' ? 'اليوم (يومي)' : 'آخر ٧ أيام (أسبوعي)';
+    let periodLabel = periodFilter === 'all' ? 'الكل (جميع الفترات)' : periodFilter === 'month' ? 'هذا الشهر (شهري)' : periodFilter === 'today' ? 'اليوم (يومي)' : 'آخر ٧ أيام (أسبوعي)';
 
     // compute cost of sold goods
     const soldGoodsFactoryCost = currentFilteredData.invoices.reduce((sum, inv) => {
@@ -569,7 +591,7 @@ function ReportsTabComponent({
   const monthlyBreakdown = React.useMemo(() => {
     const months: Record<string, { sales: number; expenses: number; revs: number; count: number }> = {};
 
-    (invoices || []).forEach(inv => {
+    delFilteredInvoices.forEach(inv => {
       if (!inv || !inv.date) return;
       const parts = String(inv.date).split('-');
       if (parts.length < 2) return;
@@ -581,7 +603,7 @@ function ReportsTabComponent({
       months[monthYear].count += 1;
     });
 
-    (expenses || []).forEach(exp => {
+    delFilteredExpenses.forEach(exp => {
       if (!exp || !exp.date) return;
       const parts = String(exp.date).split('-');
       if (parts.length < 2) return;
@@ -617,7 +639,7 @@ function ReportsTabComponent({
   }, [invoices, expenses]);
 
   // Filter invoices for registry lookup
-  const filteredInvoices = (invoices || []).filter(inv => {
+  const filteredInvoices = delFilteredInvoices.filter(inv => {
     if (!inv) return false;
     const cust = (customers || []).find(c => c.id === inv.customerId);
     const q = searchInvoice.toLowerCase();
@@ -678,8 +700,8 @@ function ReportsTabComponent({
     document.body.appendChild(iframe);
 
     // 2. Prepare content
-    const mInvoices = invoices.filter(inv => inv && typeof inv.date === 'string' && inv.date.startsWith(monthStr));
-    const mExpenses = expenses.filter(exp => exp && typeof exp.date === 'string' && exp.date.startsWith(monthStr));
+    const mInvoices = delFilteredInvoices.filter(inv => inv && typeof inv.date === 'string' && inv.date.startsWith(monthStr));
+    const mExpenses = delFilteredExpenses.filter(exp => exp && typeof exp.date === 'string' && exp.date.startsWith(monthStr));
     
     const mTotalBeforeDisc = mInvoices.reduce((sum, i) => sum + (i.totalBeforeDiscount || 0), 0);
     const mDisc = mInvoices.reduce((sum, i) => sum + ((i.totalBeforeDiscount || 0) - (i.totalAfterDiscount || 0)), 0);
@@ -784,7 +806,7 @@ function ReportsTabComponent({
     try {
       const isInactive = customer.invoicesCount === 0 || !customer.isActive;
       const statusText = isInactive ? "خامل / توقف عن الشراء" : "نشط / يقوم بمسحوبات";
-      const userMessage = `قم بصياغة رسالة واتساب لعميل اسمه: ${customer.name} (حالة العميل في الفترة المحددة: ${statusText}، إجمالي مسحوباته في الفترة: ${customer.totalPurchases}ج.م ومحله في منطقة: ${customer.area}).
+      const userMessage = `قم بصياغة رسالة واتساب لعميل اسمه: ${customer.name} (حالة العميل في الفترة المحددة: ${statusText}، إجمالي مسحوباته في الفترة: ${customer.totalPurchases}ج.م ومحله في: ${customer.governorate || ''} - ${customer.area}).
 التعليمات والخطوط العريضة الخاصة بمدير المبيعات:
 "${settings.aiRetentionGuidelines || 'قدم رسالة ترحيبية تشجعه على استمرار التعامل معنا، مع توضيح أننا نهتم بوجوده معنا كشريك نجاح.'}"
 أريد فقط نص الرسالة بدون أي مقدمات أخرى لتكون جاهزة للإرسال.`;
@@ -814,7 +836,7 @@ function ReportsTabComponent({
       console.warn("Using local fallback WA message builder in ReportsTab:", err.message);
       
       const guidelines = settings.aiRetentionGuidelines || 'تقديم رسالة ترحيبية تشجعه على استمرار التعامل معنا، مع توضيح أننا نهتم بوجوده معنا';
-      const fallbackMsg = `السلام عليكم ورحمة الله وبركاته يا فندم 🌹\nمعكم مندوب مبيعات مصنع زيوت وسمن "سوفانا" الفاخرة.\n\nنتشرف بالتعاون الدائم والمثمر معكم في [ ${customer.name} ] بمنطقتكم الكريمة [ ${customer.area} ]. نود في الاخوه EAGS لخدمات التوزيع الإعراب عن عظيم تقديرنا لثقتكم الغالية بمنتجاتنا وزيت وسمن سوفانا ذو الجودة الفائقة.\n\n(✨ سياستنا المعتمدة: ${guidelines})\n\nهل نتشرف بتسليم طلبية جديدة لسيادتكم بأسعار بورصة اليوم الممتازة؟ نحن في خدمتكم دائماً وبالموعد!`;
+      const fallbackMsg = `السلام عليكم ورحمة الله وبركاته يا فندم 🌹\nمعكم مندوب مبيعات مصنع زيوت وسمن "سوفانا" الفاخرة.\n\nنتشرف بالتعاون الدائم والمثمر معكم في [ ${customer.name} ] بـ [ ${customer.governorate || ''} - ${customer.area} ]. نود في الاخوه EAGS لخدمات التوزيع الإعراب عن عظيم تقديرنا لثقتكم الغالية بمنتجاتنا وزيت وسمن سوفانا ذو الجودة الفائقة.\n\n(✨ سياستنا المعتمدة: ${guidelines})\n\nهل نتشرف بتسليم طلبية جديدة لسيادتكم بأسعار بورصة اليوم الممتازة؟ نحن في خدمتكم دائماً وبالموعد!`;
       
       const messageText = encodeURIComponent(fallbackMsg);
       let phone = customer.phone;
@@ -835,8 +857,8 @@ function ReportsTabComponent({
     const rowHeight = 35;
     
     // get this month's invoices and expenses
-    const mInvoices = invoices.filter(inv => inv && typeof inv.date === 'string' && inv.date.startsWith(monthStr));
-    const mExpenses = expenses.filter(exp => exp && typeof exp.date === 'string' && exp.date.startsWith(monthStr));
+    const mInvoices = delFilteredInvoices.filter(inv => inv && typeof inv.date === 'string' && inv.date.startsWith(monthStr));
+    const mExpenses = delFilteredExpenses.filter(exp => exp && typeof exp.date === 'string' && exp.date.startsWith(monthStr));
     
     const totalLines = mInvoices.length + mExpenses.length;
     const baseHeight = 350;
@@ -1002,7 +1024,7 @@ function ReportsTabComponent({
     }
     
     const invoicesByCustomer = new Map<string, Invoice[]>();
-    (invoices || []).forEach(inv => {
+    delFilteredInvoices.forEach(inv => {
       if (!inv || !inv.date) return;
       const invDate = new Date(inv.date).getTime();
       if (isNaN(invDate)) return;
@@ -1165,6 +1187,12 @@ function ReportsTabComponent({
               <span className="text-xs font-black text-[#2B6CB0] ml-1 shrink-0">تحديد فترة:</span>
               <div className="flex flex-wrap items-center gap-1.5 flex-1 select-none">
                 <button 
+                  onClick={() => setPeriodFilter('all')}
+                  className={`py-1 px-3.5 rounded-lg text-[11px] font-black transition-colors cursor-pointer shrink-0 ${periodFilter === 'all' ? 'bg-indigo-100 text-[#1A365D] border border-indigo-200 shadow-sm' : 'bg-[#F7FAFC] text-[#2B6CB0] border border-slate-200 hover:bg-[#F7FAFC]'}`}
+                >
+                  الكل
+                </button>
+                <button 
                   onClick={() => setPeriodFilter('today')}
                   className={`py-1 px-3.5 rounded-lg text-[11px] font-black transition-colors cursor-pointer shrink-0 ${periodFilter === 'today' ? 'bg-indigo-100 text-[#1A365D] border border-indigo-200 shadow-sm' : 'bg-[#F7FAFC] text-[#2B6CB0] border border-slate-200 hover:bg-[#F7FAFC]'}`}
                 >
@@ -1175,6 +1203,12 @@ function ReportsTabComponent({
                   className={`py-1 px-3.5 rounded-lg text-[11px] font-black transition-colors cursor-pointer shrink-0 ${periodFilter === 'week' ? 'bg-indigo-100 text-[#1A365D] border border-indigo-200 shadow-sm' : 'bg-[#F7FAFC] text-[#2B6CB0] border border-slate-200 hover:bg-[#F7FAFC]'}`}
                 >
                   أسبوعي
+                </button>
+                <button 
+                  onClick={() => setPeriodFilter('month')}
+                  className={`py-1 px-3.5 rounded-lg text-[11px] font-black transition-colors cursor-pointer shrink-0 ${periodFilter === 'month' ? 'bg-indigo-100 text-[#1A365D] border border-indigo-200 shadow-sm' : 'bg-[#F7FAFC] text-[#2B6CB0] border border-slate-200 hover:bg-[#F7FAFC]'}`}
+                >
+                  شهري
                 </button>
               </div>
             </div>
@@ -1405,23 +1439,20 @@ function ReportsTabComponent({
                   
                   <div className="flex flex-col gap-2 text-xs font-bold">
                     <div className="flex justify-between border-b border-dashed border-emerald-200 pb-1.5">
-                      <span className="text-slate-600">إجمالي قيمة فواتير المبيعات (العملاء)</span>
-                      <span className="text-emerald-800" dir="rtl">{(salesStats.totalSales).toLocaleString('ar-EG')} ج.م</span>
+                      <span className="text-slate-600">المحصل الفعلي من مبيعات العملاء (كاش)</span>
+                      <span className="text-emerald-800" dir="rtl">{(salesStats.totalCollected).toLocaleString('ar-EG')} ج.م</span>
                     </div>
                     <div className="flex justify-between border-b border-dashed border-emerald-200 pb-1.5">
-                      <span className="text-slate-600">يخصم: تكلفة البضاعة المباعة للمصنع</span>
-                      <span className="text-rose-700" dir="rtl">- {(currentFilteredData.invoices.reduce((sum, inv) => {
-                        const items = Array.isArray(inv.items) ? inv.items : [];
-                        return sum + items.reduce((isum, it) => isum + ((it.factoryPrice || (it.originalPrice || 0) * 0.9) * (it.quantity || 0)), 0);
-                      }, 0)).toLocaleString('ar-EG')} ج.م</span>
+                      <span className="text-slate-600">يضاف: إيرادات إضافية وأرباح مشاوير محصلة</span>
+                      <span className="text-emerald-700" dir="rtl">+ {(salesStats.extraRevenues + salesStats.totalTripsCollectedProfit).toLocaleString('ar-EG')} ج.م</span>
+                    </div>
+                    <div className="flex justify-between border-b border-dashed border-emerald-200 pb-1.5">
+                      <span className="text-slate-600">يخصم: المبالغ المسددة للمصنع في هذه الفترة</span>
+                      <span className="text-rose-700" dir="rtl">- {(salesStats.totalPaidToFactoryInPeriod).toLocaleString('ar-EG')} ج.م</span>
                     </div>
                     <div className="flex justify-between border-b border-dashed border-emerald-200 pb-1.5">
                       <span className="text-slate-600">يخصم: إجمالي المصروفات الإدارية والتشغيلية المعتمدة</span>
                       <span className="text-rose-700" dir="rtl">- {(salesStats.totalSpent).toLocaleString('ar-EG')} ج.م</span>
-                    </div>
-                    <div className="flex justify-between border-b border-dashed border-emerald-200 pb-1.5">
-                      <span className="text-slate-600">يضاف: أرباح المشاوير اللوجستية التي تم تحصيلها</span>
-                      <span className="text-emerald-700" dir="rtl">+ {(salesStats.totalTripsCollectedProfit).toLocaleString('ar-EG')} ج.م</span>
                     </div>
                     <div className="flex justify-between text-xs sm:text-sm font-black border-t border-emerald-300 pt-2 text-[#1A365D]">
                       <span>الصافي الفعلي النهائي للربح</span>
@@ -1429,7 +1460,7 @@ function ReportsTabComponent({
                     </div>
                   </div>
                   <p className="text-[10px] text-emerald-600 leading-relaxed font-semibold">
-                    * يتم احتساب "الصافي" بدقة متناهية بناءً على الفرق الحقيقي بين تسعيرة التوزيع للعملاء والتكلفة الثابتة للمصنع (سعر المصنع للكرتونة) مضافاً إليها إيرادات السيارة ومطروحاً منها كافة المصاريف.
+                    * يتم احتساب "الصافي" بناءً على التدفق النقدي الفعلي (إجمالي الكاش المحصل من المبيعات والمشاوير والإيرادات مخصوماً منه كل ما تم سداده للمصنع والمصروفات).
                   </p>
                 </div>
               )}
@@ -1800,7 +1831,7 @@ function ReportsTabComponent({
                             {c.name}
                           </span>
                           <span className="text-[10px] text-[#2B6CB0] font-medium">
-                            {c.area} • مسحوبات: <strong className="text-[#1A365D]">{formatNum(c.totalPurchases)}ج.م</strong>
+                            {c.governorate || 'محافظة غير محددة'} - {c.area} • مسحوبات: <strong className="text-[#1A365D]">{formatNum(c.totalPurchases)}ج.م</strong>
                           </span>
                         </div>
                         <div className="bg-[#FFFFFF] border border-slate-200 min-w-8 text-center py-1 px-2 rounded-lg text-[10px] shadow-sm font-black text-[#2B6CB0]">
@@ -1943,10 +1974,10 @@ function ReportsTabComponent({
 
           // 1. Gather all activity dates
           const allDates = new Set<string>();
-          factoryLoads.forEach(l => {
+          delFilteredFactoryLoads.forEach(l => {
             if (l && l.date) allDates.add(getNormalizedDateKey(l.date));
           });
-          invoices.forEach(inv => {
+          delFilteredInvoices.forEach(inv => {
             if (inv && inv.date) allDates.add(getNormalizedDateKey(inv.date));
           });
 
@@ -1963,7 +1994,7 @@ function ReportsTabComponent({
             }
           });
 
-          factoryLoads.forEach(l => {
+          delFilteredFactoryLoads.forEach(l => {
             if (!l.date) return;
             const gKey = getGroupKey(l.date);
             if (groupsMap[gKey]) {
@@ -1971,7 +2002,7 @@ function ReportsTabComponent({
             }
           });
 
-          invoices.forEach(inv => {
+          delFilteredInvoices.forEach(inv => {
             if (!inv.date) return;
             const gKey = getGroupKey(inv.date);
             if (groupsMap[gKey]) {
@@ -2103,15 +2134,15 @@ function ReportsTabComponent({
                                   {/* Item metadata with custom color */}
                                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-1.5">
                                     <div className="flex items-center gap-1.5">
-                                      <span className="font-extrabold text-emerald-600 text-xs text-emerald-800">
+                                      <span className="font-extrabold text-emerald-800 text-xs">
                                         {product.name}
                                       </span>
-                                      <span className="bg-emerald-50 text-emerald-800 px-2.5 py-0.5 rounded-md text-[9px] font-black border border-emerald-100">
+                                      <span className="bg-emerald-50 text-emerald-800 px-2.5 py-0.5 rounded-md text-[9px] font-black border border-emerald-100 whitespace-nowrap">
                                         {weight.size}
                                       </span>
                                     </div>
                                     
-                                    <div className={`px-2.5 py-1 rounded-lg text-[10px] font-black border flex items-center justify-center gap-1 ${
+                                    <div className={`px-2.5 py-1 rounded-lg text-[10px] font-black border flex items-center justify-center gap-1 flex-wrap text-center ${
                                       remainingUnits < 0 
                                         ? 'bg-rose-50 text-rose-700 border-rose-200' 
                                         : remainingUnits === 0

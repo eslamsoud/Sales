@@ -249,6 +249,62 @@ export default function App() {
   const [syncLogs, setSyncLogs] = useState<SyncLog[]>([]);
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
 
+  const [showSimulatedInventory, setShowSimulatedInventory] = useState(false);
+  const simulatedInventory = React.useMemo(() => {
+    if (!simulatedDelegate) return [];
+    
+    const delPhone = (simulatedDelegate.phone || '').trim();
+    const cleanName = (simulatedDelegate.name || '').replace(/\s*\(.*?\)/g, '').trim();
+    
+    const delLoads = factoryLoads.filter(l => {
+      const lPhone = (l.delegatePhone || '').trim();
+      const lName = (l.delegateName || '').replace(/\s*\(.*?\)/g, '').trim();
+      return (lPhone && lPhone === delPhone) || (lName && lName === cleanName);
+    });
+    const delInvoices = invoices.filter(i => {
+      const iPhone = (i.delegatePhone || '').trim();
+      const iName = (i.delegateName || '').replace(/\s*\(.*?\)/g, '').trim();
+      return (iPhone && iPhone === delPhone) || (iName && iName === cleanName);
+    });
+    
+    const stocks: any[] = [];
+    
+    products.forEach(p => {
+      const weights = getProductWeightsFallback(p);
+      weights.forEach(w => {
+        const loaded = delLoads
+          .filter(l => {
+            const targetWeightId = l.weightId || w.id;
+            return String(l.productId).trim() === String(p.id).trim() && String(targetWeightId).trim() === String(w.id).trim();
+          })
+          .reduce((sum, l) => sum + (l.quantity || 0), 0);
+
+        let sold = 0;
+        delInvoices.forEach(inv => {
+          (inv.items || []).forEach(item => {
+            const targetWeightId = item.weightId || w.id;
+            if (String(item.productId).trim() === String(p.id).trim() && String(targetWeightId).trim() === String(w.id).trim()) {
+              sold += (item.quantity || 0);
+            }
+          });
+        });
+
+        const remaining = loaded - sold;
+        if (loaded > 0 || sold > 0) {
+          stocks.push({
+            product: p,
+            weight: w,
+            loaded,
+            sold,
+            remaining
+          });
+        }
+      });
+    });
+    
+    return stocks;
+  }, [simulatedDelegate, factoryLoads, invoices, products]);
+
   // مرجع لتخزين أحدث حالة للبيانات لمنع مشكلة (Stale Closure) أثناء المزامنة التلقائية
   const latestDataRef = useRef({ products, factoryLoads, customers, invoices, expenses, trips, usersList });
   useEffect(() => {
@@ -347,7 +403,10 @@ export default function App() {
         const rawInvoices = migrate(inv, 'invoices_sys', DEFAULT_INVOICES);
         const thirtyDaysAgo = new Date();
         thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-        const cleanedInvoices = rawInvoices.filter((i: any) => {
+        const cleanedInvoices = rawInvoices.map((i: any) => ({
+          ...i,
+          isDelivered: i.isDelivered === undefined ? true : i.isDelivered
+        })).filter((i: any) => {
           const invDate = new Date(i.date);
           const isPaid = (i.paidAmount ?? i.totalAfterDiscount) >= i.totalAfterDiscount;
           return !(invDate < thirtyDaysAgo && isPaid);
@@ -360,14 +419,16 @@ export default function App() {
         const cleanedExpenses = rawExpenses.map((e: any) => {
           const isShifted = e.date === 'مصروف' || e.date === 'إيراد' || e.date === 'expense' || e.date === 'revenue' || !e.date || !String(e.date).includes('-');
           if (isShifted) {
+            // 🚨 منع استخدام Math.random() هنا نهائياً لمنع التكرار اللانهائي في السحابة
+            const stableId = (e.id && String(e.id).includes('-') && !String(e.id).includes('fix')) ? e.id : `exp-fix-${e.amount}-${e.category}-${e.delegatePhone || 'sys'}`;
             return {
-              id: `exp-fix-${Math.floor(Math.random() * 10000)}`,
+              id: stableId,
               date: (e.id && String(e.id).includes('-')) ? e.id : new Date().toISOString(), // استعادة التاريخ الحقيقي
               category: (e.category && e.category !== 'expense' && e.category !== 'revenue') ? e.category : (e.date !== 'مصروف' && e.date !== 'إيراد' && e.date ? e.date : 'أخرى'),
               type: (e.type === 'revenue' || e.date === 'إيراد') ? 'revenue' : 'expense',
               amount: Number(e.amount) || 0,
               description: e.description || 'مصروف مسترد',
-              delegateName: e.delegateName || 'مجهول',
+              delegateName: (e.delegateName || 'مجهول').replace(/\s*\(.*?\)/g, '').replace('الأستاذ/', '').trim(),
               delegatePhone: e.delegatePhone || ''
             };
           }
@@ -398,15 +459,23 @@ export default function App() {
         try {
           const exportData = { products, customers, invoices, expenses, trips, factoryLoads, settings, usersList, syncLogs, exportDate: new Date().toISOString() };
           idbSet('last_auto_backup_sys', exportData);
-          const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(exportData, null, 2));
-          const downloadNode = document.createElement('a');
-          downloadNode.setAttribute("href", dataStr);
-          downloadNode.setAttribute("download", `auto_backup_eags_${today}.json`);
-          document.body.appendChild(downloadNode);
-          downloadNode.click();
-          downloadNode.remove();
-          localStorage.setItem('last_auto_backup_date_sys', today);
-          showToast('📥 تم حفظ وتنزيل النسخة الاحتياطية التلقائية لليوم بالخلفية.');
+          
+          // إرسال النسخة الاحتياطية إلى Google Drive مباشرة بدلاً من تحميلها على الهاتف فقط
+          if (APP_SCRIPT_URL && APP_SCRIPT_URL !== "ضع_رابط_الاسكريبت_الخاص_بك_هنا") {
+            fetch(APP_SCRIPT_URL.trim(), {
+              method: 'POST',
+              mode: 'no-cors',
+              headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+              body: JSON.stringify({
+                type: 'auto_backup',
+                syncPhone: currentUser.phone,
+                data: exportData
+              })
+            }).catch(e => console.error("Drive backup failed", e));
+            
+            localStorage.setItem('last_auto_backup_date_sys', today);
+            showToast('☁️ تم إرسال النسخة الاحتياطية التلقائية إلى مجلد Google Drive الخاص بك بنجاح.');
+          }
         } catch (e) {
           console.error("Auto backup failed", e);
         }
@@ -496,6 +565,12 @@ export default function App() {
     }
   };
 
+  // دالة مساعدة لتنظيف وتوحيد أسماء المناديب ومنع الفوضى في الشيت
+  const getCleanDelegateName = (user: UserAuth | null | undefined) => {
+    if (!user || !user.name) return 'مجهول';
+    return user.name.replace(/\s*\(.*?\)/g, '').replace('الأستاذ/', '').replace('نائب المدير العام والمشرف الجغرافي', '').replace('نائب المدير العام', '').trim() || 'مجهول';
+  };
+
   const handleAddProduct = (newProd: Omit<Product, 'id'>) => {
     if (checkSimulationGuard()) return;
     
@@ -558,11 +633,11 @@ export default function App() {
 
   const handleAddLoad = (newLoad: Omit<FactoryLoad, 'id'>) => {
     if (checkSimulationGuard()) return;
-    const id = `load-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+    const id = `load-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
     setFactoryLoads(prev => [...prev, { 
       ...newLoad, 
       id,
-      delegateName: currentUser?.name?.replace(/ \(.*?\)/g, '').trim() || 'مجهول',
+      delegateName: getCleanDelegateName(currentUser),
       delegatePhone: currentUser?.phone || ''
     }]);
     promptForSync('سحب/تنزيل حمولة مصنع');
@@ -628,11 +703,11 @@ export default function App() {
 
   const handleAddInvoice = (newInvoice: Omit<Invoice, 'id'>) => {
     if (checkSimulationGuard()) return;
-    const id = `inv-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+    const id = `inv-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
     setInvoices(prev => [...prev, { 
       ...newInvoice, 
       id,
-      delegateName: currentUser?.name?.replace(/ \(.*?\)/g, '').trim() || 'مجهول',
+      delegateName: getCleanDelegateName(currentUser),
       delegatePhone: currentUser?.phone || ''
     }]);
 
@@ -686,11 +761,11 @@ export default function App() {
 
   const handleAddExpense = (newExpense: Omit<Expense, 'id'>) => {
     if (checkSimulationGuard()) return;
-    const id = `exp-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+    const id = `exp-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
     setExpenses(prev => [...prev, { 
       ...newExpense, 
       id,
-      delegateName: currentUser?.name?.replace(/ \(.*?\)/g, '').trim() || 'مجهول',
+      delegateName: getCleanDelegateName(currentUser),
       delegatePhone: currentUser?.phone || ''
     }]);
 
@@ -706,11 +781,11 @@ export default function App() {
 
   const handleAddTrip = (newTrip: Omit<Trip, 'id'>) => {
     if (checkSimulationGuard()) return;
-    const id = `trip-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+    const id = `trip-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
     setTrips(prev => [...prev, { 
       ...newTrip, 
       id,
-      delegateName: currentUser?.name?.replace(/ \(.*?\)/g, '').trim() || 'مجهول',
+      delegateName: getCleanDelegateName(currentUser),
       delegatePhone: currentUser?.phone || ''
     }]);
 
@@ -782,18 +857,26 @@ export default function App() {
       // 🚨 تعريف متغير مدير المزامنة الذي كان مفقوداً ويسبب انهيار صامت أثناء الرفع
       const isSyncManager = currentUser?.role === 'owner' || currentUser?.phone === '01228466613';
 
-      const totalSales = currentInvoices.reduce((sum, inv) => sum + (inv.totalAfterDiscount || 0), 0);
+      // حساب الصافي الحقيقي للتدفق النقدي لتصديره لشيت (الملخص)
+      const totalCollected = currentInvoices.reduce((sum, inv) => sum + (inv.paidAmount !== undefined ? inv.paidAmount : (inv.totalAfterDiscount || 0)), 0);
       const totalSpent = currentExpenses.filter(e => e.type !== 'revenue').reduce((sum, exp) => sum + (exp.amount || 0), 0);
       const extraRevenues = currentExpenses.filter(e => e.type === 'revenue').reduce((sum, exp) => sum + (exp.amount || 0), 0);
-      const netProfit = totalSales + extraRevenues - totalSpent;
+      const totalTripsCollectedProfit = currentTrips.filter(t => t.collected).reduce((sum, t) => sum + (t.price || 0), 0);
+      
+      const currentAdvancesTotal = currentLoads.reduce((sum, fl) => sum + (fl.advanceAmount ?? 0), 0);
+      const extraPayments = JSON.parse(localStorage.getItem('factory_extra_payments_sys') || '[]');
+      const manualPaymentsSumTotal = extraPayments.reduce((sum: any, p: any) => sum + ((p.amount || 0) - (p.appliedToCarriedDebt || 0)), 0);
+      const totalPaidToFactoryInPeriod = currentAdvancesTotal + manualPaymentsSumTotal;
+      
+      const netProfit = totalCollected + extraRevenues + totalTripsCollectedProfit - totalPaidToFactoryInPeriod - totalSpent;
 
       let deletedIds: string[] = [];
       try {
         deletedIds = JSON.parse(localStorage.getItem('deleted_records_sys') || '[]');
       } catch(e) {}
 
-      const customersMap = new Map(currentCustomers.map(c => [c.id, c]));
-      const productsMap = new Map(currentProducts.map(p => [p.id, p]));
+      const customersMap = new Map(currentCustomers.map(c => [String(c.id).trim(), c]));
+      const productsMap = new Map(currentProducts.map(p => [String(p.id).trim(), p]));
 
       let discoveredLeads: any[] = [];
       try {
@@ -823,7 +906,7 @@ export default function App() {
         metadata: {
           syncedAt: new Date().toISOString(),
           app: 'نظام المبيعات والمخزون للسيارة',
-          totalSales: Number(totalSales) || 0,
+          totalSales: Number(totalCollected) || 0,
           totalExpenses: Number(totalSpent) || 0,
           netProfit: Number(netProfit) || 0
         },
@@ -890,7 +973,7 @@ export default function App() {
           }
         }),
         users: isSyncManager ? freshUsersList.map(u => ({
-          name: u.name,
+          name: u.name.replace(/\s*\(.*?\)/g, '').trim(),
           phone: u.phone,
           role: u.role,
           status: u.status,
@@ -908,22 +991,24 @@ export default function App() {
             canUseAiAssistant: u.canUseAiAssistant !== false
         })) : [],
         factoryLoads: (currentLoads || []).map(fl => {
-          const prod = productsMap.get(fl.productId);
+          const prod = productsMap.get(String(fl.productId).trim());
           const activeWeights = prod ? (prod.weights && prod.weights.length > 0 ? prod.weights : getProductWeightsFallback(prod)) : [];
-          const wt = activeWeights.find(w => w.id === fl.weightId);
+          const wt = activeWeights.find(w => String(w.id).trim() === String(fl.weightId).trim()) || activeWeights[0];
           return {
             id: fl.id,
             date: fl.date,
             productId: fl.productId,
             weightId: fl.weightId,
-            productName: prod?.name || 'صنف مجهول',
-            weightSize: wt?.size || 'عبوة',
+            productName: prod?.name || fl.productName || 'صنف مجهول',
+            weightSize: wt?.size || fl.weightSize || 'عبوة',
             cartonsCount: fl.cartonsCount || 0,
             quantity: fl.quantity || 0,
             advanceAmount: fl.advanceAmount || 0,
             warehouseKeeper: fl.warehouseKeeper || '',
             delegateName: fl.delegateName || 'مجهول',
-            delegatePhone: fl.delegatePhone || ''
+            delegatePhone: fl.delegatePhone || '',
+            cartonPrice: fl.cartonPrice || wt?.cartonPriceFromFactory || (prod ? prod.price * (wt?.unitsPerCarton || 12) : 0),
+            unitPrice: fl.unitPrice || wt?.factoryPricePerUnit || (prod ? prod.price : 0)
           };
         }),
         discoveredLeads: discoveredLeads.map((l: any) => ({
@@ -956,8 +1041,16 @@ export default function App() {
         actionDesc: 'مزامنة شاملة للبيانات'
       }, ...prev]);
 
-      // 🚨 الحل الجذري لتراكم المحذوفات: تفريغ سلة المحذوفات بعد كل رفع ناجح لضمان عدم مسح ملفات جديدة بالخطأ
-      localStorage.removeItem('deleted_records_sys');
+      // 🚨 إزالة المحذوفات التي تم رفعها بنجاح فقط لتجنب ضياع الحذوفات التي تمت أثناء الرفع (منع التعارض)
+      try {
+        const currentDeleted = JSON.parse(localStorage.getItem('deleted_records_sys') || '[]');
+        const remainingDeleted = currentDeleted.filter((id: string) => !deletedIds.includes(id));
+        if (remainingDeleted.length > 0) {
+          localStorage.setItem('deleted_records_sys', JSON.stringify(remainingDeleted));
+        } else {
+          localStorage.removeItem('deleted_records_sys');
+        }
+      } catch(e) {}
 
       setIsHeaderSyncing(false);
       return true;
@@ -1420,7 +1513,7 @@ export default function App() {
               notes: inv.notes || '',
               delegateName: inv.delegateName || 'مجهول',
               delegatePhone: inv.delegatePhone || '',
-              isDelivered: inv.isDelivered === 'true' || inv.isDelivered === true
+            isDelivered: (inv.isDelivered === '' || inv.isDelivered === undefined) ? true : (inv.isDelivered === 'true' || inv.isDelivered === true)
             };
           }).filter((inv: any) => !deletedIds.includes(inv.id)).filter((inv: any) => {
             // تصفية الفواتير القديمة (أكثر من 30 يوم ومسددة بالكامل) لتوفير المساحة
@@ -1575,7 +1668,6 @@ export default function App() {
             window.location.reload();
           }, 1500);
         }
-        localStorage.removeItem('deleted_records_sys');
       } else {
         if (!isSilent) showToast("تنبيه: تم إرجاع بيانات فارغة ومخالفة للنموذج. جاري التحميل العادي...");
         setTimeout(() => {
@@ -1697,6 +1789,13 @@ export default function App() {
             </span>
           </div>
           <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowSimulatedInventory(true)}
+              className="bg-emerald-600 hover:bg-emerald-700 text-white font-black text-[11px] px-3 py-1.5 rounded-xl transition-all shadow-sm active:scale-95 cursor-pointer flex items-center gap-1 border border-emerald-700"
+            >
+              <span>📦</span>
+              <span>جرد السيارة</span>
+            </button>
             <button
               onClick={() => setIsDelegateSelectorOpen(true)}
               className="bg-white hover:bg-slate-50 text-[#1A365D] font-black text-[11px] px-3 py-1.5 rounded-xl transition-all shadow-sm active:scale-95 cursor-pointer flex items-center gap-1 border border-slate-200"
@@ -2013,6 +2112,62 @@ export default function App() {
         )}
 
       </main>
+
+      <AnimatePresence>
+        {showSimulatedInventory && (
+          <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs text-right animate-fade-in" dir="rtl">
+            <div className="w-full max-w-lg bg-white rounded-3xl border border-slate-200 shadow-2xl overflow-hidden flex flex-col max-h-[85vh]">
+              <div className="bg-[#1A365D] text-white p-4 flex justify-between items-center">
+                <h3 className="text-sm font-black tracking-tight flex items-center gap-2">
+                  <span>📦</span>
+                  <span>جرد سيارة المندوب: {simulatedDelegate?.name}</span>
+                </h3>
+                <button
+                  onClick={() => setShowSimulatedInventory(false)}
+                  className="text-white/80 hover:text-white bg-white/10 hover:bg-white/20 p-1.5 rounded-full transition-all cursor-pointer font-black"
+                >
+                  ✕
+                </button>
+              </div>
+              <div className="p-4 overflow-y-auto flex-grow flex flex-col gap-3">
+                {simulatedInventory.length === 0 ? (
+                  <div className="text-center py-8 text-slate-400 text-xs font-bold">
+                    لا يوجد جرد حالي لهذا المندوب (السيارة فارغة).
+                  </div>
+                ) : (
+                  simulatedInventory.map((stock, idx) => {
+                    const unitsPerC = stock.weight.unitsPerCarton || 12;
+                    const loadedText = `${Math.floor(stock.loaded / unitsPerC)}ك ${stock.loaded % unitsPerC > 0 ? `و ${stock.loaded % unitsPerC}ع` : ''}`;
+                    const soldText = `${Math.floor(stock.sold / unitsPerC)}ك ${stock.sold % unitsPerC > 0 ? `و ${stock.sold % unitsPerC}ع` : ''}`;
+                    const remainingText = `${Math.floor(stock.remaining / unitsPerC)}ك ${stock.remaining % unitsPerC > 0 ? `و ${stock.remaining % unitsPerC}ع` : ''}`;
+
+                    return (
+                      <div key={idx} className="bg-slate-50 border border-slate-200 rounded-xl p-3 flex flex-col gap-2 shadow-sm">
+                        <div className="flex justify-between items-center border-b border-slate-100 pb-1.5">
+                          <span className="font-extrabold text-[#1A365D] text-xs">{stock.product.name} ({stock.weight.size})</span>
+                          <span className={`text-[10px] font-black px-2 py-0.5 rounded-lg border ${stock.remaining > 0 ? 'bg-emerald-100 text-emerald-800 border-emerald-200' : stock.remaining < 0 ? 'bg-rose-100 text-rose-800 border-rose-200' : 'bg-slate-200 text-slate-700 border-slate-300'}`}>
+                            المتبقي: {remainingText}
+                          </span>
+                        </div>
+                        <div className="grid grid-cols-2 gap-2 text-center text-[10px] font-bold">
+                          <div className="bg-indigo-50 text-indigo-800 p-1.5 rounded-lg border border-indigo-100">
+                            <span className="block text-indigo-500 mb-0.5 text-[9px]">الكمية المحملة</span>
+                            <span>{loadedText}</span>
+                          </div>
+                          <div className="bg-amber-50 text-amber-800 p-1.5 rounded-lg border border-amber-100">
+                            <span className="block text-amber-500 mb-0.5 text-[9px]">الكمية المباعة</span>
+                            <span>{soldText}</span>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+      </AnimatePresence>
 
       {showScrollTop && (
         <button

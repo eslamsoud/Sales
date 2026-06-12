@@ -147,6 +147,7 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
   const [customArea, setCustomArea] = useState('');
   const [governorate, setGovernorate] = useState('');
   const [salesManager, setSalesManager] = useState('');
+  const [detailedAddress, setDetailedAddress] = useState('');
   const [showAreaDropdown, setShowAreaDropdown] = useState(false);
   const [locationLink, setLocationLink] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
@@ -566,6 +567,7 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
     
     setGovernorate(gov);
     setLocationLink(lead.locationLink || `https://maps.google.com/?q=${encodeURIComponent((lead.name || '').trim() + ' ' + finalArea)}`);
+    setDetailedAddress(lead.detailedAddress || '');
     
     setPendingLeadToCustomer(lead);
     setActiveTab('list');
@@ -625,7 +627,8 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
         area: finalArea,
         governorate: finalGov,
         salesManager: salesManager.trim(),
-        locationLink: locationLink.trim() || `https://maps.google.com/?q=${encodeURIComponent(name.trim() + ' ' + finalArea)}`
+        locationLink: locationLink.trim() || `https://maps.google.com/?q=${encodeURIComponent(name.trim() + ' ' + finalArea)}`,
+        detailedAddress: detailedAddress.trim()
       });
       showToast('✓ تم تعديل بيانات العميل بنجاح.');
     } else {
@@ -635,7 +638,8 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
         area: finalArea,
         governorate: finalGov,
         salesManager: salesManager.trim(),
-        locationLink: locationLink.trim() || `https://maps.google.com/?q=${encodeURIComponent(name.trim() + ' ' + finalArea)}`
+        locationLink: locationLink.trim() || `https://maps.google.com/?q=${encodeURIComponent(name.trim() + ' ' + finalArea)}`,
+        detailedAddress: detailedAddress.trim()
       });
       
       // مسح العميل من قائمة "المكتشفين" إذا كان منقولاً منها
@@ -652,6 +656,7 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
     setGovernorate('');
     setSalesManager('');
     setLocationLink('');
+    setDetailedAddress('');
     setGeoStatusMsg('');
     setShowAddForm(false);
     setEditingCustomer(null);
@@ -917,6 +922,7 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                   setShowAddForm(true);
                   setArea('');
                   setCustomArea('');
+                  setDetailedAddress('');
                 }}
                 className="w-full bg-[#1A365D] text-white border-transparent hover:bg-[#1A365D] text-white border-transparent active:scale-95 text-white font-bold py-3.5 px-5 rounded-2xl shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer text-sm"
               >
@@ -971,7 +977,7 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                       <label className="inline-block bg-purple-100 text-purple-950 border border-purple-200 text-xs font-black px-2.5 py-1 rounded-md mb-2 shadow-sm">مدير البيع (مخفي)</label>
                       <input
                         type="text"
-                        placeholder="للبحث عند نسيان المحل"
+                        placeholder="مثال: مسؤول المنطقة"
                         value={salesManager}
                         onChange={(e) => setSalesManager(e.target.value)}
                         className="w-full bg-[#F7FAFC] border border-slate-200 rounded-lg p-2.5 text-sm font-semibold focus:ring-2 focus:ring-indigo-500"
@@ -1106,7 +1112,19 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                     </div>
                   </div>
 
-                  <div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="inline-block bg-slate-100 text-slate-800 border border-slate-200 text-xs font-black px-2.5 py-1 rounded-md mb-2 shadow-sm">العنوان التفصيلي</label>
+                      <input
+                        type="text"
+                        placeholder="مثال: بجوار صيدلية كذا، شارع كذا..."
+                        value={detailedAddress}
+                        onChange={(e) => setDetailedAddress(e.target.value)}
+                        className="w-full bg-[#F7FAFC] border border-slate-200 rounded-lg p-2.5 text-xs text-right font-semibold focus:ring-2 focus:ring-indigo-500"
+                      />
+                    </div>
+
+                    <div>
                     <div className="flex justify-between items-center mb-1.5 flex-wrap gap-1">
                       <label className="inline-block bg-indigo-100 text-indigo-950 border border-indigo-200 text-xs font-black px-2.5 py-1 rounded-md shadow-sm">رابط الخرائط</label>
                       <button
@@ -1131,6 +1149,7 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                         {geoStatusMsg}
                       </p>
                     )}
+                    </div>
                   </div>
                 </div>
 
@@ -1274,6 +1293,11 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                                 <span className="text-slate-500 font-bold">
                                   (تتبع محافظة {customer.governorate || getGovernorateForArea(customer.area)})
                                 </span>
+                                {customer.detailedAddress && (
+                                  <div className="w-full mt-1 bg-slate-50 border border-slate-150 p-2 rounded-lg text-xs font-bold text-slate-700">
+                                    📍 العنوان: {customer.detailedAddress}
+                                  </div>
+                                )}
                               </div>
                             </div>
 
@@ -1341,6 +1365,7 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                                     setName(customer.name);
                                     setPhone(customer.phone);
                                     setSalesManager(customer.salesManager || '');
+                                    setDetailedAddress(customer.detailedAddress || '');
                                     const areaExists = allAreas.includes(customer.area);
                                     if (areaExists) {
                                       setArea(customer.area);

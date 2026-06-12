@@ -98,6 +98,20 @@ function doGet(e) {
       var n = Number(val);
       return isNaN(n) ? 0 : n;
     }
+    
+    // 🛡️ دالة ذكية لضمان رجوع الصفر للهواتف التي قام إكسيل بحذفه منها وإجباره على حفظه كنص
+    function formatPhone(val) {
+      var p = String(val !== undefined && val !== null ? val : '').replace(/^'/, '').replace(/\\s+/g, '');
+      if (p.length === 10 && p.indexOf('1') === 0) p = '0' + p;
+      return p ? "'" + p : '';
+    }
+
+    // 🛡️ دالة ذكية لضمان رجوع الصفر للهواتف التي قام إكسيل بحذفه منها (مثل 1281391552)
+    function getSafePhone(val) {
+      var p = getSafeString(val).replace(/^'/, '').replace(/\s+/g, '');
+      if (p.length === 10 && p.indexOf('1') === 0) p = '0' + p;
+      return p;
+    }
 
     // دالة مساعدة وأكثر أماناً لجلب البيانات وتخطي الأخطاء
     function safeGetSheetData(sheetName, mapFn) {
@@ -113,47 +127,60 @@ function doGet(e) {
       }).map(mapFn);
     }
 
-    // أ. جلب الفواتير
-    result.invoices = safeGetSheetData('الفواتير', function(row) {
+    // دالة تخطيط الفواتير
+    function mapInvoiceRow(row) {
       var items = [];
+      var invId = getSafeString(row[0]);
+      if (!invId) invId = 'inv-fix-' + getSafeString(row[2]) + '-' + getSafePhone(row[10]);
       try { items = JSON.parse(row[9]); } catch(e) { items = []; }
       return { 
-        id: getSafeString(row[0]), date: getSafeString(row[1]), invNum: getSafeString(row[2]), 
+        id: invId, date: getSafeString(row[1]), invoiceNumber: getSafeString(row[2]), // توافق مع invoiceNumber 
         customerName: getSafeString(row[3]), area: getSafeString(row[4]), total: getSafeNumber(row[5]), 
         paidAmount: row[6] !== '' ? getSafeNumber(row[6]) : getSafeNumber(row[5]), 
-        delegateName: getSafeString(row[7]), notes: getSafeString(row[8]),
-        items: items, delegatePhone: getSafeString(row[10]),
+        delegateName: getSafeString(row[7]).replace(/\\s*\\(.*?\\)/g, '').trim(), notes: getSafeString(row[8]),
+        items: items, delegatePhone: getSafePhone(row[10]),
         customerId: getSafeString(row[11]),
         totalBeforeDiscount: getSafeNumber(row[12]) || getSafeNumber(row[5]),
-        isDelivered: row[13] === 'true' || row[13] === true
+        isDelivered: (row[13] === '' || row[13] === undefined) ? true : (row[13] === 'true' || row[13] === true)
       };
-    });
+    }
+
+    // أ. جلب الفواتير (من النشطة ومن الأرشيف لكي يراها التطبيق كاملة)
+    var activeInvoices = safeGetSheetData('الفواتير', mapInvoiceRow);
+    var archivedInvoices = safeGetSheetData('أرشيف السداد', mapInvoiceRow);
+    result.invoices = activeInvoices.concat(archivedInvoices);
 
     // ب. جلب المصروفات والماليات
     result.expenses = safeGetSheetData('الماليات', function(row) {
+      var expId = getSafeString(row[0]);
+      if (!expId || !expId.includes('-')) expId = 'exp-fix-' + getSafeNumber(row[4]) + '-' + getSafeString(row[2]);
       return { 
-        id: getSafeString(row[0]), date: getSafeString(row[1]), category: getSafeString(row[2]), 
+        id: expId, date: getSafeString(row[1]), category: getSafeString(row[2]), 
         type: getSafeString(row[3]), amount: getSafeNumber(row[4]), description: getSafeString(row[5]),
-        delegateName: getSafeString(row[6]), delegatePhone: getSafeString(row[7])
+        delegateName: getSafeString(row[6]).replace(/\\s*\\(.*?\\)/g, '').trim(), delegatePhone: getSafePhone(row[7])
       };
     });
 
     // ج. جلب المشاوير
     result.trips = safeGetSheetData('المشاوير', function(row) {
+      var tripId = getSafeString(row[0]);
+      if (!tripId) tripId = 'trip-fix-' + getSafeNumber(row[3]) + '-' + getSafeString(row[2]);
       return { 
-        id: getSafeString(row[0]), date: getSafeString(row[1]), description: getSafeString(row[2]), 
+        id: tripId, date: getSafeString(row[1]), description: getSafeString(row[2]), 
         price: getSafeNumber(row[3]), status: getSafeString(row[4]),
-        delegateName: getSafeString(row[5]), delegatePhone: getSafeString(row[6]),
+        delegateName: getSafeString(row[5]).replace(/\\s*\\(.*?\\)/g, '').trim(), delegatePhone: getSafePhone(row[6]),
         odometerStart: row[7] !== '' ? getSafeNumber(row[7]) : undefined, odometerEnd: row[8] !== '' ? getSafeNumber(row[8]) : undefined
       };
     });
 
     // د. جلب العملاء
     result.customers = safeGetSheetData('العملاء', function(row) {
+      var custId = getSafeString(row[0]);
+      if (!custId) custId = 'cust-fix-' + getSafePhone(row[4]);
       return { 
-        id: getSafeString(row[0]), governorate: getSafeString(row[1]), area: getSafeString(row[2]), 
+        id: custId, governorate: getSafeString(row[1]), area: getSafeString(row[2]), 
         name: getSafeString(row[3]), phone: getSafeString(row[4]), detailedAddress: getSafeString(row[5]), 
-        locationLink: getSafeString(row[6]), purchasesCount: getSafeNumber(row[7]),
+        locationLink: getSafeString(row[6]), purchasesCount: getSafeNumber(row[7]), phone: getSafePhone(row[4]),
         salesManager: getSafeString(row[8]), totalSpent: getSafeNumber(row[9]),
         lastPurchaseDate: getSafeString(row[10])
       };
@@ -198,20 +225,23 @@ function doGet(e) {
          var c4 = getSafeString(row[4]);
          return c0 !== '' || c1 !== '' || c2 !== '' || c3 !== '' || c4 !== '';
       }).map(function(row) {
+        var loadId = getSafeString(row[0]);
+        if (!loadId) loadId = 'load-fix-' + getSafeString(row[2]) + '-' + getSafeString(row[1]);
         if (hasIds) {
           return { 
-            id: getSafeString(row[0]), date: getSafeString(row[1]), productId: getSafeString(row[2]),
+            id: loadId, date: getSafeString(row[1]), productId: getSafeString(row[2]),
             weightId: getSafeString(row[3]), productName: getSafeString(row[4]), weightSize: getSafeString(row[5]), 
             cartonsCount: getSafeNumber(row[6]), quantity: getSafeNumber(row[7]), 
             advanceAmount: getSafeNumber(row[8]), warehouseKeeper: getSafeString(row[9]),
-            delegateName: getSafeString(row[10]), delegatePhone: getSafeString(row[11])
+            delegateName: getSafeString(row[10]).replace(/\\s*\\(.*?\\)/g, '').trim(), delegatePhone: getSafePhone(row[11]),
+            cartonPrice: getSafeNumber(row[12]), unitPrice: getSafeNumber(row[13])
           };
         } else {
           return { 
-            id: getSafeString(row[0]), date: getSafeString(row[1]), productId: '', weightId: '',
+            id: loadId, date: getSafeString(row[1]), productId: '', weightId: '',
             productName: getSafeString(row[2]), weightSize: getSafeString(row[3]), cartonsCount: getSafeNumber(row[4]), 
             quantity: getSafeNumber(row[5]), advanceAmount: getSafeNumber(row[6]),
-            warehouseKeeper: getSafeString(row[7]), delegateName: getSafeString(row[8]), delegatePhone: getSafeString(row[9])
+            warehouseKeeper: getSafeString(row[7]), delegateName: getSafeString(row[8]).replace(/\\s*\\(.*?\\)/g, '').trim(), delegatePhone: getSafePhone(row[9])
           };
         }
       });
@@ -219,8 +249,7 @@ function doGet(e) {
 
     // ح. جلب صلاحيات المستخدمين
     result.users = safeGetSheetData('صلاحيات_المستخدمين', function(row) {
-      var phoneStr = getSafeString(row[0]).replace(/^'/, '');
-      if (phoneStr.length === 10 && phoneStr.indexOf('1') === 0) phoneStr = '0' + phoneStr;
+      var phoneStr = getSafePhone(row[0]);
       return { 
         phone: phoneStr, name: getSafeString(row[1]), role: getSafeString(row[2]), status: getSafeString(row[3]), 
         password: getSafeString(row[4]).replace(/^'/, ''), customRoleName: getSafeString(row[5]), 
@@ -237,7 +266,7 @@ function doGet(e) {
     result.discoveredLeads = safeGetSheetData('عملاء_مكتشفين', function(row) {
       return { 
         id: getSafeString(row[0]), governorate: getSafeString(row[1]), area: getSafeString(row[2]), 
-        name: getSafeString(row[3]), phone: getSafeString(row[4]), detailedAddress: getSafeString(row[5]), 
+        name: getSafeString(row[3]), phone: getSafePhone(row[4]), detailedAddress: getSafeString(row[5]), 
         locationLink: getSafeString(row[6]), type: getSafeString(row[7]), dateAdded: getSafeString(row[8])
       };
     });
@@ -264,6 +293,26 @@ function doPost(e) {
     var isOwner = data.syncRole === 'owner' || data.syncPhone === '01228466613';
     var canEditPrices = data.canEditPrices === true || isOwner;
     
+    // ☁️ إضافة استجابة لطلبات إنشاء النسخة الاحتياطية في Google Drive
+    if (data.type === 'auto_backup') {
+      try {
+        var folderName = "نسخ_نظام_سوفانا_الاحتياطية";
+        var folders = DriveApp.getFoldersByName(folderName);
+        var folder = folders.hasNext() ? folders.next() : DriveApp.createFolder(folderName);
+        
+        var dateStr = new Date().toISOString().split('T')[0];
+        var fileName = "EAGS_Backup_" + dateStr + "_" + (data.syncPhone || "admin") + ".json";
+        
+        folder.createFile(fileName, JSON.stringify(data.data, null, 2), MimeType.PLAIN_TEXT);
+        
+        return ContentService.createTextOutput(JSON.stringify({"status": "backup_success"}))
+          .setMimeType(ContentService.MimeType.JSON);
+      } catch(backupError) {
+        return ContentService.createTextOutput(JSON.stringify({"error": backupError.toString()}))
+          .setMimeType(ContentService.MimeType.JSON);
+      }
+    }
+
     function upsertData(sheetName, headers, dataRows, headerColor, delIds) {
       var sheet = ss.getSheetByName(sheetName);
       if (!sheet) {
@@ -287,9 +336,10 @@ function doPost(e) {
           if (sheetName === 'المصنع' && (isNaN(Number(r[7])) || Number(r[7]) <= 0)) continue; 
           
           var rowId = String(r[0]).replace(/^'/, '').trim();
+          var altId = String(r[1]).replace(/^'/, '').trim(); // لالتقاط معرفات المنتجات والعملاء
           if (rowId.length === 10 && rowId.indexOf('1') === 0) rowId = '0' + rowId;
           
-          if (delIds && delIds.indexOf(rowId) !== -1) continue; // تخطي وحذف السجلات المحذوفة محلياً للأبد
+          if (delIds && (delIds.indexOf(rowId) !== -1 || delIds.indexOf(altId) !== -1)) continue; // تخطي وحذف السجلات المحذوفة محلياً للأبد
           
           // ضمان تساوي طول المصفوفة لحماية سيرفر جوجل من الانهيار (Jagged Array)
           var paddedRow = [];
@@ -345,23 +395,37 @@ function doPost(e) {
 
     if (data.type === 'تقرير_كامل') {
       
-      // 1. الفواتير
-      var invRows = (data.invoices || []).map(function(inv) { 
-        return [
+      // 1. الفواتير (نظام الفرز الذكي للأرشيف)
+      var activeInvRows = [];
+      var archivedInvRows = [];
+      
+      (data.invoices || []).forEach(function(inv) { 
+        var isDel = inv.hasOwnProperty('isDelivered') ? inv.isDelivered : true;
+        var remaining = Math.max(0, (Number(inv.total) || 0) - (Number(inv.paidAmount) || 0));
+        var paymentStatus = remaining > 0 ? 'مديونية ⚠️' : 'خالصة ✅';
+        
+        var rowData = [
           inv.id, inv.date, inv.invNum, inv.customerName, inv.area, 
           inv.total, inv.paidAmount, inv.delegateName, inv.notes || '',
-          JSON.stringify(inv.items || []), "'" + String(inv.delegatePhone || ''),
-          inv.customerId || '', inv.totalBeforeDiscount || inv.total || 0, inv.isDelivered ? 'true' : 'false'
+          JSON.stringify(inv.items || []), formatPhone(inv.delegatePhone),
+          inv.customerId || '', inv.totalBeforeDiscount || inv.total || 0, isDel ? 'true' : 'false', remaining, paymentStatus
         ]; 
+        
+        if (remaining === 0 && isDel) {
+           archivedInvRows.push(rowData);
+        } else {
+           activeInvRows.push(rowData);
+        }
       });
-      upsertData('الفواتير', ['المعرف', 'التاريخ', 'رقم الفاتورة', 'العميل', 'المنطقة', 'إجمالي الفاتورة', 'المدفوع', 'المندوب', 'الملاحظات', 'التفاصيل (JSON)', 'هاتف المندوب', 'معرف العميل', 'الإجمالي قبل الخصم', 'تم التسليم'], invRows, "#cfe2f3", deletedIds);
+      upsertData('الفواتير', ['المعرف', 'التاريخ', 'رقم الفاتورة', 'العميل', 'المنطقة', 'إجمالي الفاتورة', 'المدفوع', 'المندوب', 'الملاحظات', 'التفاصيل (JSON)', 'هاتف المندوب', 'معرف العميل', 'الإجمالي قبل الخصم', 'تم التسليم', 'المتبقي (المديونية)', 'حالة السداد'], activeInvRows, "#cfe2f3", deletedIds);
+      upsertData('أرشيف السداد', ['المعرف', 'التاريخ', 'رقم الفاتورة', 'العميل', 'المنطقة', 'إجمالي الفاتورة', 'المدفوع', 'المندوب', 'الملاحظات', 'التفاصيل (JSON)', 'هاتف المندوب', 'معرف العميل', 'الإجمالي قبل الخصم', 'تم التسليم', 'المتبقي (المديونية)', 'حالة السداد'], archivedInvRows, "#d9ead3", deletedIds);
       
       // 2. الماليات
       var expRows = (data.expenses || []).map(function(exp) { 
         return [
           "'" + exp.id, exp.date, exp.category, exp.type || 'expense',
           exp.amount, exp.description || '', exp.delegateName || '',
-          "'" + String(exp.delegatePhone || '')
+          formatPhone(exp.delegatePhone)
         ]; 
       });
       upsertData('الماليات', ['المعرف', 'التاريخ', 'الفئة', 'النوع', 'المبلغ', 'البيان', 'المندوب', 'هاتف المندوب'], expRows, "#e0e0e0", deletedIds);
@@ -370,7 +434,7 @@ function doPost(e) {
       var tripRows = (data.trips || []).map(function(t) { 
         return [
           t.id, t.date, t.description || '', t.price, t.status,
-          t.delegateName || '', "'" + String(t.delegatePhone || ''),
+          t.delegateName || '', formatPhone(t.delegatePhone),
           t.odometerStart || '', t.odometerEnd || ''
         ]; 
       });
@@ -380,7 +444,7 @@ function doPost(e) {
       var custRows = (data.customers || []).map(function(c) { 
         return [
           c.id, c.governorate || '', c.area || '', c.name || '', 
-          "'" + String(c.phone || ''), c.detailedAddress || '', c.locationLink || '', 
+          formatPhone(c.phone), c.detailedAddress || '', c.locationLink || '', 
           c.purchasesCount || 0, c.salesManager || '', c.totalSpent || 0, c.lastPurchaseDate || ''
         ]; 
       });
@@ -410,16 +474,16 @@ function doPost(e) {
           fl.id, fl.date, fl.productId || '', fl.weightId || '', fl.productName, 
           fl.weightSize || 'كرتونة', fl.cartonsCount || 0, fl.quantity || 0, 
           fl.advanceAmount || 0, fl.warehouseKeeper || '', fl.delegateName || '',
-          "'" + String(fl.delegatePhone || '')
+          formatPhone(fl.delegatePhone), fl.cartonPrice || 0, fl.unitPrice || 0
         ]; 
       });
-      upsertData('المصنع', ['المعرف', 'التاريخ', 'معرف الصنف', 'معرف الوزن', 'اسم الصنف', 'الحجم/الوزن', 'الكمية (كرتونة)', 'إجمالي الوحدات', 'مقدم المصنع', 'أمين المخزن', 'اسم المندوب', 'هاتف المندوب'], factoryRows, "#fce5cd", deletedIds);
+      upsertData('المصنع', ['المعرف', 'التاريخ', 'معرف الصنف', 'معرف الوزن', 'اسم الصنف', 'الحجم/الوزن', 'الكمية (كرتونة)', 'إجمالي الوحدات', 'مقدم المصنع', 'أمين المخزن', 'اسم المندوب', 'هاتف المندوب', 'سعر الكرتونة', 'سعر العبوة'], factoryRows, "#fce5cd", deletedIds);
 
       // 7. المستخدمين
       if (isOwner) {
         var userRows = (data.users || []).map(function(u) { 
           return [
-            "'" + String(u.phone), u.name, u.role, u.status, 
+            formatPhone(u.phone), u.name, u.role, u.status, 
             "'" + String(u.password || ''), u.customRoleName || '', 
             u.permittedTabs || '', u.permittedSubTabs || '',
             u.canEditPrices === false ? 'لا' : 'نعم',
@@ -434,7 +498,7 @@ function doPost(e) {
       var discoveredRows = (data.discoveredLeads || []).map(function(l) { 
         return [
           l.id, l.governorate || '', l.area || '', l.name || '', 
-          "'" + String(l.phone || ''), l.detailedAddress || '', l.locationLink || '',
+          formatPhone(l.phone), l.detailedAddress || '', l.locationLink || '',
           l.type || '', l.dateAdded || ''
         ]; 
       });
@@ -1063,22 +1127,24 @@ export default function ManageTab({
           canEditPrices: u.canEditPrices !== false
         })),
         factoryLoads: (factoryLoads || []).map(fl => {
-          const prod = productsMap.get(fl.productId);
+          const prod = productsMap.get(String(fl.productId).trim());
           const activeWeights = prod ? (prod.weights && prod.weights.length > 0 ? prod.weights : getProductWeightsFallback(prod)) : [];
-          const wt = activeWeights.find(w => w.id === fl.weightId);
+          const wt = activeWeights.find(w => String(w.id).trim() === String(fl.weightId).trim()) || activeWeights[0];
           return {
             id: fl.id,
             date: fl.date,
             productId: fl.productId,
             weightId: fl.weightId,
-            productName: prod?.name || 'صنف مجهول',
-            weightSize: wt?.size || 'عبوة',
+            productName: prod?.name || fl.productName || 'صنف مجهول',
+            weightSize: wt?.size || fl.weightSize || 'عبوة',
             cartonsCount: fl.cartonsCount || 0,
             quantity: fl.quantity || 0,
             advanceAmount: fl.advanceAmount || 0,
             warehouseKeeper: fl.warehouseKeeper || '',
             delegateName: fl.delegateName || 'مجهول',
-            delegatePhone: fl.delegatePhone || ''
+            delegatePhone: fl.delegatePhone || '',
+            cartonPrice: fl.cartonPrice || wt?.cartonPriceFromFactory || (prod ? prod.price * (wt?.unitsPerCarton || 12) : 0),
+            unitPrice: fl.unitPrice || wt?.factoryPricePerUnit || (prod ? prod.price : 0)
           };
         }),
         discoveredLeads: discoveredLeads.map((l: any) => ({
@@ -1104,6 +1170,16 @@ export default function ManageTab({
       setSyncStatus('done');
       showToast('✓ تم الحفظ والمزامنة السحابية بنجاح!');
       
+      try {
+        const currentDeleted = JSON.parse(localStorage.getItem('deleted_records_sys') || '[]');
+        const remainingDeleted = currentDeleted.filter((id: string) => !deletedIds.includes(id));
+        if (remainingDeleted.length > 0) {
+          localStorage.setItem('deleted_records_sys', JSON.stringify(remainingDeleted));
+        } else {
+          localStorage.removeItem('deleted_records_sys');
+        }
+      } catch(e) {}
+
       onAddSyncLog({
         delegateName: currentUser?.name || 'مجهول',
         status: 'success',
@@ -1201,7 +1277,7 @@ export default function ManageTab({
       customRoleName = 'نائب المدير 💼';
       permittedTabs = ['dashboard', 'factory', 'customers', 'invoice', 'prices', 'expenses', 'administrative'];
     }
-    const nameLabel = newUserName.trim() + suffix;
+    const nameLabel = newUserName.trim(); // منع لصق الألقاب بالاسم ليبقى نظيفاً
     const newUser: UserAuth = {
       name: nameLabel,
       phone: newUserPhone.trim(),
@@ -2251,7 +2327,7 @@ export default function ManageTab({
                                             );
                                             onUpdateUsersList(updated);
                                             localStorage.setItem('users_permissions_sys', JSON.stringify(updated));
-                                            showToast('✓ تم تعديل وحفظ رمز المرور بنجاح!');
+                                    showToast('✓ تم الحفظ! جاري المزامنة السحابية فوراً ☁️');
                                             onTriggerSync?.('تغيير رمز مرور مندوب');
                                           }
                                         }}
@@ -2301,7 +2377,7 @@ export default function ManageTab({
                                             );
                                             onUpdateUsersList(updated);
                                             localStorage.setItem('users_permissions_sys', JSON.stringify(updated));
-                                            showToast('✓ تم تعديل وحفظ المسمى الوظيفي بنجاح!');
+                                    showToast('✓ تم الحفظ! جاري تحديث الشيت فوراً ☁️');
                                             onTriggerSync?.('تعديل المسمى الوظيفي');
                                           }
                                         }}
@@ -2363,7 +2439,7 @@ export default function ManageTab({
                                         );
                                         onUpdateUsersList(updated);
                                         localStorage.setItem('users_permissions_sys', JSON.stringify(updated));
-                                        showToast('✓ تم تطبيق قالب (الزائر)');
+                                showToast('✓ تم تطبيق قالب (الزائر) وتحديث الشيت ☁️');
                                         onTriggerSync?.('تطبيق قالب الزائر');
                                       }}
                                       className="p-2 text-center rounded-xl bg-white border border-slate-200 hover:bg-amber-50 hover:border-amber-300 transition-all cursor-pointer shadow-sm active:scale-95 flex items-center justify-center min-h-[55px]"
@@ -2390,7 +2466,7 @@ export default function ManageTab({
                                         );
                                         onUpdateUsersList(updated);
                                         localStorage.setItem('users_permissions_sys', JSON.stringify(updated));
-                                        showToast('✓ تم تطبيق قالب (مندوب مبيعات)');
+                                showToast('✓ تم تطبيق قالب (مندوب مبيعات) وتحديث الشيت ☁️');
                                         onTriggerSync?.('تطبيق قالب مندوب مبيعات');
                                       }}
                                       className="p-2 text-center rounded-xl bg-white border border-slate-200 hover:bg-blue-50 hover:border-blue-300 transition-all cursor-pointer shadow-sm active:scale-95 flex items-center justify-center min-h-[55px]"
@@ -2417,7 +2493,7 @@ export default function ManageTab({
                                         );
                                         onUpdateUsersList(updated);
                                         localStorage.setItem('users_permissions_sys', JSON.stringify(updated));
-                                          showToast('✓ تم تطبيق قالب (نائب المدير)');
+                                  showToast('✓ تم تطبيق قالب (نائب المدير) وتحديث الشيت ☁️');
                                           onTriggerSync?.('تطبيق قالب نائب المدير');
                                       }}
                                       className="p-2 text-center rounded-xl bg-white border border-slate-200 hover:bg-[#DEEAF6] hover:border-indigo-300 transition-all cursor-pointer shadow-sm active:scale-95 flex items-center justify-center min-h-[55px]"
@@ -2448,7 +2524,7 @@ export default function ManageTab({
                                         );
                                         onUpdateUsersList(updated);
                                         localStorage.setItem('users_permissions_sys', JSON.stringify(updated));
-                                        showToast('✓ تم تطبيق قالب (مشرف عام)');
+                                showToast('✓ تم تطبيق قالب (مشرف عام) وتحديث الشيت ☁️');
                                         onTriggerSync?.('تطبيق قالب مشرف عام');
                                       }}
                                       className="p-2 text-center rounded-xl bg-white border border-slate-200 hover:bg-[#E2F0D9] hover:border-emerald-300 transition-all cursor-pointer shadow-sm active:scale-95 flex items-center justify-center min-h-[55px]"
@@ -2836,7 +2912,7 @@ export default function ManageTab({
                                     );
                                     onUpdateUsersList(updated);
                                     localStorage.setItem('users_permissions_sys', JSON.stringify(updated));
-                                    showToast("✓ تم حفظ صلاحيات المندوب بنجاح!");
+                            showToast("✓ تم الحفظ! جاري المزامنة السحابية فوراً ☁️");
                                     setExpandedUserPhone(null);
                                     onTriggerSync?.('حفظ وتعميد جميع التعديلات والصلاحيات');
                                   }}
@@ -3844,7 +3920,7 @@ export default function ManageTab({
                 className="bg-[#DD6B20] hover:bg-[#C05621] text-white font-black py-2.5 px-6 rounded-xl text-xs shadow-md transition-all active:scale-95 cursor-pointer border-transparent flex items-center gap-1.5"
               >
                 <Save className="h-4 w-4" />
-                <span>حفظ مناطق العمل</span>
+                <span>حفظ مناطق ال��مل</span>
               </button>
             </div>
           </div>

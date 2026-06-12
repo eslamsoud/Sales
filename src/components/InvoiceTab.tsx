@@ -1111,8 +1111,11 @@ export default function InvoiceTab({
   };
 
   const filteredInvoices = invoices.filter(inv => {
-    // Only display delivered (or legacy undefined) invoices in the archive lists
-    if (inv.isDelivered === false) return false;
+    // Only display delivered invoices OR invoices older than 48 hours (failsafe auto-archive)
+    const dTime = new Date(inv.date).getTime();
+    const isOld = !isNaN(dTime) && Date.now() - dTime > 48 * 60 * 60 * 1000;
+    
+    if (inv.isDelivered === false && !isOld) return false;
 
     const cust = customers.find(c => c.id === inv.customerId);
     const q = searchInvoice.toLowerCase();
@@ -1724,7 +1727,15 @@ export default function InvoiceTab({
 
           {/* Active (Pending Delivery) Invoices List */}
           {activeSubTab === 'create' && (() => {
-            const activeInvs = invoices.filter(inv => !inv.isDelivered);
+            const activeInvs = invoices.filter(inv => {
+              if (inv.isDelivered) return false;
+              // نظام حماية: إخفاء الفواتير المعلقة التي مر عليها أكثر من 48 ساعة تلقائياً ونقلها للأرشيف لمنع التراكم
+              const dTime = new Date(inv.date).getTime();
+              if (!isNaN(dTime) && Date.now() - dTime > 48 * 60 * 60 * 1000) {
+                return false;
+              }
+              return true;
+            });
             if (activeInvs.length === 0) return null;
             return (
               <div className="bg-[#FFFFFF] p-5 rounded-2xl border-2 border-dashed border-sky-200 shadow-xs flex flex-col gap-4 mt-4 animate-fade-in text-right" dir="rtl">
@@ -2231,6 +2242,7 @@ export default function InvoiceTab({
                     _previousPaid: paymentModal.invoice!.paidAmount ?? 0
                   });
 
+          showToast('✓ تم تأكيد السداد! جاري تحديث المديونية بالشيت ☁️');
                   setPaymentModal({...paymentModal, isOpen: false});
                 }}
                 className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white py-2.5 rounded-xl font-bold active:scale-95 transition-all shadow-md text-sm cursor-pointer"
