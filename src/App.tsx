@@ -39,6 +39,14 @@ import { idbGet, idbSet } from './utils/idb';
 // 🌐 رابط جوجل شيت الموحد والمدمج في التطبيق مباشرة
 const APP_SCRIPT_URL = import.meta.env.VITE_GOOGLE_SHEETS_URL || "https://script.google.com/macros/s/AKfycbyGO8Af8bOs75_F-ttOFqR8WjVj4l9IW1IJGgDqLEu1rGdbky3balgRpZUdo03r6Kla/exec";
 
+const getSafeScriptUrl = (savedUrl?: string) => {
+  const url = savedUrl?.trim();
+  if (!url || url === "ضع_رابط_الاسكريبت_الخاص_بك_هنا" || url.includes("AKfycbw64AiaMZkBBb2eJxUdCkRboejwIvWGxZoGo1Ub0LrqGtL8BeFim0qN_k02eaeasurU")) {
+    return APP_SCRIPT_URL;
+  }
+  return url;
+};
+
 export default function App() {
   const [activeTab, setActiveTab] = useState<string>('dashboard');
   const [isChatOpen, setIsChatOpen] = useState<boolean>(false);
@@ -373,7 +381,7 @@ export default function App() {
 
   // ☁️ مزامنة تلقائية صامتة عند بدء تشغيل التطبيق لضمان سحب أحدث بيانات المناديب والأسعار من السحاب
   useEffect(() => {
-    const scriptUrl = settings.googleSheetsUrl?.trim() || APP_SCRIPT_URL;
+    const scriptUrl = getSafeScriptUrl(settings.googleSheetsUrl);
     if (isDbLoaded && currentUser && scriptUrl && scriptUrl !== "ضع_رابط_الاسكريبت_الخاص_بك_هنا") {
       const timer = setTimeout(() => {
         handleUpdateData(true); // سحب صامت لدمج البيانات الجديدة دون مسح البيانات الحالية
@@ -532,7 +540,7 @@ export default function App() {
           idbSet('last_auto_backup_sys', exportData);
           
           // إرسال النسخة الاحتياطية إلى Google Drive مباشرة بدلاً من تحميلها على الهاتف فقط
-          const scriptUrl = settings.googleSheetsUrl?.trim() || APP_SCRIPT_URL;
+          const scriptUrl = getSafeScriptUrl(settings.googleSheetsUrl);
           if (scriptUrl && scriptUrl !== "ضع_رابط_الاسكريبت_الخاص_بك_هنا") {
             fetch(scriptUrl.trim(), {
               method: 'POST',
@@ -558,7 +566,7 @@ export default function App() {
 
   // التهيئة الصامتة (Silent Provisioning) من السيرفر للأجهزة الجديدة بدون تدخل المستخدم
   useEffect(() => {
-    const scriptUrl = settings.googleSheetsUrl?.trim() || APP_SCRIPT_URL;
+    const scriptUrl = getSafeScriptUrl(settings.googleSheetsUrl);
     if (scriptUrl && usersList.length <= 1) {
       handleUpdateData(true); // جلب البيانات صامتاً في الخلفية
     }
@@ -625,7 +633,7 @@ export default function App() {
 
   // Operations handlers
   const promptForSync = (actionDesc: string) => {
-    const scriptUrl = settings.googleSheetsUrl?.trim() || APP_SCRIPT_URL;
+    const scriptUrl = getSafeScriptUrl(settings.googleSheetsUrl);
     if (!scriptUrl) return;
     setTimeout(async () => {
       showToast(`☁️ جاري الحفظ السحابي...`);
@@ -916,7 +924,7 @@ export default function App() {
   };
 
   async function syncAllDataToGoogle(silent = false): Promise<boolean> {
-    const scriptUrl = settings.googleSheetsUrl?.trim() || APP_SCRIPT_URL;
+    const scriptUrl = getSafeScriptUrl(settings.googleSheetsUrl);
     if (!scriptUrl || scriptUrl === "ضع_رابط_الاسكريبت_الخاص_بك_هنا") {
       if (!silent) alert('تنبيه: لم يتم تضمين رابط مزامنة جوجل شيت في ملفات النظام.');
       return false;
@@ -1351,7 +1359,7 @@ export default function App() {
   }
 
   async function handleUpdateData(isSilent = false) {
-    const scriptUrl = settings.googleSheetsUrl?.trim() || APP_SCRIPT_URL;
+    const scriptUrl = getSafeScriptUrl(settings.googleSheetsUrl);
     if (!scriptUrl || scriptUrl === "ضع_رابط_الاسكريبت_الخاص_بك_هنا") {
       if (!isSilent) {
         showToast("تنبيه: لم يتم إعداد رابط جوجل شيت في ملفات النظام. جاري إعادة تشغيل عادية...");

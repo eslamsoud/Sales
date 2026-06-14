@@ -79,6 +79,14 @@ class MapErrorBoundary extends React.Component<{children: React.ReactNode}, { ha
 
 const APP_SCRIPT_URL = import.meta.env.VITE_GOOGLE_SHEETS_URL || "https://script.google.com/macros/s/AKfycbyGO8Af8bOs75_F-ttOFqR8WjVj4l9IW1IJGgDqLEu1rGdbky3balgRpZUdo03r6Kla/exec";
 
+const getSafeScriptUrl = (savedUrl?: string) => {
+  const url = savedUrl?.trim();
+  if (!url || url === "ضع_رابط_الاسكريبت_الخاص_بك_هنا" || url.includes("AKfycbw64AiaMZkBBb2eJxUdCkRboejwIvWGxZoGo1Ub0LrqGtL8BeFim0qN_k02eaeasurU")) {
+    return APP_SCRIPT_URL;
+  }
+  return url;
+};
+
 const MAPS_LIBRARIES = ['places', 'geometry', 'marker'];
 
 const EGYPT_CITIES: Record<string, string[]> = {
@@ -733,7 +741,7 @@ export default function ManageTab({
   const [aiName, setAiName] = useState(settings.aiName || 'المستشار الميداني');
   const [aiVoiceURI, setAiVoiceURI] = useState(settings.aiVoiceURI || '');
   const [googleMapsApiKey, setGoogleMapsApiKey] = useState(() => settings.googleMapsApiKey || localStorage.getItem('GMP_API_KEY_FALLBACK') || '');
-  const [googleSheetsUrl, setGoogleSheetsUrl] = useState(settings.googleSheetsUrl || APP_SCRIPT_URL);
+  const [googleSheetsUrl, setGoogleSheetsUrl] = useState(() => getSafeScriptUrl(settings.googleSheetsUrl));
   const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
 
   // Sync settings when they are loaded from IndexedDB asynchronously
@@ -748,7 +756,7 @@ export default function ManageTab({
       if (settings.aiName) setAiName(settings.aiName);
       if (settings.aiVoiceURI) setAiVoiceURI(settings.aiVoiceURI);
       if (settings.googleMapsApiKey) setGoogleMapsApiKey(settings.googleMapsApiKey);
-      if (settings.googleSheetsUrl) setGoogleSheetsUrl(settings.googleSheetsUrl);
+      if (settings.googleSheetsUrl) setGoogleSheetsUrl(getSafeScriptUrl(settings.googleSheetsUrl));
     }
   }, [settings]);
 
