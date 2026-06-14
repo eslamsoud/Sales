@@ -95,12 +95,12 @@ export default function AuthGate({ usersList, customersList = [], onUpdateUsers,
 
       // Check delegate password (bypass entirely if the phone is listed in the customers database)
       if (!isCustomerPhone) {
-        const enteredPass = password.trim().replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d).toString());
-        let actualPass = decodePass(found.password);
+        const enteredPass = password.replace(/[\s\u200B-\u200D\uFEFF\u200E\u200F]/g, '').replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d).toString());
+        let actualPass = decodePass(found.password).replace(/[\s\u200B-\u200D\uFEFF\u200E\u200F]/g, '');
 
         // Fallback for manager if password mismatch but matches the admin pin
         if (found.role === 'owner' || found.phone === '01228466613') {
-          const adminPass = localStorage.getItem('owner_passcode_sys') || '1987';
+          const adminPass = (localStorage.getItem('owner_passcode_sys') || '1987').replace(/[\s\u200B-\u200D\uFEFF\u200E\u200F]/g, '');
           if (enteredPass === adminPass) {
             actualPass = enteredPass;
           }

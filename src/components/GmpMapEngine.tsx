@@ -133,6 +133,30 @@ function MapSearchInner({ storeType, batchSize, onResults, isSearching, setIsSea
   const leafletMapRef = useRef<any>(null);
   const leafletCircleRef = useRef<any>(null);
 
+  // مستمع لفشل مصادقة خرائط جوجل
+  useEffect(() => {
+    const originalHandler = window.gm_authFailure;
+    window.gm_authFailure = () => {
+      console.error("Google Maps auth failure detected.");
+      showToast("⚠️ عذراً، تعذر تحميل خرائط جوجل. يرجى التأكد من صلاحية المفتاح وتفعيل الفوترة (Billing) في جوجل كلاود.");
+      
+      const style = document.createElement('style');
+      style.innerHTML = `
+        .gm-err-container, .gm-err-content, .gm-err-title { display: none !important; opacity: 0 !important; visibility: hidden !important; }
+        .gm-style-bg { display: none !important; }
+        div[style*="background-color: rgba(15, 15, 15, 0.6)"] { display: none !important; }
+        div[style*="z-index: 1000000"] { display: none !important; }
+      `;
+      document.head.appendChild(style);
+
+      if (originalHandler) {
+        try { originalHandler(); } catch (e) {}
+      }
+    };
+    return () => {
+      window.gm_authFailure = originalHandler;
+    };
+  }, []);
 
   // تحميل Leaflet ديناميكياً عند تفعيل OSM Fallback
   useEffect(() => {
@@ -362,7 +386,7 @@ function MapSearchInner({ storeType, batchSize, onResults, isSearching, setIsSea
 
   // دالة البحث الكلاسيكي في خرائط جوجل في حال عدم تفعيل Places API (New)
   const searchClassicPlaces = (queryText: string): Promise<any[]> => {
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       try {
         if (!window.google || !window.google.maps || !window.google.maps.places) {
           resolve([]);
@@ -378,6 +402,10 @@ function MapSearchInner({ storeType, batchSize, onResults, isSearching, setIsSea
         }, (results, status) => {
           if (status === window.google.maps.places.PlacesServiceStatus.OK && results) {
             resolve(results);
+          } else if (status === window.google.maps.places.PlacesServiceStatus.REQUEST_DENIED || status === 'REQUEST_DENIED') {
+            reject(new Error("مفتاح خرائط جوجل غير صالح أو يحتاج لتفعيل الفوترة (Billing). تم رفض الطلب."));
+          } else if (status === window.google.maps.places.PlacesServiceStatus.OVER_QUERY_LIMIT || status === 'OVER_QUERY_LIMIT') {
+            reject(new Error("تم تجاوز الحد المسموح للاستخدام في مفتاح خرائط جوجل."));
           } else {
             resolve([]);
           }
@@ -515,8 +543,11 @@ function MapSearchInner({ storeType, batchSize, onResults, isSearching, setIsSea
               }
             });
           }
-        } catch (e) {
+        } catch (e: any) {
            console.warn(`Query failed for: ${qObj.query}`, e);
+           if (e.message && (e.message.includes('تم رفض الطلب') || e.message.includes('غير صالح') || e.message.includes('تجاوز الحد'))) {
+             throw e; // إعادة رمي الخطأ ليتم التقاطه في الـ catch الخارجي وإظهار التنبيه للمستخدم
+           }
         }
       }
 

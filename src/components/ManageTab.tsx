@@ -42,13 +42,17 @@ import { idbSet } from '../utils/idb';
 import { Map as GoogleMap, AdvancedMarker, Pin, useMapsLibrary } from '@vis.gl/react-google-maps';
 
 const getActiveGoogleMapsKey = () => {
+  const localKey = localStorage.getItem('GMP_API_KEY_FALLBACK') || '';
+  if (localKey && localKey !== 'YOUR_API_KEY') return localKey;
+
   let envKey = '';
   try {
-    envKey = import.meta.env.VITE_GOOGLE_MAPS_PLATFORM_KEY || process.env.GOOGLE_MAPS_PLATFORM_KEY || '';
+    envKey = import.meta.env.VITE_GOOGLE_MAPS_PLATFORM_KEY || import.meta.env.VITE_GOOGLE_MAPS_API_KEY || process.env.GOOGLE_MAPS_PLATFORM_KEY || '';
   } catch (e) {}
   
-  const key = envKey || localStorage.getItem('GMP_API_KEY_FALLBACK') || '';
-  return key && key !== 'YOUR_API_KEY' ? key : 'AIzaSyDummyKeyForDevelopmentPurposesOnly1';
+  if (envKey && envKey !== 'YOUR_API_KEY') return envKey;
+  
+  return 'AIzaSyDummyKeyForDevelopmentPurposesOnly1';
 };
 
 class MapErrorBoundary extends React.Component<{children: React.ReactNode}, { hasError: boolean; error: any }> {
@@ -1580,11 +1584,16 @@ export default function ManageTab({
                 }}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') {
-                  const typed = managerTypedPassword.trim().replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d).toString());
-                    const correct = localStorage.getItem('owner_passcode_sys') || '1987';
+                    const typed = managerTypedPassword.trim().replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d).toString());
+                    const correct = (localStorage.getItem('owner_passcode_sys') || '1987').trim();
                     let userPass = '';
-                    try { userPass = decodeURIComponent(atob(currentUser?.password || '')); } catch(err) {}
-                  if (typed === correct || typed === userPass) {
+                    try { userPass = decodeURIComponent(atob(currentUser?.password || '')).trim(); } catch(err) { userPass = String(currentUser?.password || '').trim(); }
+                    let ownerPass = '';
+                    const ownerUser = usersList.find(u => u.role === 'owner' || u.phone === '01228466613');
+                    if (ownerUser) {
+                      try { ownerPass = decodeURIComponent(atob(ownerUser.password || '')).trim(); } catch(err) { ownerPass = String(ownerUser.password || '').trim(); }
+                    }
+                    if (typed === correct || typed === userPass || (ownerPass && typed === ownerPass)) {
                       setIsManagerUnlocked(true);
                     } else {
                       setManagerLoginError('عذراً، الرقم السري للمالك غير صحيح!');
@@ -1596,11 +1605,16 @@ export default function ManageTab({
               <button
                 type="button"
                 onClick={() => {
-                const typed = managerTypedPassword.trim().replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d).toString());
-                  const correct = localStorage.getItem('owner_passcode_sys') || '1987';
+                  const typed = managerTypedPassword.trim().replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d).toString());
+                  const correct = (localStorage.getItem('owner_passcode_sys') || '1987').trim();
                   let userPass = '';
-                  try { userPass = decodeURIComponent(atob(currentUser?.password || '')); } catch(err) {}
-                  if (typed === correct || typed === userPass) {
+                  try { userPass = decodeURIComponent(atob(currentUser?.password || '')).trim(); } catch(err) { userPass = String(currentUser?.password || '').trim(); }
+                  let ownerPass = '';
+                  const ownerUser = usersList.find(u => u.role === 'owner' || u.phone === '01228466613');
+                  if (ownerUser) {
+                    try { ownerPass = decodeURIComponent(atob(ownerUser.password || '')).trim(); } catch(err) { ownerPass = String(ownerUser.password || '').trim(); }
+                  }
+                  if (typed === correct || typed === userPass || (ownerPass && typed === ownerPass)) {
                     setIsManagerUnlocked(true);
                   } else {
                     setManagerLoginError('عذراً، الرقم السري للمالك غير صحيح!');
@@ -2245,10 +2259,16 @@ export default function ManageTab({
                       <button
                         type="button"
                         onClick={() => {
-                          const correct = localStorage.getItem('owner_passcode_sys') || '1987';
+                          const correct = (localStorage.getItem('owner_passcode_sys') || '1987').trim();
                           let userPass = '';
-                          try { userPass = decodeURIComponent(atob(currentUser?.password || '')); } catch(err) {}
-                          if (currentOwnerPassword !== correct && currentOwnerPassword !== userPass) {
+                          try { userPass = decodeURIComponent(atob(currentUser?.password || '')).trim(); } catch(err) { userPass = String(currentUser?.password || '').trim(); }
+                          let ownerPass = '';
+                          const ownerUser = usersList.find(u => u.role === 'owner' || u.phone === '01228466613');
+                          if (ownerUser) {
+                            try { ownerPass = decodeURIComponent(atob(ownerUser.password || '')).trim(); } catch(err) { ownerPass = String(ownerUser.password || '').trim(); }
+                          }
+                          const typedCurrent = currentOwnerPassword.trim();
+                          if (typedCurrent !== correct && typedCurrent !== userPass && typedCurrent !== ownerPass) {
                             showToast('⚠️ الرمز السري الحالي غير صحيح!');
                             return;
                           }
@@ -3186,11 +3206,20 @@ export default function ManageTab({
                       value={googlePassword}
                       onChange={(e) => setGooglePassword(e.target.value)}
                       onKeyDown={(e) => {
-                        const correct = localStorage.getItem('owner_passcode_sys') || '1987';
+                        const correct = (localStorage.getItem('owner_passcode_sys') || '1987').trim();
                         let userPass = '';
-                        try { userPass = decodeURIComponent(atob(currentUser?.password || '')); } catch(err) {}
-                        if (e.key === 'Enter' && (googlePassword === correct || googlePassword === userPass)) {
-                          setIsGooglePasswordValid(true);
+                        try { userPass = decodeURIComponent(atob(currentUser?.password || '')).trim(); } catch(err) { userPass = String(currentUser?.password || '').trim(); }
+                        let ownerPass = '';
+                        const ownerUser = usersList.find(u => u.role === 'owner' || u.phone === '01228466613');
+                        if (ownerUser) {
+                          try { ownerPass = decodeURIComponent(atob(ownerUser.password || '')).trim(); } catch(err) { ownerPass = String(ownerUser.password || '').trim(); }
+                        }
+                        if (e.key === 'Enter') {
+                          if (googlePassword === correct || googlePassword === userPass || (ownerPass && googlePassword === ownerPass)) {
+                            setIsGooglePasswordValid(true);
+                          } else {
+                            showToast('⚠️ كلمة المرور غير صحيحة!');
+                          }
                         }
                       }}
                       className="w-full bg-[#F7FAFC] border border-slate-200 rounded-lg p-2.5 text-center focus:ring-1 focus:ring-amber-500 font-bold"
@@ -3198,10 +3227,15 @@ export default function ManageTab({
                     <button
                       type="button"
                       onClick={() => {
-                        const correct = localStorage.getItem('owner_passcode_sys') || '1987';
+                        const correct = (localStorage.getItem('owner_passcode_sys') || '1987').trim();
                         let userPass = '';
-                        try { userPass = decodeURIComponent(atob(currentUser?.password || '')); } catch(err) {}
-                        if (googlePassword === correct || googlePassword === userPass) {
+                        try { userPass = decodeURIComponent(atob(currentUser?.password || '')).trim(); } catch(err) { userPass = String(currentUser?.password || '').trim(); }
+                        let ownerPass = '';
+                        const ownerUser = usersList.find(u => u.role === 'owner' || u.phone === '01228466613');
+                        if (ownerUser) {
+                          try { ownerPass = decodeURIComponent(atob(ownerUser.password || '')).trim(); } catch(err) { ownerPass = String(ownerUser.password || '').trim(); }
+                        }
+                        if (googlePassword === correct || googlePassword === userPass || (ownerPass && googlePassword === ownerPass)) {
                           setIsGooglePasswordValid(true);
                         } else {
                           showToast('⚠️ كلمة المرور غير صحيحة!');

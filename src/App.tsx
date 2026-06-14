@@ -46,6 +46,21 @@ export default function App() {
   const [confirmState, setConfirmState] = useState<{message: string, isAlert: boolean, resolve: (val: boolean)=>void} | null>(null);
 
   useEffect(() => {
+    window.gm_authFailure = () => {
+      console.error("Google Maps auth failure detected globally.");
+      const style = document.createElement('style');
+      style.innerHTML = `
+        .gm-err-container, .gm-err-content, .gm-err-title { display: none !important; opacity: 0 !important; visibility: hidden !important; }
+        .gm-style-bg { display: none !important; }
+        div[style*="background-color: rgba(15, 15, 15, 0.6)"] { display: none !important; }
+        div[style*="z-index: 1000000"] { display: none !important; }
+      `;
+      document.head.appendChild(style);
+      toastEvent.dispatchEvent(new CustomEvent('show-toast', { detail: "⚠️ مفتاح خرائط جوجل يحتاج لتفعيل الفوترة (Billing). تم إخفاء رسالة الخطأ مؤقتاً لتتمكن من المعاينة." }));
+    };
+  }, []);
+
+  useEffect(() => {
     const handleShowConfirm = (e: any) => {
       setConfirmState(e.detail);
     };
@@ -85,14 +100,25 @@ export default function App() {
       return;
     }
 
-    const entered = lockPassword.trim().replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d).toString());
+    const entered = lockPassword.replace(/[\s\u200B-\u200D\uFEFF\u200E\u200F]/g, '').replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d).toString());
     let correct = '';
-    try { correct = decodeURIComponent(atob(currentUser.password || '')); }
-    catch(e) { correct = currentUser.password || '1234'; }
+    try { correct = decodeURIComponent(atob(currentUser.password || '')).replace(/[\s\u200B-\u200D\uFEFF\u200E\u200F]/g, ''); }
+    catch(e) { correct = String(currentUser.password || '1234').replace(/[\s\u200B-\u200D\uFEFF\u200E\u200F]/g, ''); }
 
     if (currentUser.phone === '01228466613' || currentUser.role === 'owner') {
-       const adminPass = localStorage.getItem('owner_passcode_sys') || '1987';
-       if (entered === adminPass) {
+       const adminPass = (localStorage.getItem('owner_passcode_sys') || '1987').replace(/[\s\u200B-\u200D\uFEFF\u200E\u200F]/g, '');
+       let ownerPass = '';
+       try {
+         const raw = localStorage.getItem('users_permissions_sys');
+         if (raw) {
+           const list = JSON.parse(raw);
+           const ownerUser = list.find((u: any) => u.role === 'owner' || u.phone === '01228466613');
+           if (ownerUser) {
+             try { ownerPass = decodeURIComponent(atob(ownerUser.password || '')).replace(/[\s\u200B-\u200D\uFEFF\u200E\u200F]/g, ''); } catch(e) { ownerPass = String(ownerUser.password || '').replace(/[\s\u200B-\u200D\uFEFF\u200E\u200F]/g, ''); }
+           }
+         }
+       } catch(e) {}
+       if (entered === adminPass || (ownerPass && entered === ownerPass)) {
            correct = entered;
        }
     }
@@ -1380,7 +1406,7 @@ export default function App() {
             canApplyDiscount: u.canApplyDiscount !== false,
             maxDiscountPercentOfProfit: u.maxDiscountPercentOfProfit !== undefined ? Number(u.maxDiscountPercentOfProfit) : 100,
             maxExtraDiscountAmount: u.maxExtraDiscountAmount !== undefined && u.maxExtraDiscountAmount !== '' ? Number(u.maxExtraDiscountAmount) : undefined,
-            password: btoa(encodeURIComponent(String(u.password || '').replace(/^'/, ''))),
+            password: btoa(encodeURIComponent(String(u.password || '').replace(/^'/, '').trim())),
             customRoleName: String(u.customRoleName || ''),
             lastActive: u.lastActive || undefined,
             lastLat: Number(u.lastLat) || undefined,
@@ -1408,10 +1434,10 @@ export default function App() {
           const managerFromSheet = uniqueMappedUsers.find((u: any) => u.phone === '01228466613' || u.role === 'owner');
           if (managerFromSheet && managerFromSheet.password) {
              try {
-                const decoded = decodeURIComponent(atob(managerFromSheet.password));
+                const decoded = decodeURIComponent(atob(managerFromSheet.password)).trim();
                 localStorage.setItem('owner_passcode_sys', decoded);
              } catch(e) {
-                localStorage.setItem('owner_passcode_sys', managerFromSheet.password);
+                localStorage.setItem('owner_passcode_sys', String(managerFromSheet.password).trim());
              }
           }
           
@@ -1776,18 +1802,13 @@ export default function App() {
   // 3. مفتاح مخزن في الإعدادات (يأتي من Google Sheets)
   // 4. مفتاح مخزن في localStorage (fallback فوري قبل جلب الإعدادات)
   let envKey = '';
-  try { envKey = import.meta.env.VITE_GOOGLE_MAPS_PLATFORM_KEY?.trim() || ''; } catch(e) {}
+  try { envKey = import.meta.env.VITE_GOOGLE_MAPS_PLATFORM_KEY?.trim() || import.meta.env.VITE_GOOGLE_MAPS_API_KEY?.trim() || ''; } catch(e) {}
+  if (envKey === 'YOUR_API_KEY') envKey = '';
 
-  const hostname = typeof window !== 'undefined' ? window.location.hostname : '';
-  const isDevEnv = hostname === 'localhost' || hostname.endsWith('.vercel.app');
-  const devKey = (() => { try { return import.meta.env.VITE_GOOGLE_MAPS_DEV_KEY?.trim() || ''; } catch(e) { return ''; } })();
+  const localKey = settings.googleMapsApiKey?.trim() || localStorage.getItem('GMP_API_KEY_FALLBACK')?.trim() || '';
+  const validLocalKey = localKey && localKey !== 'YOUR_API_KEY' ? localKey : '';
 
-  const activeKey = 
-    (isDevEnv && devKey ? devKey : '') ||
-    envKey ||
-    settings.googleMapsApiKey?.trim() ||
-    localStorage.getItem('GMP_API_KEY_FALLBACK')?.trim() ||
-    '';
+  const activeKey = validLocalKey || envKey || '';
 
   return (
     <APIProvider key={activeKey || 'no-key'} apiKey={activeKey} version="beta" libraries={MAPS_LIBRARIES}>
