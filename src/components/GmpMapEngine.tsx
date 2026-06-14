@@ -399,9 +399,29 @@ function MapSearchInner({ storeType, batchSize, onResults, isSearching, setIsSea
           query: queryText,
           location: mapInstance ? mapInstance.getCenter() : new window.google.maps.LatLng(center.lat, center.lng),
           radius: mapRadius
-        }, (results, status) => {
+        }, async (results, status) => {
           if (status === window.google.maps.places.PlacesServiceStatus.OK && results) {
-            resolve(results);
+            const detailedResults = [];
+            // جلب التفاصيل (الهاتف) لكل محل بشكل متسلسل مع تأخير لتفادي حظر OVER_QUERY_LIMIT
+            for (const place of results) {
+              if (place.place_id) {
+                await new Promise<void>((resolveDetails) => {
+                  service.getDetails({
+                    placeId: place.place_id,
+                    fields: ['formatted_phone_number']
+                  }, (details, detailStatus) => {
+                    if (detailStatus === window.google.maps.places.PlacesServiceStatus.OK && details) {
+                      place.formatted_phone_number = details.formatted_phone_number;
+                    }
+                    resolveDetails();
+                  });
+                });
+                // تأخير 200 ملي ثانية لعدم تجاوز حد استهلاك جوجل API
+                await new Promise(res => setTimeout(res, 200));
+              }
+              detailedResults.push(place);
+            }
+            resolve(detailedResults);
           } else if (status === window.google.maps.places.PlacesServiceStatus.REQUEST_DENIED || status === 'REQUEST_DENIED') {
             reject(new Error("مفتاح خرائط جوجل غير صالح أو يحتاج لتفعيل الفوترة (Billing). تم رفض الطلب."));
           } else if (status === window.google.maps.places.PlacesServiceStatus.OVER_QUERY_LIMIT || status === 'OVER_QUERY_LIMIT') {

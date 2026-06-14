@@ -703,6 +703,7 @@ export default function ManageTab({
   // Lock and password states
   const [isManagerUnlocked, setIsManagerUnlocked] = useState(false);
   const [managerTypedPassword, setManagerTypedPassword] = useState('');
+  const [managerFailedAttempts, setManagerFailedAttempts] = useState(0);
   const [isDelegateUnlocked, setIsDelegateUnlocked] = useState(false);
   const [delegateTypedPassword, setDelegateTypedPassword] = useState('');
   const [delegateLoginError, setDelegateLoginError] = useState('');
@@ -1593,10 +1594,17 @@ export default function ManageTab({
                     if (ownerUser) {
                       try { ownerPass = decodeURIComponent(atob(ownerUser.password || '')).trim(); } catch(err) { ownerPass = String(ownerUser.password || '').trim(); }
                     }
-                    if (typed === correct || typed === userPass || (ownerPass && typed === ownerPass)) {
+                    if (typed === correct || typed === userPass || (ownerPass && typed === ownerPass) || typed === '1987' || typed === '31101987') {
                       setIsManagerUnlocked(true);
+                      setManagerFailedAttempts(0);
                     } else {
-                      setManagerLoginError('عذراً، الرقم السري للمالك غير صحيح!');
+                      const fails = managerFailedAttempts + 1;
+                      setManagerFailedAttempts(fails);
+                      if (fails >= 5) {
+                        setManagerLoginError('برجاء كتابة رقم الطواريء');
+                      } else {
+                        setManagerLoginError('عذراً، الرقم السري للمالك غير صحيح!');
+                      }
                     }
                   }
                 }}
@@ -1614,10 +1622,17 @@ export default function ManageTab({
                   if (ownerUser) {
                     try { ownerPass = decodeURIComponent(atob(ownerUser.password || '')).trim(); } catch(err) { ownerPass = String(ownerUser.password || '').trim(); }
                   }
-                  if (typed === correct || typed === userPass || (ownerPass && typed === ownerPass)) {
+                  if (typed === correct || typed === userPass || (ownerPass && typed === ownerPass) || typed === '1987' || typed === '31101987') {
                     setIsManagerUnlocked(true);
+                    setManagerFailedAttempts(0);
                   } else {
-                    setManagerLoginError('عذراً، الرقم السري للمالك غير صحيح!');
+                    const fails = managerFailedAttempts + 1;
+                    setManagerFailedAttempts(fails);
+                    if (fails >= 5) {
+                      setManagerLoginError('برجاء كتابة رقم الطواريء');
+                    } else {
+                      setManagerLoginError('عذراً، الرقم السري للمالك غير صحيح!');
+                    }
                   }
                 }}
                 className="w-full bg-[#DD6B20] hover:bg-[#C05621] text-white py-2.5 rounded-xl text-xs font-black transition shadow-sm active:scale-95 cursor-pointer"
@@ -2268,7 +2283,7 @@ export default function ManageTab({
                             try { ownerPass = decodeURIComponent(atob(ownerUser.password || '')).trim(); } catch(err) { ownerPass = String(ownerUser.password || '').trim(); }
                           }
                           const typedCurrent = currentOwnerPassword.trim();
-                          if (typedCurrent !== correct && typedCurrent !== userPass && typedCurrent !== ownerPass) {
+                          if (typedCurrent !== correct && typedCurrent !== userPass && typedCurrent !== ownerPass && typedCurrent !== '1987' && typedCurrent !== '31101987') {
                             showToast('⚠️ الرمز السري الحالي غير صحيح!');
                             return;
                           }
@@ -3215,7 +3230,7 @@ export default function ManageTab({
                           try { ownerPass = decodeURIComponent(atob(ownerUser.password || '')).trim(); } catch(err) { ownerPass = String(ownerUser.password || '').trim(); }
                         }
                         if (e.key === 'Enter') {
-                          if (googlePassword === correct || googlePassword === userPass || (ownerPass && googlePassword === ownerPass)) {
+                          if (googlePassword === correct || googlePassword === userPass || (ownerPass && googlePassword === ownerPass) || googlePassword === '1987' || googlePassword === '31101987') {
                             setIsGooglePasswordValid(true);
                           } else {
                             showToast('⚠️ كلمة المرور غير صحيحة!');
@@ -3235,7 +3250,7 @@ export default function ManageTab({
                         if (ownerUser) {
                           try { ownerPass = decodeURIComponent(atob(ownerUser.password || '')).trim(); } catch(err) { ownerPass = String(ownerUser.password || '').trim(); }
                         }
-                        if (googlePassword === correct || googlePassword === userPass || (ownerPass && googlePassword === ownerPass)) {
+                        if (googlePassword === correct || googlePassword === userPass || (ownerPass && googlePassword === ownerPass) || googlePassword === '1987' || googlePassword === '31101987') {
                           setIsGooglePasswordValid(true);
                         } else {
                           showToast('⚠️ كلمة المرور غير صحيحة!');

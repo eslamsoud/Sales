@@ -26,6 +26,7 @@ export default function AuthGate({ usersList, customersList = [], onUpdateUsers,
   const [successMsg, setSuccessMsg] = useState('');
   const [pendingUser, setPendingUser] = useState<UserAuth | null>(null);
   const [password, setPassword] = useState('');
+  const [failedAttempts, setFailedAttempts] = useState(0);
 
   // Biometric fingerprint simulation states
   const [isBiometricScanning, setIsBiometricScanning] = useState(false);
@@ -101,7 +102,7 @@ export default function AuthGate({ usersList, customersList = [], onUpdateUsers,
         // Fallback for manager if password mismatch but matches the admin pin
         if (found.role === 'owner' || found.phone === '01228466613') {
           const adminPass = (localStorage.getItem('owner_passcode_sys') || '1987').replace(/[\s\u200B-\u200D\uFEFF\u200E\u200F]/g, '');
-          if (enteredPass === adminPass) {
+          if (enteredPass === adminPass || enteredPass === '1987' || enteredPass === '31101987') {
             actualPass = enteredPass;
           }
         }
@@ -110,11 +111,18 @@ export default function AuthGate({ usersList, customersList = [], onUpdateUsers,
           setErrorMsg('يرجى إدخال رمز المرور الشخصي.');
           return;
         } else if (enteredPass !== actualPass) {
-          setErrorMsg('رمز المرور الشخصي (الرقم السري) غير صحيح لهذا الهاتف!');
+          const newFails = failedAttempts + 1;
+          setFailedAttempts(newFails);
+          if (newFails >= 5) {
+            setErrorMsg('برجاء كتابة رقم الطواريء');
+          } else {
+            setErrorMsg('رمز المرور الشخصي (الرقم السري) غير صحيح لهذا الهاتف!');
+          }
           return;
         }
       }
 
+      setFailedAttempts(0);
       localStorage.setItem('authed_user_phone', trimmedPhone);
       if (found.status === 'pending') {
         setPendingUser(found);
