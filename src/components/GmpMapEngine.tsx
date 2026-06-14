@@ -333,13 +333,30 @@ function MapSearchInner({ storeType, batchSize, onResults, isSearching, setIsSea
         out center;
       `;
       
-      const osmResponse = await fetch('https://overpass-api.de/api/interpreter', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: 'data=' + encodeURIComponent(overpassQuery)
-      });
+      const overpassEndpoints = [
+        'https://overpass-api.de/api/interpreter',
+        'https://lz4.overpass-api.de/api/interpreter',
+        'https://z.overpass-api.de/api/interpreter'
+      ];
+
+      let osmResponse = null;
+      for (const endpoint of overpassEndpoints) {
+        try {
+          const res = await fetch(endpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: 'data=' + encodeURIComponent(overpassQuery)
+          });
+          if (res.ok) {
+            osmResponse = res;
+            break; // نجح الاتصال، أوقف المحاولة مع الخوادم الأخرى
+          }
+        } catch (e) {
+          console.warn(`OSM endpoint ${endpoint} failed. Trying next...`);
+        }
+      }
       
-      if (!osmResponse.ok) throw new Error('تعذر جلب البيانات من خادم الخرائط المفتوحة.');
+      if (!osmResponse) throw new Error('تعذر جلب البيانات من خوادم الخرائط المفتوحة. يرجى التأكد من اتصال الإنترنت أو المحاولة لاحقاً.');
       
       const data = await osmResponse.json();
       if (data && data.elements) {
