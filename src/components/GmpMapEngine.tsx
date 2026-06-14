@@ -1,16 +1,8 @@
 // @ts-nocheck
 import React, { useEffect, useState, useRef } from 'react';
-import { APIProvider, Map, AdvancedMarker, Pin, useMap, useMapsLibrary } from '@vis.gl/react-google-maps';
+import { APIProvider, Map, useMap, useMapsLibrary } from '@vis.gl/react-google-maps';
 import { Loader2, Search, MapPin, Navigation } from 'lucide-react';
 import { showToast } from '../utils/toast';
-
-const API_KEY =
-  import.meta.env.VITE_GOOGLE_MAPS_PLATFORM_KEY ||
-  (globalThis as any).process?.env?.GOOGLE_MAPS_PLATFORM_KEY ||
-  (globalThis as any).GOOGLE_MAPS_PLATFORM_KEY ||
-  localStorage.getItem('GMP_API_KEY_FALLBACK') || '';
-
-let hasValidKey = Boolean(API_KEY) && API_KEY !== 'YOUR_API_KEY';
 
 const EGYPT_CITIES: Record<string, string[]> = {
   'القاهرة': ['مصر الجديدة', 'مدينة نصر', 'المعادي', 'التجمع الخامس', 'شبرا', 'المرج', 'حلوان', 'المطرية', 'الزيتون', 'السلام', 'البساتين', 'دار السلام', 'الخليفة', 'المقطم', 'القاهرة الجديدة', 'بدر', 'الشروق', '15 مايو', 'وسط البلد', 'عين شمس', 'الزمالك'],
@@ -42,15 +34,35 @@ const EGYPT_CITIES: Record<string, string[]> = {
   'جنوب سيناء': ['الطور', 'شرم الشيخ', 'دهب', 'نويبع', 'طابا', 'سانت كاترين', 'أبو رديس', 'أبو زنيمة', 'رأس سدر']
 };
 
+class MapErrorBoundary extends React.Component<{children: React.ReactNode}, { hasError: boolean }> {
+  constructor(props: any) {
+    super(props);
+    this.state = { hasError: false };
+  }
+  static getDerivedStateFromError(error: any) {
+    return { hasError: true };
+  }
+  componentDidCatch(error: any, errorInfo: any) {
+    console.error("Map Error caught:", error, errorInfo);
+  }
+  render() {
+    if (this.state.hasError) {
+      return <div className="flex items-center justify-center h-full w-full bg-[#E0E2E7] text-slate-400">📍 الخريطة قيد التحميل البديل...</div>;
+    }
+    return this.props.children;
+  }
+}
+
 interface GmpMapEngineProps {
   storeType: string | string[];
   batchSize: number;
   onResults: (results: any[]) => void;
   isSearching: boolean;
   setIsSearching: (b: boolean) => void;
+  apiKey?: string;
 }
 
-// مكون مساعد لرسم دائرة نطاق البحث على الخريطة بشكل مرئي وتفاعلي
+// مكون مساعد لرسم دائرة نطاق البحث على خريطة جوجل
 function MapCircle({ center, radius }: { center: any, radius: number }) {
   const map = useMap();
   const circleRef = useRef<any>(null);
@@ -75,9 +87,8 @@ function MapCircle({ center, radius }: { center: any, radius: number }) {
         circleRef.current = null;
       }
     };
-  }, [map]); // ننشئ الدائرة مرة واحدة فقط عند تحميل الخريطة
+  }, [map]);
 
-  // دالة مستقلة لتحديث الحجم والمكان بسلاسة عند تحريك المؤشر
   useEffect(() => {
     if (circleRef.current) {
       circleRef.current.setOptions({ center, radius });
@@ -87,14 +98,23 @@ function MapCircle({ center, radius }: { center: any, radius: number }) {
   return null;
 }
 
-// Inner component to use maps library
-function MapSearchInner({ storeType, batchSize, onResults, isSearching, setIsSearching }: GmpMapEngineProps) {
-  const map = useMap("GMP_DEMO_MAP");
+// مكون لربط وحفظ مرجع الخريطة وتمريره للمكون الأب لتفادي مشكلة استخدام useMap خارج السياق
+function MapRefTracker({ setMap }: { setMap: (map: any) => void }) {
+  const map = useMap();
+  useEffect(() => {
+    if (map) {
+      setMap(map);
+    }
+  }, [map, setMap]);
+  return null;
+}
+
+function MapSearchInner({ storeType, batchSize, onResults, isSearching, setIsSearching, apiKey }: GmpMapEngineProps) {
+  const [mapInstance, setMapInstance] = useState<any>(null);
   const placesLib = useMapsLibrary('places');
   const geocodingLib = useMapsLibrary('geocoding');
-  const geometryLib = useMapsLibrary('geometry'); // تأمين محرك البحث
-  const markerLib = useMapsLibrary('marker'); // تأمين الدبوس
-  
+  const geometryLib = useMapsLibrary('geometry');
+
   const [center, setCenter] = useState({ lat: 30.0444, lng: 31.2357 }); // Cairo
   const [mapRadius, setMapRadius] = useState(1500);
   const [searchAreaText, setSearchAreaText] = useState('');
@@ -105,9 +125,299 @@ function MapSearchInner({ storeType, batchSize, onResults, isSearching, setIsSea
   const [selectedGov, setSelectedGov] = useState('');
   const [selectedCity, setSelectedCity] = useState('');
 
-  // Sync isSearching prop with the button click inside or outside
+  // تحديد ما إذا كنا سنستخدم بديل OpenStreetMap (تلقائي في حال عدم وجود مفتاح أو تعطل جوجل)
+  const [useOsmFallback, setUseOsmFallback] = useState(() => {
+    const cleanKey = (apiKey || '').trim();
+    return !cleanKey || cleanKey.includes('DummyKey') || cleanKey === 'ضع_مفتاحك_هنا';
+  });
+
+  const [leafletLoaded, setLeafletLoaded] = useState(false);
+  const leafletContainerRef = useRef<HTMLDivElement>(null);
+  const leafletMapRef = useRef<any>(null);
+  const leafletCircleRef = useRef<any>(null);
+
+  // مستمع لفشل مفتاح جوجل ماب
+  useEffect(() => {
+    const originalHandler = window.gm_authFailure;
+    window.gm_authFailure = () => {
+      console.warn("Google Maps auth failure detected. Switching to OpenStreetMap fallback.");
+      setUseOsmFallback(true);
+      if (originalHandler) {
+        try { originalHandler(); } catch (e) {}
+      }
+    };
+    return () => {
+      window.gm_authFailure = originalHandler;
+    };
+  }, []);
+
+  // تحميل Leaflet ديناميكياً عند تفعيل OSM Fallback
+  useEffect(() => {
+    if (!useOsmFallback) return;
+
+    if (window.L) {
+      setLeafletLoaded(true);
+      return;
+    }
+
+    // إضافة Leaflet CSS
+    const cssId = 'leaflet-css-fallback';
+    if (!document.getElementById(cssId)) {
+      const link = document.createElement('link');
+      link.id = cssId;
+      link.rel = 'stylesheet';
+      link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+      document.head.appendChild(link);
+    }
+
+    // إضافة Leaflet JS
+    const jsId = 'leaflet-js-fallback';
+    if (!document.getElementById(jsId)) {
+      const script = document.createElement('script');
+      script.id = jsId;
+      script.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+      script.onload = () => setLeafletLoaded(true);
+      document.head.appendChild(script);
+    } else {
+      const checkInterval = setInterval(() => {
+        if (window.L) {
+          setLeafletLoaded(true);
+          clearInterval(checkInterval);
+        }
+      }, 100);
+      return () => clearInterval(checkInterval);
+    }
+  }, [useOsmFallback]);
+
+  // تهيئة خريطة Leaflet
+  useEffect(() => {
+    if (!useOsmFallback || !leafletLoaded || !leafletContainerRef.current) return;
+
+    if (leafletMapRef.current) {
+      try {
+        leafletMapRef.current.remove();
+      } catch (e) {}
+      leafletMapRef.current = null;
+    }
+
+    const L = window.L;
+    const mapInstance = L.map(leafletContainerRef.current, {
+      zoomControl: true,
+      scrollWheelZoom: true,
+      attributionControl: false
+    }).setView([center.lat, center.lng], 13);
+
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(mapInstance);
+
+    const circleInstance = L.circle([center.lat, center.lng], {
+      color: '#DD6B20',
+      fillColor: '#DD6B20',
+      fillOpacity: 0.15,
+      radius: mapRadius
+    }).addTo(mapInstance);
+
+    leafletMapRef.current = mapInstance;
+    leafletCircleRef.current = circleInstance;
+
+    mapInstance.on('move', () => {
+      const c = mapInstance.getCenter();
+      circleInstance.setLatLng(c);
+    });
+
+    mapInstance.on('moveend', () => {
+      const c = mapInstance.getCenter();
+      setCenter({ lat: c.lat, lng: c.lng });
+      reverseGeocodeOsm(c.lat, c.lng);
+    });
+
+    return () => {
+      if (leafletMapRef.current) {
+        try {
+          leafletMapRef.current.remove();
+        } catch (e) {}
+        leafletMapRef.current = null;
+        leafletCircleRef.current = null;
+      }
+    };
+  }, [useOsmFallback, leafletLoaded]);
+
+  // تحديث حجم دائرة OSM عند تغيير المدى
+  useEffect(() => {
+    if (leafletCircleRef.current) {
+      leafletCircleRef.current.setRadius(mapRadius);
+    }
+  }, [mapRadius]);
+
+  // البحث الجغرافي العكسي لـ OSM (Nominatim)
+  const reverseGeocodeOsm = async (lat: number, lng: number) => {
+    setIsReverseGeocoding(true);
+    try {
+      const response = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1`, {
+        headers: { 'User-Agent': 'SalesApp/1.0' }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        const addr = data.address || {};
+        const bestName = addr.suburb || addr.quarter || addr.neighbourhood || addr.city || addr.town || addr.village || data.display_name;
+        setSearchAreaText(bestName || '');
+      }
+    } catch (e) {
+      console.error("OSM Reverse Geocoding Error:", e);
+    } finally {
+      setIsReverseGeocoding(false);
+    }
+  };
+
+  // البحث بالاسم لـ OSM (Nominatim)
+  const geocodeOsm = async (text: string) => {
+    if (!text.trim()) return;
+    setIsLocating(true);
+    try {
+      const response = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(text + ' مصر')}&limit=1`, {
+        headers: { 'User-Agent': 'SalesApp/1.0' }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        if (data && data.length > 0) {
+          const newCenter = { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
+          setCenter(newCenter);
+          if (leafletMapRef.current) {
+            leafletMapRef.current.setView([newCenter.lat, newCenter.lng], 13);
+          }
+        }
+      }
+    } catch (e) {
+      console.error("OSM Geocoding Error:", e);
+    } finally {
+      setIsLocating(false);
+    }
+  };
+
+  // البحث عن المحلات في OSM (Overpass API)
+  const handleOsmSearch = async () => {
+    setIsSearching(true);
+    try {
+      const finalArea = searchAreaText.trim() || 'القاهرة';
+      const selectedTypesArray = Array.isArray(storeType) ? storeType : [storeType];
+      
+      let typesQuery = '';
+      const buildOsmTypes = (t: string) => {
+        if (t === 'سوبر ماركت') return 'supermarket|convenience';
+        if (t === 'هايبر ماركت') return 'supermarket';
+        if (t === 'ميني ماركت') return 'convenience|kiosk';
+        if (t === 'حلواني ومخبز') return 'bakery|pastry|confectionery';
+        if (t === 'مطاعم') return 'restaurant|fast_food|cafe';
+        if (t === 'عطارة') return 'spices|herbalist';
+        if (t === 'تجارة جملة') return 'wholesale';
+        if (t === 'بقالة تموينية') return 'grocery|convenience';
+        return 'shop|retail';
+      };
+      
+      const matchedTypes = selectedTypesArray.includes('الكل') || selectedTypesArray.length === 0
+        ? 'supermarket|convenience|kiosk|bakery|restaurant|fast_food|cafe|spices|wholesale|grocery'
+        : selectedTypesArray.map(buildOsmTypes).join('|');
+        
+      const overpassQuery = `
+        [out:json][timeout:25];
+        (
+          node["shop"~"${matchedTypes}"](around:${mapRadius},${center.lat},${center.lng});
+          way["shop"~"${matchedTypes}"](around:${mapRadius},${center.lat},${center.lng});
+          node["amenity"~"${matchedTypes}"](around:${mapRadius},${center.lat},${center.lng});
+          way["amenity"~"${matchedTypes}"](around:${mapRadius},${center.lat},${center.lng});
+        );
+        out center;
+      `;
+      
+      const osmResponse = await fetch('https://overpass-api.de/api/interpreter', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'data=' + encodeURIComponent(overpassQuery)
+      });
+      
+      if (!osmResponse.ok) throw new Error('تعذر جلب البيانات من خادم الخرائط المفتوحة.');
+      
+      const data = await osmResponse.json();
+      if (data && data.elements) {
+        let mapped = data.elements.map((el: any, idx: number) => {
+          const tags = el.tags || {};
+          const name = tags.name || tags.brand || tags.shop || tags.amenity || 'محل تجاري';
+          const phone = tags.phone || tags['contact:phone'] || 'غير مسجل';
+          const street = tags['addr:street'] || tags['addr:full'] || finalArea;
+          const lat = el.lat || el.center?.lat || center.lat;
+          const lon = el.lon || el.center?.lon || center.lng;
+          
+          let shopType = 'نشاط تجاري';
+          if (tags.shop === 'supermarket') shopType = 'سوبر ماركت';
+          else if (tags.shop === 'convenience' || tags.shop === 'kiosk') shopType = 'ميني ماركت';
+          else if (tags.shop === 'bakery') shopType = 'حلواني ومخبز';
+          else if (tags.amenity === 'restaurant' || tags.amenity === 'fast_food') shopType = 'مطاعم';
+          
+          return {
+            id: `osm-lead-${el.id || Date.now()}-${idx}`,
+            name: name,
+            phone: phone,
+            area: finalArea,
+            detailedAddress: street,
+            rating: null,
+            reviewsCount: null,
+            locationLink: `https://www.google.com/maps/search/?api=1&query=${lat},${lon}`,
+            type: shopType
+          };
+        });
+        onResults(mapped);
+      } else {
+        onResults([]);
+      }
+    } catch (err: any) {
+      console.error('OSM Search Error:', err);
+      showToast('⚠️ خطأ في البحث البديل: ' + err.message);
+      onResults([]);
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
+  // دالة البحث الكلاسيكي في خرائط جوجل في حال عدم تفعيل Places API (New)
+  const searchClassicPlaces = (queryText: string): Promise<any[]> => {
+    return new Promise((resolve) => {
+      try {
+        if (!window.google || !window.google.maps || !window.google.maps.places) {
+          resolve([]);
+          return;
+        }
+        const dummyDiv = document.createElement('div');
+        const service = new window.google.maps.places.PlacesService(dummyDiv);
+        
+        service.textSearch({
+          query: queryText,
+          location: mapInstance ? mapInstance.getCenter() : new window.google.maps.LatLng(center.lat, center.lng),
+          radius: mapRadius
+        }, (results, status) => {
+          if (status === window.google.maps.places.PlacesServiceStatus.OK && results) {
+            resolve(results);
+          } else {
+            resolve([]);
+          }
+        });
+      } catch (e) {
+        console.error("Classic search failed:", e);
+        resolve([]);
+      }
+    });
+  };
+
+  // البحث الرئيسي
   const handleStartSearch = async () => {
-    if (!placesLib || !map || !geometryLib || !markerLib) return;
+    if (useOsmFallback) {
+      await handleOsmSearch();
+      return;
+    }
+
+    if (!placesLib || !mapInstance) {
+      showToast('⚠️ الخريطة أو مكتبة الأماكن لم تكتمل التحميل بعد. يرجى المحاولة بعد قليل.');
+      return;
+    }
+    
     setIsSearching(true);
     
     try {
@@ -122,7 +432,7 @@ function MapSearchInner({ storeType, batchSize, onResults, isSearching, setIsSea
         if (t === 'ميني ماركت') return { typeLabel: t, query: 'ميني ماركت كشك' };
         if (t === 'حلواني ومخبز') return { typeLabel: t, query: 'حلواني مخبز افرنجي مخبز سياحي فينو حلويات شرقية' };
         if (t === 'مطاعم') return { typeLabel: t, query: 'مطعم فول وطعمية كشري اسماك بروستد مشويات' };
-        if (t === 'بقالة تموينية' || t === 'مواد تموينية') return { typeLabel: t, query: 'بدال تمويني جمعيتي مجمع استهلاكي' };
+        if (t === 'بقالة تموينية') return { typeLabel: t, query: 'بدال تمويني جمعيتي مجمع استهلاكي' };
         if (t === 'عطارة') return { typeLabel: t, query: 'عطارة علافة سرجة توابل محمصة' };
         if (t === 'تجارة جملة') return { typeLabel: t, query: 'مخازن مواد غذائية تجارة جملة زيوت' };
         if (t === 'نصف جملة') return { typeLabel: t, query: 'محلات نصف جملة وقطاعي' };
@@ -149,22 +459,77 @@ function MapSearchInner({ storeType, batchSize, onResults, isSearching, setIsSea
         queriesToRun = selectedTypesArray.map(t => buildQueries(t));
       }
 
-      const perQueryCount = Math.min(20, batchSize); // الحد الأقصى لكل استعلام للحصول على تغطية واسعة
-      const allPlaces: Record<string, any> = {}; // التعديل 1: استخدام كائن جافاسكربت بسيط لمنع تعارض Vercel نهائياً
+      const perQueryCount = Math.min(20, batchSize);
+      const allPlaces: Record<string, any> = {};
+
+      const getDistanceInMeters = (lat1: number, lng1: number, lat2: number, lng2: number) => {
+        const R = 6371e3; // نصف قطر الأرض بالمتر
+        const dLat = (lat2 - lat1) * Math.PI / 180;
+        const dLng = (lng2 - lng1) * Math.PI / 180;
+        const a = 
+          Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+          Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
+          Math.sin(dLng / 2) * Math.sin(dLng / 2);
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        return R * c;
+      };
 
       for (const qObj of queriesToRun) {
         try {
-          const response = await placesLib.Place.searchByText({
-            textQuery: `${qObj.query} في ${finalArea}`,
-            fields: ['id', 'displayName', 'formattedAddress', 'location', 'internationalPhoneNumber', 'rating', 'userRatingCount', 'types'],
-            maxResultCount: perQueryCount,
-          });
+          let places: any[] = [];
           
-          if (response && response.places) {
-            response.places.forEach(p => {
-               if (!allPlaces[p.id]) { // التعديل 2: تغيير طريقة التحقق
-                 allPlaces[p.id] = { place: p, typeLabel: qObj.typeLabel }; // التعديل 3: تغيير طريقة الإضافة
-               }
+          // محاولة جلب البيانات باستخدام Places API (New) الحديثة مع تحديد نطاق جغرافي مفضل
+          try {
+            const response = await placesLib.Place.searchByText({
+              textQuery: `${qObj.query} في ${finalArea}`,
+              fields: ['id', 'displayName', 'formattedAddress', 'location', 'internationalPhoneNumber', 'rating', 'userRatingCount', 'types'],
+              maxResultCount: perQueryCount,
+              locationBias: {
+                circle: {
+                  center: { lat: center.lat, lng: center.lng },
+                  radius: mapRadius
+                }
+              }
+            });
+            places = response?.places || [];
+          } catch (modernError) {
+            console.warn("Modern Places API (New) failed or not active, falling back to classic PlacesService:", modernError);
+            // بديل ذكي: استخدام PlacesService الكلاسيكي المتوافق مع كافة المفاتيح
+            const classicResults = await searchClassicPlaces(`${qObj.query} في ${finalArea}`);
+            places = classicResults.map(p => ({
+              id: p.place_id,
+              displayName: p.name,
+              formattedAddress: p.formatted_address,
+              location: p.geometry?.location,
+              internationalPhoneNumber: p.formatted_phone_number || 'غير مسجل',
+              rating: p.rating,
+              userRatingCount: p.user_ratings_total,
+              types: p.types
+            }));
+          }
+          
+          if (places && places.length > 0) {
+            places.forEach(p => {
+              const pId = p.id || p.place_id;
+              if (pId && !allPlaces[pId]) {
+                const lat = typeof p.location?.lat === 'function' ? p.location.lat() : p.location?.lat;
+                const lng = typeof p.location?.lng === 'function' ? p.location.lng() : p.location?.lng;
+                
+                allPlaces[pId] = {
+                  place: {
+                    id: pId,
+                    displayName: p.displayName || p.name || 'محل تجاري',
+                    formattedAddress: p.formattedAddress || p.formatted_address || finalArea,
+                    location: p.location,
+                    internationalPhoneNumber: p.internationalPhoneNumber || 'غير مسجل',
+                    rating: p.rating,
+                    userRatingCount: p.userRatingCount || p.user_ratings_total,
+                    lat: lat,
+                    lng: lng
+                  },
+                  typeLabel: qObj.typeLabel
+                };
+              }
             });
           }
         } catch (e) {
@@ -172,7 +537,7 @@ function MapSearchInner({ storeType, batchSize, onResults, isSearching, setIsSea
         }
       }
 
-      if (Object.keys(allPlaces).length > 0) { // التعديل 4: تغيير طريقة حساب العدد
+      if (Object.keys(allPlaces).length > 0) {
         let mapped = Object.values(allPlaces).map((data: any, idx) => {
           const p = data.place;
           let phone = p.internationalPhoneNumber || 'غير مسجل';
@@ -188,12 +553,23 @@ function MapSearchInner({ storeType, batchSize, onResults, isSearching, setIsSea
             detailedAddress,
             rating,
             reviewsCount,
-            locationLink: `https://www.google.com/maps/search/?api=1&query=${p.location?.lat()},${p.location?.lng()}`,
-            type: data.typeLabel
+            locationLink: `https://www.google.com/maps/search/?api=1&query=${p.lat},${p.lng}`,
+            type: data.typeLabel,
+            lat: p.lat,
+            lng: p.lng
           };
         });
         
-        // إلغاء تقييد النتائج الإجمالية لعرض كافة المحلات التي تم العثور عليها وتوسيع نطاق البحث
+        // تصفية وحذف أي نتائج تقع خارج نطاق دائرة البحث الجغرافية المحددة بالكامل (مع سماح هامش 15% إضافي للأطراف)
+        const maxAllowedDistance = mapRadius * 1.15;
+        mapped = mapped.filter(item => {
+          if (item.lat && item.lng) {
+            const dist = getDistanceInMeters(center.lat, center.lng, item.lat, item.lng);
+            return dist <= maxAllowedDistance;
+          }
+          return true;
+        });
+
         onResults(mapped);
       } else {
         onResults([]);
@@ -218,7 +594,12 @@ function MapSearchInner({ storeType, batchSize, onResults, isSearching, setIsSea
   };
 
   const geocodeAndGo = async (text: string) => {
-    if (!text.trim() || !geocodingLib || !map) return;
+    if (useOsmFallback) {
+      await geocodeOsm(text);
+      return;
+    }
+
+    if (!text.trim() || !geocodingLib || !mapInstance) return;
     setIsLocating(true);
     try {
       const geocoder = new geocodingLib.Geocoder();
@@ -227,7 +608,7 @@ function MapSearchInner({ storeType, batchSize, onResults, isSearching, setIsSea
         const loc = res.results[0].geometry.location;
         const newCenter = { lat: loc.lat(), lng: loc.lng() };
         setCenter(newCenter);
-        map.panTo(newCenter);
+        mapInstance.panTo(newCenter);
       }
     } catch (e) {
       console.error(e);
@@ -266,8 +647,13 @@ function MapSearchInner({ storeType, batchSize, onResults, isSearching, setIsSea
         const { latitude, longitude } = position.coords;
         const newCenter = { lat: latitude, lng: longitude };
         setCenter(newCenter);
-        if (map) map.panTo(newCenter);
-        reverseGeocode(latitude, longitude);
+        if (useOsmFallback) {
+          if (leafletMapRef.current) leafletMapRef.current.setView([latitude, longitude], 13);
+          reverseGeocodeOsm(latitude, longitude);
+        } else {
+          if (mapInstance) mapInstance.panTo(newCenter);
+          reverseGeocode(latitude, longitude);
+        }
         setIsGpsLoading(false);
       },
       (error) => {
@@ -282,7 +668,7 @@ function MapSearchInner({ storeType, batchSize, onResults, isSearching, setIsSea
   return (
     <>
       <div className="flex flex-col gap-2 mt-4 relative z-10">
-        {/* أداة الاختيار الذكية للمحافظة والمدينة */}
+        {/* أداة الاختيار للمحافظة والمدينة */}
         <div className="bg-indigo-50/50 border border-indigo-100 p-3 rounded-xl mb-2 flex flex-col gap-2.5">
           <span className="text-[10.5px] font-black text-[#1A365D] flex items-center gap-1">
             <MapPin className="h-3.5 w-3.5 text-[#DD6B20]" />
@@ -360,12 +746,12 @@ function MapSearchInner({ storeType, batchSize, onResults, isSearching, setIsSea
             </button>
         </div>
         
-        {/* Interactive Google Map */}
+        {/* الخريطة التفاعلية */}
         <div className="mt-3.5 border border-slate-200 rounded-xl overflow-hidden bg-slate-50 relative shadow-inner">
           <div className="bg-slate-100 px-3 py-2 border-b border-slate-200 flex justify-between items-center text-[11px] font-bold text-slate-700">
             <span className="flex items-center gap-1">
               <span className="h-2 w-2 rounded-full bg-red-500 animate-pulse inline-block"></span>
-              خريطة الاستكشاف والتحكم في محيط المنطقة
+              {useOsmFallback ? 'خريطة الاستكشاف البديلة (OpenStreetMap)' : 'خريطة الاستكشاف والتحكم في محيط المنطقة'}
             </span>
             {isReverseGeocoding && (
               <span className="flex items-center gap-1 text-[#DD6B20] text-[10px]">
@@ -376,46 +762,53 @@ function MapSearchInner({ storeType, batchSize, onResults, isSearching, setIsSea
           </div>
           
           <div className="h-64 w-full relative z-0 bg-[#E0E2E7]" style={{ minHeight: '260px' }}>
-             <Map
-              defaultCenter={center}
-              defaultZoom={13}
-              mapId="GMP_DEMO_MAP"
-              minZoom={8}
-              gestureHandling="greedy"
-              mapTypeControl={false}
-              streetViewControl={false}
-              fullscreenControl={false}
-              onCameraChanged={(e) => {
-                 // تزامن سلس وفوري لحركة الدبوس والدائرة مع حركة إصبعك على الخريطة
-                 setCenter(e.detail.center);
-              }}
-              onDragEnd={(e) => {
-                 if (e.map) {
-                     const c = e.map.getCenter();
-                     if (c) {
-                        reverseGeocode(c.lat(), c.lng());
+            {useOsmFallback ? (
+              /* حاوية خريطة OpenStreetMap التلقائية */
+              <div ref={leafletContainerRef} className="h-full w-full relative z-0" />
+            ) : (
+              /* حاوية خريطة Google Maps */
+              <MapErrorBoundary>
+                <Map
+                  defaultCenter={center}
+                  defaultZoom={13}
+                  mapId="DEMO_MAP_ID"
+                  minZoom={8}
+                  gestureHandling="greedy"
+                  mapTypeControl={true}
+                  streetViewControl={false}
+                  fullscreenControl={true}
+                  onCameraChanged={(e) => {
+                     setCenter(e.detail.center);
+                  }}
+                  onDragEnd={(e) => {
+                     if (e.map) {
+                         const c = e.map.getCenter();
+                         if (c) reverseGeocode(c.lat(), c.lng());
+                     } else if (mapInstance) {
+                         const c = mapInstance.getCenter();
+                         if (c) reverseGeocode(c.lat(), c.lng());
                      }
-                 } else if (map) {
-                     const c = map.getCenter();
-                     if (c) reverseGeocode(c.lat(), c.lng());
-                 }
-              }}
-              style={{ width: '100%', height: '100%' }}
-              internalUsageAttributionIds={['gmp_mcp_codeassist_v1_aistudio']}
-            >
-                <AdvancedMarker position={center} draggable={true} onDragEnd={(e) => {
-                    const lat = e.latLng?.lat();
-                    const lng = e.latLng?.lng();
-                    if (lat && lng) {
-                        setCenter({lat, lng});
-                        reverseGeocode(lat, lng);
-                        if (map) map.panTo({lat, lng});
-                    }
-                }}>
-                    <Pin background="#E11D48" glyphColor="#fff" borderColor="#BE123C" />
-                </AdvancedMarker>
-                <MapCircle center={center} radius={mapRadius} />
-            </Map>
+                  }}
+                  style={{ width: '100%', height: '100%' }}
+                  internalUsageAttributionIds={['gmp_mcp_codeassist_v1_aistudio']}
+                >
+                  <MapCircle center={center} radius={mapRadius} />
+                  <MapRefTracker setMap={setMapInstance} />
+                </Map>
+              </MapErrorBoundary>
+            )}
+            
+            {/* دبوس مركز الخريطة العائم (مشترك بين Google و Leaflet ويضمن وجود الدبوس دائماً بالمنتصف) */}
+            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none flex flex-col items-center justify-center z-10 pb-10">
+              <div className="relative flex items-center justify-center animate-bounce">
+                <div className="absolute w-14 h-14 bg-[#DD6B20] rounded-full opacity-25 animate-ping" />
+                <div className="relative bg-[#1A365D] text-white rounded-full p-2.5 border-[3px] border-white shadow-2xl flex items-center justify-center">
+                  <MapPin className="h-6 w-6 text-white" fill="#DD6B20" />
+                </div>
+              </div>
+              <div className="w-1 h-6 bg-gradient-to-b from-[#1A365D] to-transparent opacity-80" />
+              <div className="absolute bottom-1 w-5 h-1.5 bg-black/40 rounded-[100%] blur-[2px] shadow-sm" />
+            </div>
           </div>
 
           <div className="bg-slate-50 p-3 border-t border-slate-200 flex flex-col gap-2">
@@ -448,12 +841,12 @@ function MapSearchInner({ storeType, batchSize, onResults, isSearching, setIsSea
         {isSearching ? (
           <>
             <Loader2 className="h-4 w-4 animate-spin text-emerald-300" />
-            <span>جاري تصفح Google Maps وسحب بيانات الاتصال...</span>
+            <span>جاري تصفح الخرائط وسحب بيانات الاتصال...</span>
           </>
         ) : (
           <>
             <Search className="h-4 w-4 text-emerald-300" />
-            <span>بدء سحب العملاء من خرائط جوجل بالمنطقة المحددة</span>
+            <span>بدء سحب العملاء من الخرائط بالمنطقة المحددة</span>
           </>
         )}
       </button>
@@ -467,7 +860,7 @@ function MapSearchInner({ storeType, batchSize, onResults, isSearching, setIsSea
           </div>
           <div className="flex flex-col gap-1">
             <span className="text-xs font-black text-slate-100">جاري قراءة الإحداثيات والخرائط الفعلية...</span>
-            <span className="text-[10px] text-gray-400 font-bold">يرجى الانتظار، السيرفر يبحث عن جهات اتصال نشطة لتناسب منتجاتك.</span>
+            <span className="text-[10px] text-gray-400 font-bold">يرجى الانتظار، جاري البحث عن جهات اتصال نشطة لتناسب منتجاتك.</span>
           </div>
         </div>
       )}
@@ -475,53 +868,6 @@ function MapSearchInner({ storeType, batchSize, onResults, isSearching, setIsSea
   );
 }
 
-const MAPS_LIBRARIES: any[] = ['places', 'geocoding', 'geometry', 'marker'];
-
 export default function GmpMapEngine(props: GmpMapEngineProps) {
-  const [localKey, setLocalKey] = useState('');
-  
-  hasValidKey = Boolean(API_KEY) && API_KEY !== 'YOUR_API_KEY';
-
-  if (!hasValidKey) {
-    return (
-      <div className="bg-rose-50 border border-rose-200 p-6 rounded-xl flex flex-col items-center justify-center text-center gap-2 mt-4 shadow-sm">
-        <span className="text-rose-700 font-bold text-sm">مفتاح خرائط جوجل غير متوفر ⚠️</span>
-        <span className="text-rose-500 text-xs leading-relaxed">يرجى إضافة <code className="font-mono bg-rose-100 px-1 rounded text-rose-800">VITE_GOOGLE_MAPS_PLATFORM_KEY</code> في ملف <code className="font-mono bg-rose-100 px-1 rounded text-rose-800">.env</code> الخاص بك وتفعيل خدمات (Places, Geocoding, Maps JavaScript) من لوحة تحكم Google Cloud.</span>
-        
-        <div className="mt-4 flex flex-col gap-2 w-full max-w-md border-t border-rose-200/50 pt-4">
-          <span className="text-xs font-bold text-[#1A365D]">أو أدخل مفتاح الخرائط (API Key) الخاص بك هنا مباشرة للتفعيل:</span>
-          <div className="flex gap-2">
-            <input 
-              type="text" 
-              placeholder="AIzaSy..." 
-              value={localKey}
-              onChange={(e) => setLocalKey(e.target.value)}
-              className="flex-1 bg-white border border-rose-200 rounded-lg px-3 py-2 text-xs font-mono text-left focus:outline-none focus:ring-1 focus:ring-rose-400"
-              dir="ltr"
-            />
-            <button 
-              type="button"
-              onClick={() => {
-                if (localKey.trim().length > 20) {
-                  localStorage.setItem('GMP_API_KEY_FALLBACK', localKey.trim());
-                  window.location.reload();
-                } else {
-                  showToast('⚠️ المفتاح المدخل غير صالح');
-                }
-              }}
-              className="bg-[#1A365D] hover:bg-slate-800 text-white px-3 py-2 rounded-lg text-xs font-bold transition-colors cursor-pointer shrink-0 shadow-sm"
-            >
-              حفظ وتنشيط الخريطة
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <APIProvider apiKey={API_KEY} version="beta" libraries={MAPS_LIBRARIES}>
-      <MapSearchInner {...props} />
-    </APIProvider>
-  );
+  return <MapSearchInner {...props} />;
 }

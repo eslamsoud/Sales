@@ -55,6 +55,8 @@ export interface Customer {
   detailedAddress?: string;
   purchasesCount?: number;
   salesManager?: string; // مدير البيع (لغرض البحث فقط)
+  totalSpent?: number;
+  lastPurchaseDate?: string;
 }
 
 export interface InvoiceItem {
@@ -132,6 +134,7 @@ export interface AppSettings {
   aiName?: string; // اسم الصديق / المساعد الذكي
   aiVoiceURI?: string; // معرّف الصوت المختار للردود
   workAreas?: Array<{ governorate: string; area: string }>; // مناطق العمل المضافة
+  googleMapsApiKey?: string; // مفتاح منصة خرائط جوجل
 }
 
 export interface UserAuth {
@@ -149,6 +152,9 @@ export interface UserAuth {
   canUseAiAssistant?: boolean; // السماح باستخدام المستشار الذكي (AI)
   lastLat?: number; // إحداثيات الموقع (خط العرض)
   lastLng?: number; // إحداثيات الموقع (خط الطول)
+  canApplyDiscount?: boolean; // السماح بالخصم الإضافي للمندوب
+  maxDiscountPercentOfProfit?: number; // أقصى نسبة خصم من صافي الأرباح (مثال 20%)
+  maxExtraDiscountAmount?: number; // أقصى قيمة لمبلغ الخصم الإضافي بالجنيه
   createdAt: string;
 }
 

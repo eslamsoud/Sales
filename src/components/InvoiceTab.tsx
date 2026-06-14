@@ -211,6 +211,7 @@ export default function InvoiceTab({
         // 2. Sum sold in all previous saved invoices
         let sold = 0;
         invoices.forEach(inv => {
+          if (editingInvoiceId && inv.id === editingInvoiceId) return; // Skip the invoice being edited to prevent double-subtraction from stock
           inv.items.forEach(item => {
             if (String(item.productId).trim() === String(p.id).trim() && String(item.weightId).trim() === String(w.id).trim()) {
               sold += item.quantity;
@@ -232,7 +233,7 @@ export default function InvoiceTab({
     });
 
     return stocks;
-  }, [products, factoryLoads, invoices, billItems]);
+  }, [products, factoryLoads, invoices, billItems, editingInvoiceId]);
 
   // Selected customer information
   const selectedCustomer = useMemo(() => {
@@ -1156,7 +1157,7 @@ export default function InvoiceTab({
   }, [permittedSubTabs, activeSubTab]);
 
   const filteredArchiveList = filteredInvoices;
-  const filteredDebtorsList = filteredInvoices.filter(inv => inv.totalAfterDiscount > (inv.paidAmount ?? inv.totalAfterDiscount));
+  const filteredDebtorsList = filteredInvoices.filter(inv => ((inv.totalAfterDiscount || 0) - (inv.paidAmount ?? (inv.totalAfterDiscount || 0))) > 0.05);
 
 
   return (
@@ -1766,7 +1767,8 @@ export default function InvoiceTab({
                           <span className="font-bold text-gray-400">البضاعة بالفاتورة:</span>
                           {inv.items.map((it, idx) => {
                         const p = products.find(prod => String(prod.id).trim() === String(it.productId).trim());
-                        const w = p?.weights?.find(wt => String(wt.id).trim() === String(it.weightId).trim());
+                        const ws = p ? getProductWeightsFallback(p) : [];
+                        const w = ws.find(wt => String(wt.id).trim() === String(it.weightId).trim()) || ws[0];
                             const multiplier = w?.unitsPerCarton || 12;
                             const cartons = formatCartonsAndPieces(it.quantity, multiplier);
                             return (
@@ -2229,7 +2231,17 @@ export default function InvoiceTab({
                     notes: newNotes
                   };
 
+                  // معالجة دقيقة لكسور الأرقام لضمان الإغلاق الكامل
+                  if (Math.abs((updatedInv.totalAfterDiscount || 0) - updatedInv.paidAmount) < 0.05) {
+                    updatedInv.paidAmount = updatedInv.totalAfterDiscount;
+                  }
+
                   const isFullyPaid = updatedInv.paidAmount >= updatedInv.totalAfterDiscount;
+
+                  // معالجة دقيقة لكسور الأرقام لضمان الإغلاق الكامل
+                  if (Math.abs((updatedInv.totalAfterDiscount || 0) - updatedInv.paidAmount) < 0.05) {
+                    updatedInv.paidAmount = updatedInv.totalAfterDiscount;
+                  }
 
                   onUpdateInvoice(updatedInv);
 

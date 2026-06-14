@@ -265,6 +265,9 @@ function ReportsTabComponent({
     // final netProfit based on Cash Flow (الصافي = كل ما تم تحصيله - كل ما تم سداده للمصنع والمصروفات)
     const netProfit = totalCollected + extraRevenues + totalTripsCollectedProfit - totalPaidToFactoryInPeriod - totalSpent;
 
+    // True operating profit = (Sales Profit) + Extra Revenues + Trips Profit - Total Spent
+    const operatingNetProfit = totalProfit + extraRevenues + totalTripsCollectedProfit - totalSpent;
+
     return {
       totalSales: trueTotalSales,
       totalCollected,
@@ -275,6 +278,7 @@ function ReportsTabComponent({
       totalSpent,
       totalTripsCollectedProfit,
       netProfit,
+      operatingNetProfit,
       totalPaidToFactoryInPeriod,
       remainingDebtToFactory
     };
@@ -410,70 +414,78 @@ function ReportsTabComponent({
             
             .meta-flex { display: flex; justify-content: space-between; margin-bottom: 15px; font-size: 11px; color: #334155; font-weight: bold; border-bottom: 1px solid #e2e8f0; padding-bottom: 8px; }
             
-            .grid-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 20px; }
-            .stat-box { border: 1px solid #cbd5e1; padding: 10px; border-radius: 8px; text-align: center; background: #f8fafc; }
-            .stat-box.highlight { background: #f0fdf4; border-color: #bbf7d0; }
-            .stat-box.alert { background: #fef2f2; border-color: #fca5a5; }
-            .stat-box span { display: block; font-size: 9px; color: #64748b; font-weight: bold; margin-bottom: 4px; }
-            .stat-box strong { font-size: 12px; color: #0f172a; font-weight: 900; }
-            
-            h2 { font-size: 12px; color: #1a365d; margin: 15px 0 8px 0; border-right: 3px solid #dd6b20; padding-right: 8px; font-weight: 850; }
-            
-            table { width: 100%; border-collapse: collapse; margin-bottom: 15px; font-size: 10px; }
-            th, td { border: 1px solid #e2e8f0; padding: 6px 10px; text-align: right; }
-            th { background: #f1f5f9; color: #334155; font-weight: 900; }
-            
-            .badge { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 9px; font-weight: bold; }
-            .badge-success { background: #dcfce7; color: #15803d; }
-            .badge-warn { background: #fef3c7; color: #b45309; }
-            .badge-danger { background: #fee2e2; color: #b91c1c; }
-          </style>
-        </head>
-        <body>
-          <div class="header">
-            <h1>تقرير العمليات والحسابات المالي الشامل</h1>
-            <p>مصنع سمن وزيت سوفانا الفاخر للأغذية المتحدون</p>
-          </div>
-          
-          <div class="meta-flex">
-            <div>الفترة المحددة المفلترة: <span style="color: #dd6b20;">${periodLabel}</span></div>
-            <div>تاريخ الاستخراج: ${new Date().toLocaleDateString('ar-EG', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</div>
-          </div>
-          
-          <div class="grid-stats">
-            <div class="stat-box">
-              <span>إجمالي المبيعات</span>
-              <strong>${salesStats.totalSales.toLocaleString('ar-EG')} ج.م</strong>
-            </div>
-            <div class="stat-box highlight">
-              <span>المحصل من العملاء</span>
-              <strong>${salesStats.totalCollected.toLocaleString('ar-EG')} ج.م</strong>
-            </div>
-            <div class="stat-box alert">
-              <span>باقي ديون العملاء</span>
-              <strong>${salesStats.totalRemaining.toLocaleString('ar-EG')} ج.م</strong>
-            </div>
-            <div class="stat-box">
-              <span>المصروفات التشغيلية</span>
-              <strong>${salesStats.totalSpent.toLocaleString('ar-EG')} ج.م</strong>
-            </div>
-            <div class="stat-box">
-              <span>أرباح المشاوير</span>
-              <strong>${salesStats.totalTripsCollectedProfit.toLocaleString('ar-EG')} ج.م</strong>
-            </div>
-            <div class="stat-box highlight">
-              <span>المسدد للمصنع</span>
-              <strong>${salesStats.totalPaidToFactoryInPeriod.toLocaleString('ar-EG')} ج.م</strong>
-            </div>
-            <div class="stat-box alert">
-              <span>مديونية المصنع الحالية</span>
-              <strong>${salesStats.remainingDebtToFactory.toLocaleString('ar-EG')} ج.م</strong>
-            </div>
-            <div class="stat-box highlight" style="background: #e0f2fe; border-color: #bae6fd;">
-              <span>الصافي النهائي للربح</span>
-              <strong style="color: #0369a1;">${salesStats.netProfit.toLocaleString('ar-EG')} ج.م</strong>
-            </div>
-          </div>
+             .grid-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 15px; }
+             .stat-box { border: 1px solid #cbd5e1; padding: 10px; border-radius: 8px; text-align: center; background: #f8fafc; }
+             .stat-box.highlight { background: #f0fdf4; border-color: #bbf7d0; }
+             .stat-box.alert { background: #fef2f2; border-color: #fca5a5; }
+             .stat-box span { display: block; font-size: 9px; color: #64748b; font-weight: bold; margin-bottom: 4px; }
+             .stat-box strong { font-size: 12px; color: #0f172a; font-weight: 900; }
+             
+             h2 { font-size: 12px; color: #1a365d; margin: 15px 0 8px 0; border-right: 3px solid #dd6b20; padding-right: 8px; font-weight: 850; }
+             
+             table { width: 100%; border-collapse: collapse; margin-bottom: 15px; font-size: 10px; }
+             th, td { border: 1px solid #e2e8f0; padding: 6px 10px; text-align: right; }
+             th { background: #f1f5f9; color: #334155; font-weight: 900; }
+             
+             .badge { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 9px; font-weight: bold; }
+             .badge-success { background: #dcfce7; color: #15803d; }
+             .badge-warn { background: #fef3c7; color: #b45309; }
+             .badge-danger { background: #fee2e2; color: #b91c1c; }
+           </style>
+         </head>
+         <body>
+           <div class="header">
+             <h1>تقرير العمليات والحسابات المالي الشامل</h1>
+             <p>مصنع سمن وزيت سوفانا الفاخر للأغذية المتحدون</p>
+           </div>
+           
+           <div class="meta-flex">
+             <div>الفترة المحددة المفلترة: <span style="color: #dd6b20;">${periodLabel}</span></div>
+             <div>تاريخ الاستخراج: ${new Date().toLocaleDateString('ar-EG', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</div>
+           </div>
+           
+           <div class="grid-stats">
+             <div class="stat-box">
+               <span>إجمالي المبيعات</span>
+               <strong>${salesStats.totalSales.toLocaleString('ar-EG')} ج.م</strong>
+             </div>
+             <div class="stat-box highlight">
+               <span>المحصل كاش</span>
+               <strong>${salesStats.totalCollected.toLocaleString('ar-EG')} ج.م</strong>
+             </div>
+             <div class="stat-box alert">
+               <span>باقي ديون العملاء</span>
+               <strong>${salesStats.totalRemaining.toLocaleString('ar-EG')} ج.m</strong>
+             </div>
+             <div class="stat-box">
+               <span>المصروفات التشغيلية</span>
+               <strong>${salesStats.totalSpent.toLocaleString('ar-EG')} ج.م</strong>
+             </div>
+             <div class="stat-box">
+               <span>أرباح المشاوير</span>
+               <strong>${salesStats.totalTripsCollectedProfit.toLocaleString('ar-EG')} ج.م</strong>
+             </div>
+             <div class="stat-box">
+               <span>إيرادات إضافية</span>
+               <strong>${salesStats.extraRevenues.toLocaleString('ar-EG')} ج.م</strong>
+             </div>
+             <div class="stat-box highlight">
+               <span>المسدد للمصنع</span>
+               <strong>${salesStats.totalPaidToFactoryInPeriod.toLocaleString('ar-EG')} ج.م</strong>
+             </div>
+             <div class="stat-box alert">
+               <span>مديونية المصنع الحالية</span>
+               <strong>${salesStats.remainingDebtToFactory.toLocaleString('ar-EG')} ج.م</strong>
+             </div>
+             <div class="stat-box highlight" style="background: #f0fdf4; border-color: #bbf7d0;">
+               <span>الربح الصافي الحقيقي (النشاط)</span>
+               <strong style="color: #15803d;">${salesStats.operatingNetProfit.toLocaleString('ar-EG')} ج.م</strong>
+             </div>
+             <div class="stat-box highlight" style="background: #e0f2fe; border-color: #bae6fd;">
+               <span>صافي التدفق النقدي (السيولة)</span>
+               <strong style="color: #0369a1;">${salesStats.netProfit.toLocaleString('ar-EG')} ج.م</strong>
+             </div>
+           </div>
           
           <h2>١. قائمة فواتير مبيعات العملاء للفترة</h2>
           <table>
@@ -589,7 +601,7 @@ function ReportsTabComponent({
 
   // Group invoices by month
   const monthlyBreakdown = React.useMemo(() => {
-    const months: Record<string, { sales: number; expenses: number; revs: number; count: number }> = {};
+    const months: Record<string, { sales: number; collected: number; cogs: number; expenses: number; revs: number; count: number }> = {};
 
     delFilteredInvoices.forEach(inv => {
       if (!inv || !inv.date) return;
@@ -597,10 +609,20 @@ function ReportsTabComponent({
       if (parts.length < 2) return;
       const monthYear = parts[0] + '-' + parts[1];
       if (!months[monthYear]) {
-        months[monthYear] = { sales: 0, expenses: 0, revs: 0, count: 0 };
+        months[monthYear] = { sales: 0, collected: 0, cogs: 0, expenses: 0, revs: 0, count: 0 };
       }
       months[monthYear].sales += (inv.totalAfterDiscount || 0);
+      months[monthYear].collected += (inv.paidAmount !== undefined ? inv.paidAmount : (inv.totalAfterDiscount || 0));
       months[monthYear].count += 1;
+
+      // Calculate Cost of Goods Sold (COGS)
+      if (Array.isArray(inv.items)) {
+        inv.items.forEach(it => {
+          if (!it) return;
+          const itemCost = (it.factoryPrice || (it.originalPrice || 0) * 0.9) * (it.quantity || 0);
+          months[monthYear].cogs += itemCost;
+        });
+      }
     });
 
     delFilteredExpenses.forEach(exp => {
@@ -609,7 +631,7 @@ function ReportsTabComponent({
       if (parts.length < 2) return;
       const monthYear = parts[0] + '-' + parts[1];
       if (!months[monthYear]) {
-        months[monthYear] = { sales: 0, expenses: 0, revs: 0, count: 0 };
+        months[monthYear] = { sales: 0, collected: 0, cogs: 0, expenses: 0, revs: 0, count: 0 };
       }
       if (exp.type === 'revenue') {
         months[monthYear].revs += (exp.amount || 0);
@@ -626,17 +648,24 @@ function ReportsTabComponent({
           displayDate = dateObj.toLocaleDateString('ar-EG', { month: 'long', year: 'numeric' });
         }
       } catch (e) {}
+
+      // True operating profit = (Sales - COGS) + Extra Revenues - Expenses
+      const grossMargin = d.sales - d.cogs;
+      const trueProfit = grossMargin + d.revs - d.expenses;
+
       return {
         dateStr,
         displayDate,
         sales: d.sales,
+        collected: d.collected,
+        cogs: d.cogs,
         revs: d.revs,
         expenses: d.expenses,
-        profit: (d.sales + d.revs) - d.expenses,
+        profit: trueProfit,
         count: d.count
       };
     }).sort((a, b) => b.dateStr.localeCompare(a.dateStr));
-  }, [invoices, expenses]);
+  }, [invoices, expenses, products]);
 
   // Filter invoices for registry lookup
   const filteredInvoices = delFilteredInvoices.filter(inv => {
@@ -689,7 +718,7 @@ function ReportsTabComponent({
     }
   }, [permittedSubTabs, activeSubTab]);
 
-  const exportMonthlyReportAsPDF = (monthStr: string, displayDate: string, sales: number, revenuesParam: number, expensesParam: number, profit: number) => {
+  const exportMonthlyReportAsPDF = (monthStr: string, displayDate: string, sales: number, collected: number, revenuesParam: number, expensesParam: number, profit: number) => {
     // 1. Create iframe
     const iframe = document.createElement('iframe');
     iframe.style.position = 'fixed';
@@ -705,8 +734,7 @@ function ReportsTabComponent({
     
     const mTotalBeforeDisc = mInvoices.reduce((sum, i) => sum + (i.totalBeforeDiscount || 0), 0);
     const mDisc = mInvoices.reduce((sum, i) => sum + ((i.totalBeforeDiscount || 0) - (i.totalAfterDiscount || 0)), 0);
-    const mTotalSales = mTotalBeforeDisc - mDisc;
-    const remaining = mTotalSales - sales;
+    const remaining = sales - collected;
 
     const doc = iframe.contentWindow?.document;
     if (!doc) return;
@@ -740,16 +768,16 @@ function ReportsTabComponent({
             <p>تم التصدير من نظام المستودع والمبيعات</p>
           </div>
           <div class="summary">
-            <div class="summary-box">
-              <strong>الإجمالي:</strong> ${formatNum(mTotalBeforeDisc)}ج.م<br/>
-              <strong style="color: #059669;">الخصم:</strong> ${formatNum(mDisc)}ج.م<br/>
-              <strong style="color: #4f46e5;">المسدد:</strong> ${formatNum(sales)}ج.م<br/>
-              <strong style="color: #ea580c;">المتبقي:</strong> ${formatNum(remaining)}ج.م
+            <div class="summary-box" style="text-align: right;">
+              <strong>إجمالي المبيعات (قبل الخصم):</strong> ${formatNum(mTotalBeforeDisc)}ج.م<br/>
+              <strong style="color: #059669;">الخصم الممنوح:</strong> ${formatNum(mDisc)}ج.م<br/>
+              <strong style="color: #4f46e5;">المحصل كاش:</strong> ${formatNum(collected)}ج.م<br/>
+              <strong style="color: #ea580c;">المتبقي (آجل):</strong> ${formatNum(remaining)}ج.م
             </div>
-            <div class="summary-box" style="text-align: left;">
-              <strong>الإيرادات الإضافية:</strong> ${formatNum(revenuesParam)}ج.م<br/>
+            <div class="summary-box" style="text-align: right;">
+              <strong>إيرادات إضافية:</strong> ${formatNum(revenuesParam)}ج.م<br/>
               <strong>المصروفات:</strong> ${formatNum(expensesParam)}ج.م<br/>
-              <div class="profit" style="margin-top: 10px;">صافي الربح: ${formatNum(profit)}ج.م</div>
+              <div class="profit" style="margin-top: 10px;">صافي الأرباح التشغيلية: ${formatNum(profit)}ج.م</div>
             </div>
           </div>
           <table>
@@ -852,7 +880,7 @@ function ReportsTabComponent({
   const filteredArchiveList = filteredInvoices.filter(inv => (inv.totalAfterDiscount || 0) <= (inv.paidAmount ?? (inv.totalAfterDiscount || 0)));
   const filteredDebtorsList = filteredInvoices.filter(inv => (inv.totalAfterDiscount || 0) > (inv.paidAmount ?? (inv.totalAfterDiscount || 0)));
 
-  const exportMonthlyReportAsPNG = (monthStr: string, displayDate: string, sales: number, revenuesParam: number, expensesParam: number, profit: number) => {
+  const exportMonthlyReportAsPNG = (monthStr: string, displayDate: string, sales: number, collected: number, revenuesParam: number, expensesParam: number, profit: number) => {
     const canvas = document.createElement('canvas');
     const rowHeight = 35;
     
@@ -861,7 +889,7 @@ function ReportsTabComponent({
     const mExpenses = delFilteredExpenses.filter(exp => exp && typeof exp.date === 'string' && exp.date.startsWith(monthStr));
     
     const totalLines = mInvoices.length + mExpenses.length;
-    const baseHeight = 350;
+    const baseHeight = 385;
     canvas.width = 650;
     canvas.height = baseHeight + totalLines * rowHeight + 150;
 
@@ -889,13 +917,15 @@ function ReportsTabComponent({
     ctx.fillStyle = '#1e293b';
     ctx.font = 'bold 14px system-ui, sans-serif';
     ctx.fillText(`إجمالي المبيعات: ${formatNum(sales)}ج.م`, canvas.width - 40, 160);
-    ctx.fillText(`الإيرادات الإضافية: ${formatNum(revenuesParam)}ج.م`, canvas.width - 40, 190);
-    ctx.fillText(`المصروفات الدقيقة: ${formatNum(expensesParam)}ج.م`, canvas.width - 40, 220);
+    ctx.fillText(`المحصل كاش: ${formatNum(collected)}ج.م`, canvas.width - 40, 185);
+    ctx.fillText(`المتبقي (آجل): ${formatNum(sales - collected)}ج.م`, canvas.width - 40, 210);
+    ctx.fillText(`الإيرادات الإضافية: ${formatNum(revenuesParam)}ج.م`, canvas.width - 40, 235);
+    ctx.fillText(`المصروفات الدقيقة: ${formatNum(expensesParam)}ج.م`, canvas.width - 40, 260);
     ctx.fillStyle = profit >= 0 ? '#047857' : '#be123c';
-    ctx.fillText(`صافي أرباح الشهر: ${formatNum(profit)}ج.م`, canvas.width - 40, 250);
+    ctx.fillText(`صافي أرباح الشهر: ${formatNum(profit)}ج.م`, canvas.width - 40, 285);
 
     // Accounts section
-    let y = 280;
+    let y = 315;
     ctx.fillStyle = '#f8fafc';
     ctx.fillRect(20, y - 30, canvas.width - 40, 35);
     ctx.strokeStyle = '#e2e8f0';
@@ -1513,21 +1543,44 @@ function ReportsTabComponent({
                 </div>
               )}
 
-              {/* Total Balance / Net Profit */}
-              <div className={`rounded-2xl p-5 text-white shadow-md flex items-center justify-between relative overflow-hidden ${
-                salesStats.netProfit >= 0 ? 'bg-[#FFFFFF] text-[#1A365D] border-b-2 border-b-[#DD6B20] shadow-sm' : 'bg-rose-600'
+              {/* True Operating Net Profit Card */}
+              <div className={`rounded-2xl p-5 text-white shadow-md flex items-center justify-between relative overflow-hidden bg-gradient-to-r ${
+                salesStats.operatingNetProfit >= 0 
+                  ? 'from-emerald-600 to-teal-500 border-b-4 border-b-emerald-800' 
+                  : 'from-rose-600 to-red-500 border-b-4 border-b-rose-800'
               }`}>
-                <div className="flex flex-col gap-0.5 z-10">
-                  <span className="text-xs text-white/90 font-bold">صافي الأرباح</span>
-                  <span className="text-3xl font-black">
-                    {salesStats.netProfit.toLocaleString('ar-EG')}<span className="text-xs font-bold">ج.م</span>
+                <div className="flex flex-col gap-0.5 z-10 text-right">
+                  <span className="text-[10px] text-white/90 font-black">صافي الأرباح التشغيلية الحقيقية (أرباح الأصناف والخدمات)</span>
+                  <span className="text-3xl font-black font-mono">
+                    {salesStats.operatingNetProfit.toLocaleString('ar-EG')}<span className="text-xs font-bold mr-1">ج.م</span>
                   </span>
+                  <span className="text-[9px] text-white/85 font-semibold mt-1">المبيعات بعد طرح تكلفة سعر المصنع والمصروفات المعتمدة</span>
                 </div>
                 
-                <div className="bg-[#FFFFFF]/15 p-2.5 rounded-2xl z-10">
-                  {salesStats.netProfit >= 0 ? <TrendingUp className="h-10 w-10 text-white" /> : <TrendingDown className="h-10 w-10 text-white" />}
+                <div className="bg-white/15 p-2.5 rounded-2xl z-10">
+                  {salesStats.operatingNetProfit >= 0 ? <TrendingUp className="h-8 w-8 text-white" /> : <TrendingDown className="h-8 w-8 text-white" />}
                 </div>
-                <div className="absolute -right-6 -bottom-6 h-24 w-24 bg-[#FFFFFF]/5 rounded-full blur-xl pointer-events-none"></div>
+                <div className="absolute -right-6 -bottom-6 h-24 w-24 bg-white/5 rounded-full blur-xl pointer-events-none"></div>
+              </div>
+
+              {/* Net Cash Flow Card */}
+              <div className={`rounded-2xl p-5 text-white shadow-md flex items-center justify-between relative overflow-hidden bg-gradient-to-r ${
+                salesStats.netProfit >= 0 
+                  ? 'from-sky-600 to-indigo-500 border-b-4 border-b-sky-850' 
+                  : 'from-amber-600 to-orange-500 border-b-4 border-b-amber-850'
+              }`}>
+                <div className="flex flex-col gap-0.5 z-10 text-right">
+                  <span className="text-[10px] text-white/90 font-black">صافي التدفق النقدي الفعلي للسيارة (حركة الخزينة)</span>
+                  <span className="text-3xl font-black font-mono">
+                    {salesStats.netProfit.toLocaleString('ar-EG')}<span className="text-xs font-bold mr-1">ج.م</span>
+                  </span>
+                  <span className="text-[9px] text-white/85 font-semibold mt-1">كاش محصل + إيرادات - مسدد للمصنع والمصروفات (السيولة)</span>
+                </div>
+                
+                <div className="bg-white/15 p-2.5 rounded-2xl z-10">
+                  {salesStats.netProfit >= 0 ? <TrendingUp className="h-8 w-8 text-white" /> : <TrendingDown className="h-8 w-8 text-white" />}
+                </div>
+                <div className="absolute -right-6 -bottom-6 h-24 w-24 bg-white/5 rounded-full blur-xl pointer-events-none"></div>
               </div>
 
               {/* Monthly Reports Table */}
@@ -1558,7 +1611,7 @@ function ReportsTabComponent({
                           <div className="flex items-center gap-2">
                             <span>{month.displayDate}</span>
                             <button
-                              onClick={() => exportMonthlyReportAsPNG(month.dateStr, month.displayDate, month.sales, month.revs, month.expenses, month.profit)}
+                              onClick={() => exportMonthlyReportAsPNG(month.dateStr, month.displayDate, month.sales, month.collected, month.revs, month.expenses, month.profit)}
                               className="bg-[#1A365D] text-white border-transparent hover:bg-[#1A365D] text-white border-transparent text-white rounded p-1 shadow-xs transition-colors cursor-pointer"
                               title="تنزيل كصورة"
                             >
@@ -1567,7 +1620,7 @@ function ReportsTabComponent({
                               </svg>
                             </button>
                             <button
-                              onClick={() => exportMonthlyReportAsPDF(month.dateStr, month.displayDate, month.sales, month.revs, month.expenses, month.profit)}
+                              onClick={() => exportMonthlyReportAsPDF(month.dateStr, month.displayDate, month.sales, month.collected, month.revs, month.expenses, month.profit)}
                               className="bg-[#DD6B20] text-white hover:bg-[#C05621] text-white rounded p-1 shadow-xs transition-colors cursor-pointer"
                               title="طباعة تقرير PDF للتحليل"
                             >
@@ -1640,7 +1693,8 @@ function ReportsTabComponent({
                   <span className="text-[10px] font-bold text-slate-400 mb-1">تفاصيل البضاعة المباعة:</span>
                   {itemsList.map((it, i) => {
                     const prod = products.find(p => String(p.id).trim() === String(it.productId).trim());
-                    const weight = prod?.weights?.find(w => String(w.id).trim() === String(it.weightId).trim());
+                    const ws = prod ? getProductWeightsFallback(prod) : [];
+                    const weight = ws.find(w => String(w.id).trim() === String(it.weightId).trim()) || ws[0];
                     const multiplier = weight?.unitsPerCarton || 12;
                     const cartonsText = formatCartonsAndPieces(it.quantity, multiplier);
                     const cartonPrice = Number(((it.finalPrice || 0) * multiplier).toFixed(2));
@@ -2403,7 +2457,8 @@ function ReportsTabComponent({
             return;
           }
           const prod = products.find(p => p.id === editAddProductId);
-          const weight = prod?.weights?.find(w => w.id === editAddWeightId);
+          const ws = prod ? getProductWeightsFallback(prod) : [];
+          const weight = ws.find(w => w.id === editAddWeightId);
           if (!prod || !weight) return;
           
           const multiplier = weight.unitsPerCarton || 12;
@@ -2436,7 +2491,8 @@ function ReportsTabComponent({
           setEditAddQty('');
         };
 
-        const availableWeights = editAddProductId ? (products.find(p => p.id === editAddProductId)?.weights || []) : [];
+        const targetProd = editAddProductId ? products.find(p => p.id === editAddProductId) : null;
+        const availableWeights = targetProd ? getProductWeightsFallback(targetProd) : [];
 
         return (
           <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4 text-right" dir="rtl">
@@ -2488,7 +2544,8 @@ function ReportsTabComponent({
                     <div className="flex flex-col gap-2 max-h-48 overflow-y-auto">
                       {editItems.map((it, idx) => {
                         const prod = products.find(p => String(p.id).trim() === String(it.productId).trim());
-                        const weight = prod?.weights?.find(w => String(w.id).trim() === String(it.weightId).trim());
+                        const ws = prod ? getProductWeightsFallback(prod) : [];
+                        const weight = ws.find(w => String(w.id).trim() === String(it.weightId).trim()) || ws[0];
                         const multiplier = weight?.unitsPerCarton || 12;
                         const totalPieces = it.quantity;
                         const cartons = Math.floor(totalPieces / multiplier);

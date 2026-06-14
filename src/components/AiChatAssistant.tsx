@@ -132,11 +132,40 @@ export default function AiChatAssistant({
       });
       const areaList = Object.entries(customersByArea).map(([area, names]) => `- منطقة ${area}: ${names.join('، ')}`).slice(0, 15).join('\n');
 
-      // 3. Consolidated balance sheet
+      // 3. Consolidated balance sheet and expense breakdown
       const totalSales = invoices.reduce((sum, inv) => sum + (inv.totalAfterDiscount || 0), 0);
       const totalPaid = invoices.reduce((sum, inv) => sum + (inv.paidAmount || 0), 0);
       const outstandingDebt = totalSales - totalPaid;
-      const totalSpent = expenses.filter(e => e.type !== 'revenue').reduce((sum, e) => sum + e.amount, 0);
+
+      const expenseItems = expenses.filter(e => e.type !== 'revenue');
+      const revenueItems = expenses.filter(e => e.type === 'revenue');
+
+      const totalSpent = expenseItems.reduce((sum, e) => sum + e.amount, 0);
+      const totalExtraRevenue = revenueItems.reduce((sum, e) => sum + e.amount, 0);
+
+      // Group expenses by category
+      const expensesByCategory: Record<string, number> = {};
+      expenseItems.forEach(e => {
+        const cat = e.category || 'عام';
+        expensesByCategory[cat] = (expensesByCategory[cat] || 0) + e.amount;
+      });
+      const categoriesSummary = Object.entries(expensesByCategory)
+        .map(([cat, amt]) => `- ${cat}: ${amt} ج.`)
+        .join('\n');
+
+      // Last 5 expenses
+      const lastExpenses = [...expenseItems]
+        .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+        .slice(0, 5)
+        .map(e => `- مبلغ ${e.amount} ج. في فئة (${e.category}) - بيان: "${e.description || 'بدون بيان'}" بتاريخ ${e.date ? new Date(e.date).toLocaleDateString('ar-EG') : 'غير محدد'}`)
+        .join('\n');
+
+      // Last 5 extra revenues
+      const lastRevenues = [...revenueItems]
+        .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+        .slice(0, 5)
+        .map(e => `- مبلغ ${e.amount} ج. - بيان: "${e.description || 'بدون بيان'}" بتاريخ ${e.date ? new Date(e.date).toLocaleDateString('ar-EG') : 'غير محدد'}`)
+        .join('\n');
 
       return `=== جرد حمولة البضاعة بالسيارة الآن ===
 ${carBalancesList.length > 0 ? carBalancesList.join('\n') : '- لا توجد بضاعة مسحوبة بالسيارة حالياً.'}
@@ -151,7 +180,17 @@ ${areaList || '- لا يوجد عملاء مسجلين.'}
 - إجمالي مبيعات المندوب اليوم: ${totalSales} ج.
 - كاش محصل تحت اليد: ${totalPaid} ج.
 - مديونيات آجلة معلقة عند التابعين: ${outstandingDebt} ج.
-- مصاريف السيارة ونثرية السفر اليومية: ${totalSpent} ج.
+- إجمالي مصاريف السيارة ونثرية السفر اليومية: ${totalSpent} ج.
+- إجمالي الإيرادات الإضافية الأخرى اليوم: ${totalExtraRevenue} ج.
+
+=== تفاصيل وتوزيع المصروفات حسب الفئات ===
+${categoriesSummary || '- لا توجد نفقات مصنفة مسجلة اليوم.'}
+
+=== آخر 5 نفقات تم تسجيلها تفصيلياً ===
+${lastExpenses || '- لا توجد نفقات مسجلة حديثاً.'}
+
+=== آخر 5 إيرادات إضافية تم تسجيلها تفصيلياً ===
+${lastRevenues || '- لا توجد إيرادات إضافية مسجلة حديثاً.'}
 `;
     } catch (e) {
       return "تعذر إرفاق سياق جرد الحسابات المباشر للرحلة.";
@@ -531,6 +570,18 @@ ${areaList || '- لا يوجد عملاء مسجلين.'}
                     >
                       <span className="text-xs font-black text-purple-950">💸 موازنة وضبط مديونيات التسهيل المعلقة</span>
                       <span className="text-[9px] text-slate-500 font-sans">تحليل ديون المحلات وكيفية الدفع الآمن</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => triggerQuickAction(
+                        "تحليل المصروفات وبنود النفقات اليومية",
+                        "حلل لي مصاريف ونفقات السيارة اليوم بالتفصيل حسب الفئات والبنود المسجلة، وقدم لي نصائح عملية لترشيد الصرف والتحكم في النفقات اليومية ومقارنتها بالإيرادات والأرباح."
+                      )}
+                      className="p-2 bg-amber-50/50 border border-amber-200 hover:border-amber-450 rounded-xl text-right transition-all cursor-pointer flex flex-col gap-0.5 justify-center hover:bg-amber-100/30"
+                    >
+                      <span className="text-xs font-black text-amber-900 font-bold">📊 تحليل تفصيلي للمصروفات والنفقات اليومية</span>
+                      <span className="text-[9px] text-amber-700 font-sans font-bold">توزيع المصاريف حسب الفئات ومراجعة بنود الصرف لترشيدها</span>
                     </button>
 
                     <button

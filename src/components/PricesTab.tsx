@@ -456,21 +456,27 @@ export default function PricesTab({ products: rawProducts, onGoBack, permittedSu
     return products.map(p => {
       const weights = getProductWeightsFallback(p);
       const weightDetails = weights.map(w => {
-        // Individual unit tier discounts
-        const u1 = w.retailPricePerUnit * (1 - 0.01);
-        const u125 = w.retailPricePerUnit * (1 - 0.0125);
-        const u15 = w.retailPricePerUnit * (1 - 0.015);
-
         // Carton price includes added value
         const retailCarton = w.cartonPriceFromFactory + (w.addedValue || 0);
+        const units = w.unitsPerCarton || 12;
+        const computedRetailPrice = retailCarton / units;
 
-        // Carton tier discounts
+        // Individual unit tier discounts based on discounted carton price / units count
+        // 1% discount
         const c1 = retailCarton * (1 - 0.01);
+        const u1 = c1 / units;
+
+        // 1.25% discount
         const c125 = retailCarton * (1 - 0.0125);
+        const u125 = c125 / units;
+
+        // 1.5% discount
         const c15 = retailCarton * (1 - 0.015);
+        const u15 = c15 / units;
 
         return {
           ...w,
+          retailPricePerUnit: Number(computedRetailPrice.toFixed(3)),
           unit1: Number(u1.toFixed(3)),
           unit125: Number(u125.toFixed(3)),
           unit15: Number(u15.toFixed(3)),
@@ -510,7 +516,8 @@ export default function PricesTab({ products: rawProducts, onGoBack, permittedSu
     const unitsPerCarton = selectedWeight.unitsPerCarton || 12;
 
     const rc = selectedWeight.cartonPriceFromFactory + (selectedWeight.addedValue || 0);
-    const basePrice = isCarton ? rc : selectedWeight.retailPricePerUnit;
+    const computedRetail = rc / unitsPerCarton;
+    const basePrice = isCarton ? rc : computedRetail;
     const singleFinalPrice = basePrice * (1 - discount / 100);
     const totalPriceBeforeDiscount = basePrice * qty;
     const totalPriceAfterDiscount = singleFinalPrice * qty;
@@ -757,9 +764,12 @@ export default function PricesTab({ products: rawProducts, onGoBack, permittedSu
                     onChange={(e) => setCalcWeightId(e.target.value)}
                     className="w-full bg-[#F7FAFC] border border-slate-200 rounded-lg p-2.5 text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-indigo-500 text-[#1A365D]"
                   >
-                    {calcWeightsList.map(w => (
-                      <option key={w.id} value={w.id}>{w.size} (الأساسي للعبوة: {w.retailPricePerUnit}ج.م)</option>
-                    ))}
+                    {calcWeightsList.map(w => {
+                      const computedRetail = (w.cartonPriceFromFactory + (w.addedValue || 0)) / (w.unitsPerCarton || 12);
+                      return (
+                        <option key={w.id} value={w.id}>{w.size} (الأساسي للعبوة: {formatNum(computedRetail.toFixed(3))}ج.م)</option>
+                      );
+                    })}
                   </select>
                 </div>
               )}

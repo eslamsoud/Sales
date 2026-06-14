@@ -26,8 +26,14 @@ export default function ExpensesTab({ expenses, onAddExpense, onDeleteExpense, o
   React.useEffect(() => {
     window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
   }, [activeSubTab]);
+  const getLocalDateString = () => {
+    const now = new Date();
+    now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
+    return now.toISOString().substring(0, 16);
+  };
+
   const [category, setCategory] = useState(EXPENSE_CATEGORIES[0]);
-  const [date, setDate] = useState(new Date().toISOString().substring(0, 16));
+  const [date, setDate] = useState(getLocalDateString());
 
   const handleAddSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -52,7 +58,7 @@ export default function ExpensesTab({ expenses, onAddExpense, onDeleteExpense, o
     setAmount('');
     setDescription('');
     setCategory(EXPENSE_CATEGORIES[0]);
-    setDate(new Date().toISOString().substring(0, 16));
+    setDate(getLocalDateString());
   };
 
   const currentRecords = React.useMemo(() => {

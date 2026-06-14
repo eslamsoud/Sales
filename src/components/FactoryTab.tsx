@@ -187,12 +187,12 @@ export default function FactoryTab({
       weights.forEach(w => {
         const key = `${p.id}_${w.id}`;
         const loaded = factoryLoads
-          .filter(l => String(l.productId).trim() === String(p.id).trim() && String(l.weightId).trim() === String(w.id).trim())
+          .filter(l => String(l.productId).trim() === String(p.id).trim() && String(l.weightId || w.id).trim() === String(w.id).trim())
           .reduce((sum, l) => sum + l.quantity, 0);
         let sold = 0;
         invoices.forEach(inv => {
           inv.items.forEach(item => {
-            if (String(item.productId).trim() === String(p.id).trim() && String(item.weightId).trim() === String(w.id).trim()) {
+            if (String(item.productId).trim() === String(p.id).trim() && String(item.weightId || w.id).trim() === String(w.id).trim()) {
               sold += item.quantity;
             }
           });

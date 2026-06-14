@@ -5,6 +5,7 @@
  */
 
 import React, { useState, useEffect, useRef } from 'react';
+import { APIProvider } from '@vis.gl/react-google-maps';
 import PersonalSettingsTab from './components/PersonalSettingsTab';
 import { Product, Customer, Invoice, Expense, FactoryLoad, AppSettings, Trip, UserAuth, SyncLog, getProductWeightsFallback } from './types';
 import { AnimatePresence, motion } from 'motion/react';
@@ -91,7 +92,7 @@ export default function App() {
 
     if (currentUser.phone === '01228466613' || currentUser.role === 'owner') {
        const adminPass = localStorage.getItem('owner_passcode_sys') || '1987';
-       if (entered === adminPass || entered === '1987') {
+       if (entered === adminPass) {
            correct = entered;
        }
     }
@@ -117,6 +118,9 @@ export default function App() {
       ];
       u.canEditPrices = true;
       u.canUseAiAssistant = true;
+      u.canApplyDiscount = true;
+      u.maxDiscountPercentOfProfit = 100;
+      u.maxExtraDiscountAmount = 1000000;
     }
     return u;
   };
@@ -137,6 +141,9 @@ export default function App() {
       ],
       canEditPrices: true,
       canUseAiAssistant: true,
+      canApplyDiscount: true,
+      maxDiscountPercentOfProfit: 100,
+      maxExtraDiscountAmount: 1000000,
       password: btoa(encodeURIComponent(localStorage.getItem('owner_passcode_sys') || '1987')),
       customRoleName: 'المدير العام 👑',
       createdAt: new Date().toISOString()
@@ -330,6 +337,16 @@ export default function App() {
   useEffect(() => {
     latestDataRef.current = { products, factoryLoads, customers, invoices, expenses, trips, usersList };
   }, [products, factoryLoads, customers, invoices, expenses, trips, usersList]);
+
+  // ☁️ مزامنة تلقائية صامتة عند بدء تشغيل التطبيق لضمان سحب أحدث بيانات المناديب والأسعار من السحاب
+  useEffect(() => {
+    if (isDbLoaded && currentUser && APP_SCRIPT_URL && APP_SCRIPT_URL !== "ضع_رابط_الاسكريبت_الخاص_بك_هنا") {
+      const timer = setTimeout(() => {
+        handleUpdateData(true); // سحب صامت لدمج البيانات الجديدة دون مسح البيانات الحالية
+      }, 1500);
+      return () => clearTimeout(timer);
+    }
+  }, [isDbLoaded, currentUser?.phone]);
 
   const [showScrollTop, setShowScrollTop] = useState(false);
 
@@ -525,7 +542,14 @@ export default function App() {
   useEffect(() => { if (isDbLoaded) idbSet('expenses_sys', expenses); }, [expenses, isDbLoaded]);
   useEffect(() => { if (isDbLoaded) idbSet('trips_sys', trips); }, [trips, isDbLoaded]);
   useEffect(() => { if (isDbLoaded) idbSet('sync_logs_sys', syncLogs); }, [syncLogs, isDbLoaded]);
-  useEffect(() => { if (isDbLoaded) idbSet('settings_sys', settings); }, [settings, isDbLoaded]);
+  useEffect(() => { 
+    if (isDbLoaded) {
+      idbSet('settings_sys', settings);
+      if (settings.googleMapsApiKey) {
+        localStorage.setItem('GMP_API_KEY_FALLBACK', settings.googleMapsApiKey.trim());
+      }
+    }
+  }, [settings, isDbLoaded]);
 
   const [hasShownInactiveAlert, setHasShownInactiveAlert] = useState(false);
   useEffect(() => {
@@ -1011,7 +1035,10 @@ export default function App() {
             lastActive: u.lastActive || '',
             lastLat: u.lastLat || '',
             lastLng: u.lastLng || '',
-            canUseAiAssistant: u.canUseAiAssistant !== false
+            canUseAiAssistant: u.canUseAiAssistant !== false,
+            canApplyDiscount: u.canApplyDiscount !== false,
+            maxDiscountPercentOfProfit: u.maxDiscountPercentOfProfit !== undefined ? u.maxDiscountPercentOfProfit : 100,
+            maxExtraDiscountAmount: u.maxExtraDiscountAmount !== undefined ? u.maxExtraDiscountAmount : ''
         })) : [],
         factoryLoads: (currentLoads || []).map(fl => {
           const prod = productsMap.get(String(fl.productId).trim());
@@ -1323,6 +1350,13 @@ export default function App() {
         deletedIds = JSON.parse(localStorage.getItem('deleted_records_sys') || '[]');
       } catch(e) {}
 
+      let finalProducts = products;
+      let finalCustomers = customers;
+      let finalInvoices = invoices;
+      let finalExpenses = expenses;
+      let finalTrips = trips;
+      let finalLoads = factoryLoads;
+
       if (data && (data.users || data.products || data.customers)) {
         // 1. Update users permissions list (highly sensitive, managed by general manager)
         if (data.users && Array.isArray(data.users)) {
@@ -1343,11 +1377,10 @@ export default function App() {
               : Array.isArray(u.permittedSubTabs) ? u.permittedSubTabs : [],
             canEditPrices: u.canEditPrices !== false,
             canUseAiAssistant: u.canUseAiAssistant !== false,
-            password: (() => {
-              const p = String(u.password || '').replace(/^'/, '');
-              try { if (btoa(atob(p)) === p || btoa(decodeURIComponent(atob(p))) === p) return p; } catch(e) {}
-              return btoa(encodeURIComponent(p));
-            })(),
+            canApplyDiscount: u.canApplyDiscount !== false,
+            maxDiscountPercentOfProfit: u.maxDiscountPercentOfProfit !== undefined ? Number(u.maxDiscountPercentOfProfit) : 100,
+            maxExtraDiscountAmount: u.maxExtraDiscountAmount !== undefined && u.maxExtraDiscountAmount !== '' ? Number(u.maxExtraDiscountAmount) : undefined,
+            password: btoa(encodeURIComponent(String(u.password || '').replace(/^'/, ''))),
             customRoleName: String(u.customRoleName || ''),
             lastActive: u.lastActive || undefined,
             lastLat: Number(u.lastLat) || undefined,
@@ -1452,22 +1485,21 @@ export default function App() {
           
           const mappedProducts = Object.values(productGroups).filter((p: any) => !deletedIds.includes(p.id));
           if (shouldReplace) {
-            setProducts(mappedProducts);
+            finalProducts = mappedProducts;
           } else {
-            setProducts(prev => {
-              const merged = [...prev];
-              mappedProducts.forEach(np => {
-                // الاعتماد على الاسم بجانب الـ ID لمنع تكرار الصنف نهائياً
-                const idx = merged.findIndex(p => p.id === np.id || p.name.trim().toLowerCase() === np.name.trim().toLowerCase());
-                if (idx > -1) {
-                    merged[idx] = { ...np, id: merged[idx].id } as Product;
-                } else {
-                    merged.push(np as Product);
-                }
-              });
-              return merged;
+            const merged = [...products];
+            mappedProducts.forEach(np => {
+              // الاعتماد على الاسم بجانب الـ ID لمنع تكرار الصنف نهائياً
+              const idx = merged.findIndex(p => p.id === np.id || p.name.trim().toLowerCase() === np.name.trim().toLowerCase());
+              if (idx > -1) {
+                  merged[idx] = { ...np, id: merged[idx].id } as Product;
+              } else {
+                  merged.push(np as Product);
+              }
             });
+            finalProducts = merged;
           }
+          setProducts(finalProducts);
         } else if (data.products && Array.isArray(data.products)) {
           // التوافق الرجعي لو السيرفر لسه مبعتش النسخة المسطحة
           const mappedProducts = data.products.map((p: any) => ({
@@ -1480,18 +1512,17 @@ export default function App() {
             weights: Array.isArray(p.weights) && p.weights.length > 0 ? p.weights : [{ id: '1', size: 'كرتونة', cartonPriceFromFactory: Number(p.price || 0)*12, unitsPerCarton: 12, factoryPricePerUnit: Number(p.price || 0), profitMarginPercent: 0, retailPricePerUnit: Number(p.price || 0) }]
           })).filter((p: any) => !deletedIds.includes(p.id));
           if (shouldReplace) {
-            setProducts(mappedProducts);
+            finalProducts = mappedProducts;
           } else {
-            setProducts(prev => {
-              const merged = [...prev];
-              mappedProducts.forEach((np: any) => {
-                const idx = merged.findIndex(p => p.id === np.id);
-                if (idx > -1) merged[idx] = np;
-                else merged.push(np);
-              });
-              return merged;
+            const merged = [...products];
+            mappedProducts.forEach((np: any) => {
+              const idx = merged.findIndex(p => p.id === np.id);
+              if (idx > -1) merged[idx] = np;
+              else merged.push(np);
             });
+            finalProducts = merged;
           }
+          setProducts(finalProducts);
         }
 
         // 3. Update customers list
@@ -1499,7 +1530,11 @@ export default function App() {
           const mappedCustomers = data.customers.map((c: any) => ({
             id: c.id || c.phone || String(Math.random()),
             name: c.name,
-            phone: c.phone,
+            phone: (() => {
+              let p = String(c.phone || '').replace(/^'/, '').replace(/\s+/g, '').trim();
+              if (p.length === 10 && p.startsWith('1')) return '0' + p;
+              return p;
+            })(),
             area: c.area || 'غير محدد',
             governorate: c.governorate || 'القاهرة',
             detailedAddress: c.detailedAddress || '',
@@ -1510,21 +1545,20 @@ export default function App() {
             lastPurchaseDate: c.lastPurchaseDate || ''
           })).filter((c: any) => !deletedIds.includes(c.id));
           if (shouldReplace) {
-            setCustomers(mappedCustomers);
+            finalCustomers = mappedCustomers;
           } else {
-            setCustomers(prev => {
-              const merged = [...prev];
-              mappedCustomers.forEach((nc: any) => {
-                const idx = merged.findIndex(c => c.id === nc.id || (c.phone && c.phone === nc.phone));
-                if (idx > -1) {
-                  merged[idx] = { ...merged[idx], ...nc };
-                } else {
-                  merged.push(nc);
-                }
-              });
-              return merged;
+            const merged = [...customers];
+            mappedCustomers.forEach((nc: any) => {
+              const idx = merged.findIndex(c => c.id === nc.id || (c.phone && c.phone === nc.phone));
+              if (idx > -1) {
+                merged[idx] = { ...merged[idx], ...nc };
+              } else {
+                merged.push(nc);
+              }
             });
+            finalCustomers = merged;
           }
+          setCustomers(finalCustomers);
         }
 
         // 4. Update operational tables (Invoices, Expenses, Trips, Factory loads)
@@ -1558,18 +1592,17 @@ export default function App() {
           });
           
           if (shouldReplace) {
-            setInvoices(mappedInvoices);
+            finalInvoices = mappedInvoices;
           } else {
-            setInvoices(prev => {
-              const merged = [...prev];
-              mappedInvoices.forEach((ni: any) => {
-                const idx = merged.findIndex(i => i.id === ni.id);
-                if (idx > -1) merged[idx] = ni;
-                else merged.push(ni);
-              });
-              return merged;
+            const merged = [...invoices];
+            mappedInvoices.forEach((ni: any) => {
+              const idx = merged.findIndex(i => i.id === ni.id);
+              if (idx > -1) merged[idx] = ni;
+              else merged.push(ni);
             });
+            finalInvoices = merged;
           }
+          setInvoices(finalInvoices);
         }
 
         if (data.discoveredLeads && Array.isArray(data.discoveredLeads)) {
@@ -1626,18 +1659,17 @@ export default function App() {
             };
           }).filter((e: any) => e.amount > 0 && e.description && !deletedIds.includes(e.id));
           if (shouldReplace) {
-            setExpenses(mappedExpenses);
+            finalExpenses = mappedExpenses;
           } else {
-            setExpenses(prev => {
-              const merged = [...prev];
-              mappedExpenses.forEach((ne: any) => {
-                const idx = merged.findIndex(e => e.id === ne.id);
-                if (idx > -1) merged[idx] = ne;
-                else merged.push(ne);
-              });
-              return merged;
+            const merged = [...expenses];
+            mappedExpenses.forEach((ne: any) => {
+              const idx = merged.findIndex(e => e.id === ne.id);
+              if (idx > -1) merged[idx] = ne;
+              else merged.push(ne);
             });
+            finalExpenses = merged;
           }
+          setExpenses(finalExpenses);
         }
 
         if (data.trips && Array.isArray(data.trips)) {
@@ -1653,18 +1685,17 @@ export default function App() {
             odometerEnd: t.odometerEnd ? Number(t.odometerEnd) : undefined
           })).filter((t: any) => !deletedIds.includes(t.id));
           if (shouldReplace) {
-            setTrips(mappedTrips);
+            finalTrips = mappedTrips;
           } else {
-            setTrips(prev => {
-              const merged = [...prev];
-              mappedTrips.forEach((nt: any) => {
-                const idx = merged.findIndex(t => t.id === nt.id);
-                if (idx > -1) merged[idx] = nt;
-                else merged.push(nt);
-              });
-              return merged;
+            const merged = [...trips];
+            mappedTrips.forEach((nt: any) => {
+              const idx = merged.findIndex(t => t.id === nt.id);
+              if (idx > -1) merged[idx] = nt;
+              else merged.push(nt);
             });
+            finalTrips = merged;
           }
+          setTrips(finalTrips);
         }
 
         if (data.factoryLoads && Array.isArray(data.factoryLoads)) {
@@ -1680,22 +1711,34 @@ export default function App() {
             advanceAmount: Number(fl.advanceAmount || 0),
             warehouseKeeper: fl.warehouseKeeper || '',
             delegateName: fl.delegateName || '',
-            delegatePhone: fl.delegatePhone || ''
+            delegatePhone: fl.delegatePhone || '',
+            cartonPrice: fl.cartonPrice !== undefined ? Number(fl.cartonPrice) : undefined,
+            unitPrice: fl.unitPrice !== undefined ? Number(fl.unitPrice) : undefined
           })).filter((fl: any) => !deletedIds.includes(fl.id));
           if (shouldReplace) {
-            setFactoryLoads(mappedLoads);
+            finalLoads = mappedLoads;
           } else {
-            setFactoryLoads(prev => {
-              const merged = [...prev];
-              mappedLoads.forEach((nl: any) => {
-                const idx = merged.findIndex(l => l.id === nl.id);
-                if (idx > -1) merged[idx] = nl;
-                else merged.push(nl);
-              });
-              return merged;
+            const merged = [...factoryLoads];
+            mappedLoads.forEach((nl: any) => {
+              const idx = merged.findIndex(l => l.id === nl.id);
+              if (idx > -1) merged[idx] = nl;
+              else merged.push(nl);
             });
+            finalLoads = merged;
           }
+          setFactoryLoads(finalLoads);
         }
+
+        // Write explicitly to IndexedDB to guarantee persistence before reload
+        await Promise.all([
+          idbSet('products_sys', finalProducts),
+          idbSet('customers_sys', finalCustomers),
+          idbSet('invoices_sys', finalInvoices),
+          idbSet('expenses_sys', finalExpenses),
+          idbSet('trips_sys', finalTrips),
+          idbSet('factory_sys', finalLoads),
+          idbSet('settings_sys', settings)
+        ]);
 
         if (!isSilent) {
           showToast("✓ تم التحديث بنجاح! جاري تنشيط الواجهة...");
@@ -1725,8 +1768,30 @@ export default function App() {
   const filteredExpenses = isManager ? expenses : expenses.filter(e => e.delegatePhone === effectiveUser?.phone || (e.delegateName && effectiveUser?.name && e.delegateName.includes(effectiveUser.name.replace(/ \(.*?\)/, '').trim())));
   const filteredTrips = isManager ? trips : trips.filter(t => t.delegatePhone === effectiveUser?.phone || (t.delegateName && effectiveUser?.name && t.delegateName.includes(effectiveUser.name.replace(/ \(.*?\)/, '').trim())));
 
+  const MAPS_LIBRARIES: any[] = ['places', 'geocoding', 'geometry', 'marker'];
+
+  // قراءة المفتاح بالأولوية الصحيحة:
+  // 1. متغيّر بيئة Vercel للبيئة التطويرية/معاينة
+  // 2. متغيّر بيئة Vercel للإنتاج
+  // 3. مفتاح مخزن في الإعدادات (يأتي من Google Sheets)
+  // 4. مفتاح مخزن في localStorage (fallback فوري قبل جلب الإعدادات)
+  let envKey = '';
+  try { envKey = import.meta.env.VITE_GOOGLE_MAPS_PLATFORM_KEY?.trim() || ''; } catch(e) {}
+
+  const hostname = typeof window !== 'undefined' ? window.location.hostname : '';
+  const isDevEnv = hostname === 'localhost' || hostname.endsWith('.vercel.app');
+  const devKey = (() => { try { return import.meta.env.VITE_GOOGLE_MAPS_DEV_KEY?.trim() || ''; } catch(e) { return ''; } })();
+
+  const activeKey = 
+    (isDevEnv && devKey ? devKey : '') ||
+    envKey ||
+    settings.googleMapsApiKey?.trim() ||
+    localStorage.getItem('GMP_API_KEY_FALLBACK')?.trim() ||
+    '';
+
   return (
-    <div className="bg-[#F7FAFC] min-h-screen text-[#1A365D] transition-all font-sans antialiased flex flex-col justify-between animate-fade-in" id="app-root-wrapper">
+    <APIProvider key={activeKey || 'no-key'} apiKey={activeKey} version="beta" libraries={MAPS_LIBRARIES}>
+      <div className="bg-[#F7FAFC] min-h-screen text-[#1A365D] transition-all font-sans antialiased flex flex-col justify-between animate-fade-in" id="app-root-wrapper">
       {/* 🛡️ Secure Header Bar */}
       <header className="bg-[#1A365D] text-white py-3 px-4 shadow-md flex justify-between items-center sm:px-6" dir="rtl">
         <div className="flex items-center gap-3">
@@ -2052,6 +2117,7 @@ export default function App() {
             settings={settings}
             permittedSubTabs={effectiveUser.permittedSubTabs}
             currentUser={effectiveUser}
+            googleMapsApiKey={activeKey}
           />
         )}
 
@@ -2066,6 +2132,7 @@ export default function App() {
             onDeleteInvoice={handleDeleteInvoice}
             onGoBack={() => setActiveTab('dashboard')}
             permittedSubTabs={effectiveUser.permittedSubTabs}
+            currentUser={effectiveUser}
           />
         )}
 
@@ -2248,47 +2315,11 @@ export default function App() {
             dir="rtl"
           >
             <Bell className="w-6 h-6 text-amber-400 shrink-0 animate-pulse" />
-            <span className="text-sm leading-relaxed whitespace-pre-line text-right w-full">{customToast.message}</span>
+            <span className="text-sm leading-relaxed whitespace-pre-wrap">{customToast.message}</span>
           </motion.div>
         )}
       </AnimatePresence>
-
-      {/* Global Elegant Confirm Dialog */}
-      <AnimatePresence>
-        {confirmState && (
-          <div className="fixed inset-0 z-[99999] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in" dir="rtl">
-            <motion.div 
-              initial={{ scale: 0.9, opacity: 0, y: 20 }}
-              animate={{ scale: 1, opacity: 1, y: 0 }}
-              exit={{ scale: 0.9, opacity: 0, y: 20 }}
-              className="bg-white rounded-3xl p-6 w-full max-w-sm shadow-2xl flex flex-col gap-4 text-center border border-slate-100"
-            >
-              <div className="mx-auto w-16 h-16 bg-indigo-50 rounded-full flex items-center justify-center text-indigo-600 mb-2 shadow-inner">
-                {confirmState.isAlert ? <AlertCircle className="h-8 w-8 text-amber-500" /> : <HelpCircle className="h-8 w-8 text-indigo-500" />}
-              </div>
-              <h3 className="text-[#1A365D] font-black text-base whitespace-pre-wrap leading-relaxed">
-                {confirmState.message}
-              </h3>
-              <div className="flex gap-3 mt-4">
-                <button
-                  onClick={() => { confirmState.resolve(true); setConfirmState(null); }}
-                  className="flex-1 bg-[#1A365D] hover:bg-indigo-900 text-white py-3 rounded-xl font-bold active:scale-95 transition-all shadow-md text-sm cursor-pointer"
-                >
-                  {confirmState.isAlert ? 'حسناً' : 'تأكيد ومتابعة'}
-                </button>
-                {!confirmState.isAlert && (
-                  <button
-                    onClick={() => { confirmState.resolve(false); setConfirmState(null); }}
-                    className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 py-3 rounded-xl font-bold active:scale-95 transition-all shadow-sm text-sm cursor-pointer"
-                  >
-                    إلغاء
-                  </button>
-                )}
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-    </div>
+      </div>
+    </APIProvider>
   );
 }

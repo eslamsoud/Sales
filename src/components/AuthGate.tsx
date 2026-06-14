@@ -101,7 +101,7 @@ export default function AuthGate({ usersList, customersList = [], onUpdateUsers,
         // Fallback for manager if password mismatch but matches the admin pin
         if (found.role === 'owner' || found.phone === '01228466613') {
           const adminPass = localStorage.getItem('owner_passcode_sys') || '1987';
-          if (enteredPass === adminPass || enteredPass === '1987') {
+          if (enteredPass === adminPass) {
             actualPass = enteredPass;
           }
         }
@@ -258,7 +258,13 @@ export default function AuthGate({ usersList, customersList = [], onUpdateUsers,
                 dir="ltr"
                 placeholder="010XXXXXXXX"
                 value={phone}
-                onChange={(e) => setPhone(e.target.value.replace(/[^0-9+]/g, ''))}
+                inputMode="tel"
+                onChange={(e) => {
+                  const normalized = e.target.value
+                    .replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d).toString())
+                    .replace(/[^0-9+]/g, '');
+                  setPhone(normalized);
+                }}
                 className="w-full bg-[#F7FAFC] border border-slate-200 rounded-2xl py-2.5 pr-10 pl-4 text-center font-bold tracking-wider text-base text-[#1A365D] focus:outline-none focus:ring-2 focus:ring-[#1A365D]"
               />
             </div>
@@ -281,7 +287,11 @@ export default function AuthGate({ usersList, customersList = [], onUpdateUsers,
                   required
                   placeholder="أدخل الباسورد"
                   value={password}
-                  onChange={(e) => setPassword(e.target.value)}
+                  inputMode="numeric"
+                  onChange={(e) => {
+                    const normalized = e.target.value.replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d).toString());
+                    setPassword(normalized);
+                  }}
                   className="w-full bg-[#F7FAFC] border border-slate-200 rounded-2xl py-2.5 pr-10 pl-4 text-center font-bold tracking-widest text-[#1A365D] focus:outline-none focus:ring-2 focus:ring-[#1A365D] font-mono text-base"
                 />
               </div>

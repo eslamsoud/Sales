@@ -39,16 +39,43 @@ import { showToast } from '../utils/toast';
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
 import { idbSet } from '../utils/idb';
-import { APIProvider, Map as GoogleMap, AdvancedMarker, Pin } from '@vis.gl/react-google-maps';
+import { Map as GoogleMap, AdvancedMarker, Pin, useMapsLibrary } from '@vis.gl/react-google-maps';
 
-const API_KEY =
-  import.meta.env.VITE_GOOGLE_MAPS_PLATFORM_KEY ||
-  (globalThis as any).process?.env?.GOOGLE_MAPS_PLATFORM_KEY ||
-  (globalThis as any).GOOGLE_MAPS_PLATFORM_KEY ||
-  localStorage.getItem('GMP_API_KEY_FALLBACK') ||
-  '';
+const getActiveGoogleMapsKey = () => {
+  let envKey = '';
+  try {
+    envKey = import.meta.env.VITE_GOOGLE_MAPS_PLATFORM_KEY || process.env.GOOGLE_MAPS_PLATFORM_KEY || '';
+  } catch (e) {}
+  
+  const key = envKey || localStorage.getItem('GMP_API_KEY_FALLBACK') || '';
+  return key && key !== 'YOUR_API_KEY' ? key : 'AIzaSyDummyKeyForDevelopmentPurposesOnly1';
+};
+
+class MapErrorBoundary extends React.Component<{children: React.ReactNode}, { hasError: boolean; error: any }> {
+  constructor(props: any) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error: any) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: any, errorInfo: any) {
+    console.error("Map Error caught by Boundary:", error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return <div className="flex items-center justify-center h-full w-full bg-[#E0E2E7] text-slate-400 p-8 rounded-xl">📍 الخريطة غير متاحة مؤقتاً</div>;
+    }
+    return this.props.children;
+  }
+}
 
 const APP_SCRIPT_URL = import.meta.env.VITE_GOOGLE_SHEETS_URL || "https://script.google.com/macros/s/AKfycbw64AiaMZkBBb2eJxUdCkRboejwIvWGxZoGo1Ub0LrqGtL8BeFim0qN_k02eaeasurU/exec";
+
+const MAPS_LIBRARIES = ['places', 'geometry', 'marker'];
 
 const EGYPT_CITIES: Record<string, string[]> = {
   'القاهرة': ['مصر الجديدة', 'مدينة نصر', 'المعادي', 'التجمع الخامس', 'شبرا', 'المرج', 'حلوان', 'المطرية', 'الزيتون', 'السلام', 'البساتين', 'دار السلام', 'الخليفة', 'المقطم', 'القاهرة الجديدة', 'بدر', 'الشروق', '15 مايو', 'وسط البلد', 'عين شمس', 'الزمالك'],
@@ -264,7 +291,10 @@ function doGet(e) {
         lastActive: getSafeString(row[9]), 
         lastLat: getSafeNumber(row[10]), 
         lastLng: getSafeNumber(row[11]),
-        canUseAiAssistant: row[12] === 'لا' ? false : true
+        canUseAiAssistant: row[12] === 'لا' ? false : true,
+        canApplyDiscount: row[13] === 'لا' ? false : true,
+        maxDiscountPercentOfProfit: row[14] !== undefined && row[14] !== '' ? getSafeNumber(row[14]) : 100,
+        maxExtraDiscountAmount: row[15] !== undefined && row[15] !== '' ? getSafeNumber(row[15]) : undefined
       };
     });
 
@@ -513,10 +543,13 @@ function doPost(e) {
             u.permittedTabs || '', u.permittedSubTabs || '',
             u.canEditPrices === false ? 'لا' : 'نعم',
             u.lastActive || '', u.lastLat || '', u.lastLng || '',
-            u.canUseAiAssistant === false ? 'لا' : 'نعم'
+            u.canUseAiAssistant === false ? 'لا' : 'نعم',
+            u.canApplyDiscount === false ? 'لا' : 'نعم',
+            u.maxDiscountPercentOfProfit !== undefined ? u.maxDiscountPercentOfProfit : 100,
+            u.maxExtraDiscountAmount !== undefined ? u.maxExtraDiscountAmount : ''
           ]; 
         });
-        upsertData('صلاحيات_المستخدمين', ['رقم الهاتف', 'الاسم', 'الدور/الوظيفة', 'الحالة', 'الرمز السري', 'المسمى الوظيفي', 'الصلاحيات المفعّلة', 'الصلاحيات الفرعية', 'تعديل الأسعار', 'آخر ظهور', 'خط العرض', 'خط الطول', 'المستشار الذكي'], userRows, "#ead1dc", deletedIds);
+        upsertData('صلاحيات_المستخدمين', ['رقم الهاتف', 'الاسم', 'الدور/الوظيفة', 'الحالة', 'الرمز السري', 'المسمى الوظيفي', 'الصلاحيات المفعّلة', 'الصلاحيات الفرعية', 'تعديل الأسعار', 'آخر ظهور', 'خط العرض', 'خط الطول', 'المستشار الذكي', 'السماح بالخصم', 'أقصى خصم من الربح', 'أقصى مبلغ خصم إضافي'], userRows, "#ead1dc", deletedIds);
       }
 
       // 8. المكتشفين
@@ -601,6 +634,8 @@ export default function ManageTab({
   onRefreshData,
   factoryLoads = []
 }: ManageTabProps) {
+  const markerLib = useMapsLibrary('marker');
+
   // Helper for subtabs permissions
   const getSubTabsForTab = (tabId: string): Array<{ id: string; name: string }> => {
     switch (tabId) {
@@ -692,7 +727,23 @@ export default function ManageTab({
   // AI Personalization
   const [aiName, setAiName] = useState(settings.aiName || 'المستشار الميداني');
   const [aiVoiceURI, setAiVoiceURI] = useState(settings.aiVoiceURI || '');
+  const [googleMapsApiKey, setGoogleMapsApiKey] = useState(() => settings.googleMapsApiKey || localStorage.getItem('GMP_API_KEY_FALLBACK') || '');
   const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
+
+  // Sync settings when they are loaded from IndexedDB asynchronously
+  useEffect(() => {
+    if (settings) {
+      if (settings.currency) setCurrency(settings.currency);
+      if (settings.aiPitchGuidelines) setPitchGuidelines(settings.aiPitchGuidelines);
+      if (settings.aiRetentionGuidelines) setRetentionGuidelines(settings.aiRetentionGuidelines);
+      if (settings.representativeName) setRepName(settings.representativeName);
+      if (settings.representativePhone) setRepPhone(settings.representativePhone);
+      if (settings.appName) setInvoiceAppName(settings.appName);
+      if (settings.aiName) setAiName(settings.aiName);
+      if (settings.aiVoiceURI) setAiVoiceURI(settings.aiVoiceURI);
+      if (settings.googleMapsApiKey) setGoogleMapsApiKey(settings.googleMapsApiKey);
+    }
+  }, [settings]);
 
   // Fetch system voices
   useEffect(() => {
@@ -995,6 +1046,7 @@ export default function ManageTab({
   };
   const handleSaveSettings = (e: React.FormEvent) => {
     e.preventDefault();
+    const isKeyChanged = googleMapsApiKey.trim() !== (settings.googleMapsApiKey || '').trim();
     onUpdateSettings({
       ...settings,
       currency: currency.trim(),
@@ -1004,14 +1056,35 @@ export default function ManageTab({
       representativePhone: repPhone.trim(),
       appName: invoiceAppName.trim(),
       aiName: aiName.trim(),
-      aiVoiceURI: aiVoiceURI
+      aiVoiceURI: aiVoiceURI,
+      googleMapsApiKey: googleMapsApiKey.trim()
     });
-    setSaveSuccessMsg('تم حفظ الإعدادات بنجاح!');
+    localStorage.setItem('GMP_API_KEY_FALLBACK', googleMapsApiKey.trim());
+    setSaveSuccessMsg(isKeyChanged ? 'تم حفظ الإعدادات بنجاح! جاري تنشيط التطبيق لتطبيق مفتاح الخريطة الجديد...' : 'تم حفظ الإعدادات بنجاح!');
     setTimeout(() => setSaveSuccessMsg(''), 3000);
     
     // الرفع التلقائي للسحابة لكي يراها المدير في المتصفحات والأجهزة الأخرى
     setTimeout(() => {
       onTriggerSync?.('تحديث وتسعير الأصناف');
+      if (isKeyChanged) {
+        setTimeout(() => {
+          window.location.reload();
+        }, 1500);
+      }
+    }, 500);
+  };
+  const handleSaveMapsKeyOnly = () => {
+    onUpdateSettings({
+      ...settings,
+      googleMapsApiKey: googleMapsApiKey.trim()
+    });
+    localStorage.setItem('GMP_API_KEY_FALLBACK', googleMapsApiKey.trim());
+    showToast('✓ تم حفظ مفتاح خرائط جوجل ومزامنته! جاري إعادة تشغيل التطبيق...');
+    setTimeout(() => {
+      onTriggerSync?.('تحديث مفتاح الخرائط');
+      setTimeout(() => {
+        window.location.reload();
+      }, 1500);
     }, 500);
   };
   const salesStats = React.useMemo(() => {
@@ -1149,7 +1222,14 @@ export default function ManageTab({
           customRoleName: u.customRoleName || '',
           permittedTabs: (u.permittedTabs || []).join(','),
           permittedSubTabs: (u.permittedSubTabs || []).join(','),
-          canEditPrices: u.canEditPrices !== false
+          canEditPrices: u.canEditPrices !== false,
+          lastActive: u.lastActive || '',
+          lastLat: u.lastLat || '',
+          lastLng: u.lastLng || '',
+          canUseAiAssistant: u.canUseAiAssistant !== false,
+          canApplyDiscount: u.canApplyDiscount !== false,
+          maxDiscountPercentOfProfit: u.maxDiscountPercentOfProfit !== undefined ? u.maxDiscountPercentOfProfit : 100,
+          maxExtraDiscountAmount: u.maxExtraDiscountAmount !== undefined ? u.maxExtraDiscountAmount : ''
         })),
         factoryLoads: (factoryLoads || []).map(fl => {
           const prod = productsMap.get(String(fl.productId).trim());
@@ -1504,7 +1584,7 @@ export default function ManageTab({
                     const correct = localStorage.getItem('owner_passcode_sys') || '1987';
                     let userPass = '';
                     try { userPass = decodeURIComponent(atob(currentUser?.password || '')); } catch(err) {}
-                  if (typed === correct || typed === userPass || typed === '1987') {
+                  if (typed === correct) {
                       setIsManagerUnlocked(true);
                     } else {
                       setManagerLoginError('عذراً، الرقم السري للمالك غير صحيح!');
@@ -1518,9 +1598,7 @@ export default function ManageTab({
                 onClick={() => {
                 const typed = managerTypedPassword.trim().replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d).toString());
                   const correct = localStorage.getItem('owner_passcode_sys') || '1987';
-                  let userPass = '';
-                  try { userPass = decodeURIComponent(atob(currentUser?.password || '')); } catch(err) {}
-                if (typed === correct || typed === userPass || typed === '1987') {
+                  if (typed === correct) {
                     setIsManagerUnlocked(true);
                   } else {
                     setManagerLoginError('عذراً، الرقم السري للمالك غير صحيح!');
@@ -1607,6 +1685,8 @@ export default function ManageTab({
                   const mapCenter = trackedUser?.lastLat && trackedUser?.lastLng 
                     ? { lat: trackedUser.lastLat, lng: trackedUser.lastLng }
                     : { lat: 30.0444, lng: 31.2357 }; // Default Cairo
+                  const activeKey = getActiveGoogleMapsKey();
+                  const isDummy = !activeKey || activeKey.trim() === '' || activeKey.startsWith('AIzaSyDummyKey') || activeKey === 'YOUR_API_KEY';
 
                   return (
                     <>
@@ -1641,43 +1721,48 @@ export default function ManageTab({
 
                           {/* Real Google Maps Tactical Screen */}
                           <div className="relative w-full h-64 bg-slate-100 rounded-xl overflow-hidden border border-slate-200 shadow-inner flex items-center justify-center">
-                                {API_KEY && API_KEY !== 'YOUR_API_KEY' ? (
-                                  <>
-                                    <APIProvider apiKey={API_KEY}>
+                                <MapErrorBoundary>
                                   <GoogleMap
                                     defaultCenter={mapCenter}
                                     center={mapCenter}
                                     defaultZoom={15}
-                                    mapId="LIVE_TRACKING_MAP"
+                                    mapId="DEMO_MAP_ID"
                                     disableDefaultUI={false}
                                     gestureHandling="greedy"
                                   >
-                                    {trackedUser?.lastLat && trackedUser?.lastLng && (
+                                    {trackedUser?.lastLat && trackedUser?.lastLng && markerLib && (window as any).google?.maps?.marker?.AdvancedMarkerElement && (
                                       <AdvancedMarker position={{ lat: trackedUser.lastLat, lng: trackedUser.lastLng }}>
-                                        <Pin background="#E11D48" glyphColor="#fff" borderColor="#BE123C" />
+                                        {(window as any).google?.maps?.marker?.PinElement ? (
+                                          <Pin background="#1A365D" glyphColor="#DD6B20" borderColor="#ffffff" />
+                                        ) : (
+                                          <div className="relative flex items-center justify-center animate-bounce">
+                                            <div className="absolute w-10 h-10 bg-[#DD6B20] rounded-full opacity-30 animate-ping" />
+                                            <div className="relative bg-[#1A365D] text-white rounded-full p-1.5 border-[2px] border-white shadow-lg flex items-center justify-center">
+                                              <MapPin className="h-4 w-4 text-white" fill="#DD6B20" />
+                                            </div>
+                                          </div>
+                                        )}
                                       </AdvancedMarker>
                                     )}
                                   </GoogleMap>
-                                </APIProvider>
+                                </MapErrorBoundary>
                                 
                                 <div className="absolute top-2 right-2 text-[9px] text-emerald-700 bg-white/95 px-2 py-1 rounded shadow-sm font-black opacity-90 select-none flex items-center gap-1 border border-emerald-200">
                                   <span className="h-1.5 w-1.5 bg-emerald-500 rounded-full animate-ping" />
                                   تتبع خرائط جوجل نشط
                                 </div>
-                                
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    onTriggerSync?.('تحديث المواقع الجغرافية');
-                                    showToast('جاري سحب أحدث الإحداثيات من السحابة...');
-                                  }}
-                                  className="absolute bottom-2 left-2 bg-[#1A365D]/90 hover:bg-[#1A365D] text-white border border-[#1A365D] rounded px-3 py-2 text-[10px] font-bold cursor-pointer transition-colors flex items-center gap-1.5 shadow-md"
-                                >
-                                  <RefreshCw className="h-3.5 w-3.5" />
-                                  استدعاء موقع المندوب الآن 🔄
-                                </button>
-                                  </>
-                        ) : null}
+                              
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  onTriggerSync?.('تحديث المواقع الجغرافية');
+                                  showToast('جاري سحب أحدث الإحداثيات من السحابة...');
+                                }}
+                                className="absolute bottom-2 left-2 bg-[#1A365D]/90 hover:bg-[#1A365D] text-white border border-[#1A365D] rounded px-3 py-2 text-[10px] font-bold cursor-pointer transition-colors flex items-center gap-1.5 shadow-md"
+                              >
+                                <RefreshCw className="h-3.5 w-3.5" />
+                                استدعاء موقع المندوب الآن 🔄
+                              </button>
                           </div>
                     </>
                   );
@@ -2760,6 +2845,115 @@ export default function ManageTab({
                                 </div>
                               </div>
 
+                              {/* Discount Permissions Toggle */}
+                              <div className="mt-3 bg-amber-50/50 p-3 rounded-xl border border-amber-150 flex flex-col gap-2">
+                                <span className="text-[11px] font-black text-amber-900">🏷️ صلاحية الخصم الإضافي:</span>
+                                <div className="flex bg-white p-1 rounded-lg border border-slate-200">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const updated = usersList.map(u => 
+                                        u.phone === user.phone 
+                                          ? { ...u, canApplyDiscount: true } 
+                                          : u
+                                      );
+                                      onUpdateUsersList(updated);
+                                      localStorage.setItem('users_permissions_sys', JSON.stringify(updated));
+                                      onTriggerSync?.('تفعيل صلاحية الخصم الإضافي للمندوب');
+                                    }}
+                                    className={`flex-1 py-1.5 px-2 text-[10px] sm:text-xs font-black rounded-md transition-all cursor-pointer ${
+                                      user.canApplyDiscount !== false ? 'bg-amber-100 text-amber-800 shadow-sm' : 'text-slate-400 hover:text-slate-700'
+                                    }`}
+                                  >
+                                    السماح بالخصم الإضافي 🏷️
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const updated = usersList.map(u => 
+                                        u.phone === user.phone 
+                                          ? { ...u, canApplyDiscount: false } 
+                                          : u
+                                      );
+                                      onUpdateUsersList(updated);
+                                      localStorage.setItem('users_permissions_sys', JSON.stringify(updated));
+                                      onTriggerSync?.('تعطيل صلاحية الخصم الإضافي للمندوب');
+                                    }}
+                                    className={`flex-1 py-1.5 px-2 text-[10px] sm:text-xs font-black rounded-md transition-all cursor-pointer ${
+                                      user.canApplyDiscount === false ? 'bg-rose-100 text-rose-800 shadow-sm' : 'text-slate-400 hover:text-slate-700'
+                                    }`}
+                                  >
+                                    منع الخصم الإضافي 🚫
+                                  </button>
+                                </div>
+
+                                {user.canApplyDiscount !== false && (
+                                  <div className="flex flex-col gap-1.5 mt-1 border-t border-slate-200/50 pt-2 text-right">
+                                    <label className="text-[10px] font-bold text-amber-950">
+                                      أقصى مبلغ مسموح به للخصم الإضافي بالفاتورة (ج.م):
+                                    </label>
+                                    <input
+                                      type="number"
+                                      min="0"
+                                      placeholder="بدون حد أقصى"
+                                      value={user.maxExtraDiscountAmount !== undefined ? user.maxExtraDiscountAmount : ''}
+                                      onChange={(e) => {
+                                        const val = e.target.value === '' ? undefined : parseFloat(e.target.value);
+                                        const updated = usersList.map(u => 
+                                          u.phone === user.phone 
+                                            ? { ...u, maxExtraDiscountAmount: val } 
+                                            : u
+                                        );
+                                        onUpdateUsersList(updated);
+                                        localStorage.setItem('users_permissions_sys', JSON.stringify(updated));
+                                      }}
+                                      className="w-full bg-[#FFFFFF] border border-slate-200 rounded-lg p-1.5 text-xs font-bold focus:outline-none text-[#1A365D]"
+                                    />
+                                  </div>
+                                )}
+
+                                <div className="flex flex-col gap-1.5 mt-1.5 border-t border-slate-200/50 pt-2 text-right">
+                                  <label className="text-[10px] font-bold text-slate-500">
+                                    الحد الأقصى للخصم المسموح به (كنسبة مئوية من صافي ربح الصنف):
+                                  </label>
+                                  <div className="flex items-center gap-2">
+                                    <input
+                                      type="range"
+                                      min="0"
+                                      max="100"
+                                      step="5"
+                                      value={user.maxDiscountPercentOfProfit !== undefined ? user.maxDiscountPercentOfProfit : 100}
+                                      onChange={(e) => {
+                                        const val = parseInt(e.target.value);
+                                        const updated = usersList.map(u => 
+                                          u.phone === user.phone 
+                                            ? { ...u, maxDiscountPercentOfProfit: val } 
+                                            : u
+                                        );
+                                        onUpdateUsersList(updated);
+                                        localStorage.setItem('users_permissions_sys', JSON.stringify(updated));
+                                      }}
+                                      className="flex-1 h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-amber-600"
+                                    />
+                                    <span className="text-xs font-black text-amber-900 w-10 text-center">
+                                      {user.maxDiscountPercentOfProfit !== undefined ? user.maxDiscountPercentOfProfit : 100}%
+                                    </span>
+                                  </div>
+                                  <p className="text-[9px] text-slate-400 font-medium leading-relaxed">
+                                    * يسمح هذا للمندوب بتقديم خصومات (النسب التلقائية والخصم الإضافي) بحد أقصى يعادل هذه النسبة من صافي أرباح المنتج مقارنةً بسعر المصنع.
+                                  </p>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      onTriggerSync?.('حفظ تعديلات نسبة الخصم من الربح');
+                                    }}
+                                    className="mt-1 bg-amber-600 hover:bg-amber-700 text-white rounded-lg py-1 px-3 text-[10px] font-black transition-all active:scale-95 cursor-pointer self-start"
+                                  >
+                                    مزامنة وحفظ الصلاحيات السحابية ☁️
+                                  </button>
+                                </div>
+                              </div>
+
                               {/* 📊 لوحة مراقبة وتتبع العمليات المالية والميدانية للمندوب */}
                               {(() => {
                                 const cleanUserName = user.name.replace(/ \(.*?\)/, '').trim();
@@ -2988,7 +3182,8 @@ export default function ManageTab({
                       value={googlePassword}
                       onChange={(e) => setGooglePassword(e.target.value)}
                       onKeyDown={(e) => {
-                        if (e.key === 'Enter' && googlePassword === '1987') {
+                        const correct = localStorage.getItem('owner_passcode_sys') || '1987';
+                        if (e.key === 'Enter' && googlePassword === correct) {
                           setIsGooglePasswordValid(true);
                         }
                       }}
@@ -2997,7 +3192,8 @@ export default function ManageTab({
                     <button
                       type="button"
                       onClick={() => {
-                        if (googlePassword === '1987') {
+                        const correct = localStorage.getItem('owner_passcode_sys') || '1987';
+                        if (googlePassword === correct) {
                           setIsGooglePasswordValid(true);
                         } else {
                           showToast('⚠️ كلمة المرور غير صحيحة!');
@@ -3022,6 +3218,32 @@ export default function ManageTab({
                       <p className="text-[10px] text-emerald-600 mt-1 leading-normal font-bold">
                         ✓ تم دمج الرابط برمجياً في ملفات النظام لضمان مزامنة جميع هواتف المناديب تلقائياً.
                       </p>
+                    </div>
+
+                    <div className="border border-amber-100 rounded-xl p-3 bg-amber-50/20 mt-2 flex flex-col gap-2">
+                      <div>
+                        <label className="block text-xs font-black text-amber-950 mb-1.5 flex items-center gap-1.5">
+                          <MapPin className="h-4 w-4 text-[#DD6B20]" />
+                          مفتاح منصة خرائط جوجل (Google Maps API Key):
+                        </label>
+                        <input
+                          type="text"
+                          placeholder="أدخل مفتاح الخرائط (مثال: AIzaSy...)"
+                          value={googleMapsApiKey}
+                          onChange={(e) => setGoogleMapsApiKey(e.target.value)}
+                          className="w-full bg-[#FFFFFF] border border-slate-200 rounded-lg p-2.5 text-xs font-semibold focus:ring-2 focus:ring-amber-500"
+                        />
+                        <p className="text-[10px] text-slate-400 mt-1 leading-normal">
+                          * يتم حفظ هذا المفتاح سحابياً وتحديثه تلقائياً لجميع الأجهزة دون الحاجة لإعادة رفع التطبيق.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleSaveMapsKeyOnly}
+                        className="bg-amber-100 hover:bg-amber-200 text-amber-900 border border-amber-200 rounded-lg py-1.5 px-3 text-xs font-black transition-all cursor-pointer self-start"
+                      >
+                        حفظ ومزامنة مفتاح الخريطة 💾
+                      </button>
                     </div>
                     
                     {/* Dynamic Script Generator */}

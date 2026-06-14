@@ -129,9 +129,10 @@ interface CustomersTabProps {
   settings: AppSettings;
   permittedSubTabs?: string[];
   currentUser?: UserAuth | null;
+  googleMapsApiKey?: string; // يُمرّر من App.tsx
 }
 
-export default function CustomersTab({ customers, onAddCustomer, onEditCustomer, onDeleteCustomer, onGoBack, settings, permittedSubTabs, currentUser }: CustomersTabProps) {
+export default function CustomersTab({ customers, onAddCustomer, onEditCustomer, onDeleteCustomer, onGoBack, settings, permittedSubTabs, currentUser, googleMapsApiKey }: CustomersTabProps) {
   const [activeTab, setActiveTab] = useState<'list' | 'maps_finder' | 'google_leads'>(() => {
     if (permittedSubTabs && permittedSubTabs.length > 0) {
       if (permittedSubTabs.includes('customers_list')) return 'list';
@@ -1478,7 +1479,8 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                   batchSize={batchSize} 
                   onResults={setMapsResults} 
                   isSearching={isSearchingMaps} 
-                  setIsSearching={setIsSearchingMaps} 
+                  setIsSearching={setIsSearchingMaps}
+                  apiKey={googleMapsApiKey || settings.googleMapsApiKey?.trim() || localStorage.getItem('GMP_API_KEY_FALLBACK')?.trim() || ''}
                 />
               </div>
             </div>
