@@ -10,7 +10,6 @@ import { Customer, AppSettings } from '../types';
 import { showToast } from '../utils/toast';
 import { Users, Plus, MapPin, Search, Phone, PhoneOff, ExternalLink, Trash2, ArrowRight, Compass, Check, Loader2, Star, MessageSquare, Send, Copy, Sparkles, Printer, FileText, Download, ArrowUpDown, Edit } from 'lucide-react';
 import SecurePhoneDisplay from './SecurePhoneDisplay';
-import GmpMapEngine from './GmpMapEngine';
 
 const EGYPT_GOVERNORATES = [
   'القاهرة', 'الجيزة', 'الإسكندرية', 'الشرقية', 'الدقهلية', 'البحيرة', 'القليوبية', 
@@ -86,7 +85,7 @@ const formatWhatsAppLink = (phone: string, encodedText: string = '') => {
   return `https://wa.me/${cleaned}${encodedText ? '?text=' + encodedText : ''}`;
 };
 
-const hasNoPhone = (phone?: string) => !phone || phone === 'غير مسجل' || phone.trim() === '';
+const hasNoPhone = (phone?: string) => !phone || phone === 'غير مسجل' || phone.trim() === '' || phone.includes('انتظار');
 
 const getLeadCardTheme = (type: string) => {
   const t = type || '';
@@ -133,10 +132,10 @@ interface CustomersTabProps {
 }
 
 export default function CustomersTab({ customers, onAddCustomer, onEditCustomer, onDeleteCustomer, onGoBack, settings, permittedSubTabs, currentUser, googleMapsApiKey }: CustomersTabProps) {
-  const [activeTab, setActiveTab] = useState<'list' | 'maps_finder' | 'google_leads'>(() => {
+  const [activeTab, setActiveTab] = useState<'list' | 'google_leads' | 'potential_leads'>(() => {
     if (permittedSubTabs && permittedSubTabs.length > 0) {
       if (permittedSubTabs.includes('customers_list')) return 'list';
-      if (permittedSubTabs.includes('customers_maps_finder')) return 'maps_finder';
+      if (permittedSubTabs.includes('customers_maps_finder')) return 'google_leads';
     }
     return 'list';
   });
@@ -168,6 +167,42 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
 
   const [sortBy, setSortBy] = useState<'none' | 'alpha' | 'purchases'>('none');
   const [pendingLeadToCustomer, setPendingLeadToCustomer] = useState<any>(null);
+
+  // Watchlist/Staging for prospects generated from Google Maps finder
+  const [googleLeads, setGoogleLeads] = useState<any[]>(() => {
+    try {
+      const saved = localStorage.getItem('google_leads_staging_sys');
+      return saved ? JSON.parse(saved) : [];
+    } catch(e) { return []; }
+  });
+
+  const [expandedStagedLeads, setExpandedStagedLeads] = useState<Record<string, boolean>>({});
+
+  // Automatically save googleLeads inside localStorage on change
+  React.useEffect(() => {
+    localStorage.setItem('google_leads_staging_sys', JSON.stringify(googleLeads));
+  }, [googleLeads]);
+
+  // Potential leads state
+  const [potentialLeads, setPotentialLeads] = useState<any[]>(() => {
+    try {
+      const saved = localStorage.getItem('potential_leads_sys');
+      return saved ? JSON.parse(saved) : [];
+    } catch(e) { return []; }
+  });
+
+  const [expandedPotentialLeads, setExpandedPotentialLeads] = useState<Record<string, boolean>>({});
+  const [pendingPotentialLead, setPendingPotentialLead] = useState<any>(null);
+
+  const [potentialGovsFilter, setPotentialGovsFilter] = useState<string[]>([]);
+  const [potentialAreasFilter, setPotentialAreasFilter] = useState<string[]>([]);
+  const [potentialTypesFilter, setPotentialTypesFilter] = useState<string[]>([]);
+  const [potentialSearchQuery, setPotentialSearchQuery] = useState('');
+
+  // Automatically save potentialLeads inside localStorage on change
+  React.useEffect(() => {
+    localStorage.setItem('potential_leads_sys', JSON.stringify(potentialLeads));
+  }, [potentialLeads]);
 
   React.useEffect(() => {
     window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
@@ -228,33 +263,40 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
     link.click();
   };
 
-  // Watchlist/Staging for prospects generated from Google Maps finder
-  const [googleLeads, setGoogleLeads] = useState<any[]>(() => {
-    try {
-      const saved = localStorage.getItem('google_leads_staging_sys');
-      return saved ? JSON.parse(saved) : [];
-    } catch (e) {
-      return [];
-    }
-  });
 
-  // Automatically save googleLeads inside localStorage on change
-  React.useEffect(() => {
-    localStorage.setItem('google_leads_staging_sys', JSON.stringify(googleLeads));
-  }, [googleLeads]);
 
-  // فلتر ذكي لعزل العملاء الذين تم تحويلهم لعملاء فعليين ومنع ظهورهم نهائياً
+  // فلتر ذكي لعزل العملاء الذين تم تحويلهم لعملاء فعليين أو محتملين ومنع ظهورهم نهائياً وتصفية التكرار
   const activeGoogleLeads = React.useMemo(() => {
+    const seenNames = new Set<string>();
+    const seenPhones = new Set<string>();
+
     return googleLeads.filter(lead => {
       const leadName = (lead.name || '').trim().toLowerCase();
       const leadPhone = (lead.phone || '').trim();
+
+      if (!leadName) return false;
+      
       const alreadyRealCustomer = customers.some(c => 
         (c.phone || '').trim() === leadPhone || 
         (c.name || '').trim().toLowerCase() === leadName
       );
-      return !lead.confirmed && !alreadyRealCustomer;
+      
+      const alreadyPotential = potentialLeads.some(p => 
+        (p.phone || '').trim() === leadPhone || 
+        (p.name || '').trim().toLowerCase() === leadName
+      );
+
+      const isDuplicate = (leadPhone && seenPhones.has(leadPhone)) || seenNames.has(leadName);
+
+      if (alreadyRealCustomer || alreadyPotential || isDuplicate || lead.confirmed) {
+        return false;
+      }
+
+      if (leadPhone) seenPhones.add(leadPhone);
+      seenNames.add(leadName);
+      return true;
     });
-  }, [googleLeads, customers]);
+  }, [googleLeads, potentialLeads, customers]);
 
   // حصر المحافظات المكتشفة للتصفية السريعة
   const discoveredGovCounts = React.useMemo(() => {
@@ -302,6 +344,81 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
     }, {} as Record<string, number>);
   }, [leadsFilteredByArea]);
 
+  // فلتر ذكي لعزل العملاء المحتملين الذين تم تحويلهم لعملاء فعليين ومنع ظهورهم نهائياً وتصفية التكرار
+  const activePotentialLeads = React.useMemo(() => {
+    const seenNames = new Set<string>();
+    const seenPhones = new Set<string>();
+
+    return potentialLeads.filter(lead => {
+      const leadName = (lead.name || '').trim().toLowerCase();
+      const leadPhone = (lead.phone || '').trim();
+
+      if (!leadName) return false;
+
+      const alreadyRealCustomer = customers.some(c => 
+        (c.phone || '').trim() === leadPhone || 
+        (c.name || '').trim().toLowerCase() === leadName
+      );
+
+      const isDuplicate = (leadPhone && seenPhones.has(leadPhone)) || seenNames.has(leadName);
+
+      if (alreadyRealCustomer || isDuplicate) {
+        return false;
+      }
+
+      if (leadPhone) seenPhones.add(leadPhone);
+      seenNames.add(leadName);
+      return true;
+    });
+  }, [potentialLeads, customers]);
+
+  // حصر المحافظات المحتملة للتصفية السريعة
+  const potentialGovCounts = React.useMemo(() => {
+    return activePotentialLeads.reduce((acc, lead) => {
+        const gov = lead.governorate || getGovernorateForArea(lead.area || '') || 'أخرى';
+        acc[gov] = (acc[gov] || 0) + 1;
+        return acc;
+    }, {} as Record<string, number>);
+  }, [activePotentialLeads]);
+
+  // 1. التصفية حسب المحافظات المحددة للعملاء المحتملين
+  const potentialLeadsFilteredByGov = React.useMemo(() => {
+    if (potentialGovsFilter.length === 0) return activePotentialLeads;
+    return activePotentialLeads.filter(lead => {
+        const gov = lead.governorate || getGovernorateForArea(lead.area || '') || 'أخرى';
+        return potentialGovsFilter.includes(gov);
+    });
+  }, [activePotentialLeads, potentialGovsFilter]);
+
+  // 2. حصر المناطق المحتملة من العملاء المحتملين المفلترين بالمحافظة
+  const potentialAreaCounts = React.useMemo(() => {
+    return potentialLeadsFilteredByGov.reduce((acc, lead) => {
+        const area = (lead.area || '').trim() || 'غير محدد';
+        if (area !== 'غير محدد') {
+            acc[area] = (acc[area] || 0) + 1;
+        }
+        return acc;
+    }, {} as Record<string, number>);
+  }, [potentialLeadsFilteredByGov]);
+
+  // 3. التصفية حسب المناطق المحددة للعملاء المحتملين
+  const potentialLeadsFilteredByArea = React.useMemo(() => {
+    if (potentialAreasFilter.length === 0) return potentialLeadsFilteredByGov;
+    return potentialLeadsFilteredByGov.filter(lead => {
+        const area = (lead.area || '').trim() || 'غير محدد';
+        return potentialAreasFilter.includes(area);
+    });
+  }, [potentialLeadsFilteredByGov, potentialAreasFilter]);
+
+  // 4. حصر أنشطة العملاء المحتملين للتصفية
+  const potentialLeadTypeCounts = React.useMemo(() => {
+    return potentialLeadsFilteredByArea.reduce((acc, lead) => {
+        const type = lead.type || 'غير محدد';
+        acc[type] = (acc[type] || 0) + 1;
+        return acc;
+    }, {} as Record<string, number>);
+  }, [potentialLeadsFilteredByArea]);
+
   const DEFAULT_AREAS = ['الزقازيق', 'ميت غمر', 'بدر', 'العاشر من رمضان', 'بلبيس', 'القاهرة'];
   const configuredAreas = (settings.workAreas || []).map(w => w.area);
   const registeredAreas = Array.from(new Set(customers.map(c => c.area).filter(Boolean)));
@@ -311,7 +428,7 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
 
   // Google Maps Lead Finder State
   const [selectedSearchArea, setSelectedSearchArea] = useState('');
-  const [storeTypes, setStoreTypes] = useState<string[]>(['الكل']);
+  const [storeTypes, setStoreTypes] = useState<string[]>(['سوبر ماركت']);
   const [isSearchingMaps, setIsSearchingMaps] = useState(false);
   const [mapsResults, setMapsResults] = useState<any[]>([]);
   const [addedLeadIds, setAddedLeadIds] = useState<string[]>([]);
@@ -325,7 +442,6 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
   // Toggling expanded/collapsed states for different lists
   const [expandedRealCustomers, setExpandedRealCustomers] = useState<Record<string, boolean>>({});
   const [expandedGoogleLeads, setExpandedGoogleLeads] = useState<Record<string, boolean>>({});
-  const [expandedStagedLeads, setExpandedStagedLeads] = useState<Record<string, boolean>>({});
 
   const handleBulkAddMapLeads = () => {
     const newLeads = [...googleLeads];
@@ -578,6 +694,75 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
     showToast(`يرجى مراجعة وتعديل بيانات العميل وإضافة (مدير البيع) قبل الحفظ النهائي.`);
   };
 
+  const handleMoveToPotential = async (lead: any) => {
+    const proceed = await confirmDialog(`هل وافق العميل [${lead.name}] على عمل طلب/أوردر ونقله إلى العملاء المحتملين؟`);
+    if (!proceed) return;
+
+    const cleanName = (lead.name || '').trim();
+    const newPotLead = {
+      ...lead,
+      id: 'pot-' + String(lead.id).replace(/^lead-|^gmap-|^pot-/, '') + '-' + Math.floor(Math.random() * 1000),
+      dateAdded: new Date().toLocaleDateString('ar-EG'),
+      visited: false
+    };
+
+    setPotentialLeads(prev => [...prev, newPotLead]);
+
+    // مسحه من قائمة المكتشفين
+    setGoogleLeads(prev => prev.filter(g => g.id !== lead.id));
+    const deleted = JSON.parse(localStorage.getItem('deleted_records_sys') || '[]');
+    if (!deleted.includes(lead.id)) {
+      deleted.push(lead.id);
+      localStorage.setItem('deleted_records_sys', JSON.stringify(deleted));
+    }
+
+    showToast(`✓ تم نقل العميل [${cleanName}] بنجاح إلى العملاء المحتملين!`);
+  };
+
+  const handleConfirmPotentialLead = async (lead: any) => {
+    const finalArea = (lead.detailedAddress || lead.area || 'أخرى').trim();
+    const gov = lead.governorate || getGovernorateForArea(finalArea);
+    
+    const existsInReal = customers.find(c => c.phone === lead.phone || c.name.toLowerCase() === lead.name.toLowerCase());
+    if (existsInReal) {
+      const proceed = await confirmDialog(`العميل [${lead.name}] أو رقم هاتفه مسجل مسبقاً بقاعدة العملاء. هل تريد تأكيد إضافته وتجاهل التطابق؟`);
+      if (!proceed) return;
+    }
+
+    setName((lead.name || '').trim());
+    setPhone((lead.phone || '').trim());
+    setSalesManager('');
+    
+    const areaExists = allAreas.includes(finalArea);
+    if (areaExists) {
+      setArea(finalArea);
+      setCustomArea('');
+    } else {
+      setArea('أخرى');
+      setCustomArea(finalArea);
+    }
+    
+    setGovernorate(gov);
+    setLocationLink(lead.locationLink || `https://maps.google.com/?q=${encodeURIComponent((lead.name || '').trim() + ' ' + finalArea)}`);
+    setDetailedAddress(lead.detailedAddress || '');
+    
+    setPendingPotentialLead(lead);
+    setActiveTab('list');
+    setShowAddForm(true);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+
+    showToast(`يرجى مراجعة وتعديل بيانات العميل وإضافة (مدير البيع) قبل الحفظ النهائي.`);
+  };
+
+  const handleDeletePotentialLead = (leadId: string) => {
+    setPotentialLeads(prev => prev.filter(g => g.id !== leadId));
+    const deleted = JSON.parse(localStorage.getItem('deleted_records_sys') || '[]');
+    if (!deleted.includes(leadId)) {
+      deleted.push(leadId);
+      localStorage.setItem('deleted_records_sys', JSON.stringify(deleted));
+    }
+  };
+
   const handleDeleteGoogleLead = (leadId: string) => {
     setGoogleLeads(prev => prev.filter(g => g.id !== leadId));
     const deleted = JSON.parse(localStorage.getItem('deleted_records_sys') || '[]');
@@ -647,6 +832,10 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
       if (pendingLeadToCustomer) {
         handleDeleteGoogleLead(pendingLeadToCustomer.id);
       }
+      // مسح العميل من قائمة "المحتملين" إذا كان منقولاً منها
+      if (pendingPotentialLead) {
+        handleDeletePotentialLead(pendingPotentialLead.id);
+      }
       showToast('✓ تم إضافة العميل الجديد بنجاح.');
     }
 
@@ -662,6 +851,7 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
     setShowAddForm(false);
     setEditingCustomer(null);
     setPendingLeadToCustomer(null);
+    setPendingPotentialLead(null);
   };
 
   // Capture Geolocation coords and turn them into a google maps link automatically!
@@ -883,31 +1073,36 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
               )}
               
               {showMaps && (
-                <button
-                  type="button"
-                  onClick={() => setActiveTab('maps_finder')}
-                  className={`flex-1 text-center py-2.5 text-xs font-black transition-all cursor-pointer flex items-center justify-center gap-1.5 rounded-xl ${
-                    activeTab === 'maps_finder' ? 'bg-[#FFFFFF] text-[#DD6B20] shadow-xs border border-slate-200' : 'text-[#6B7280] bg-transparent hover:text-[#1A365D]'
-                  }`}
-                >
-                  <Compass className="h-3.5 w-3.5" />
-                  <span>استكشاف عملاء</span>
-                </button>
-              )}
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('google_leads')}
+                    className={`flex-1 text-center py-2.5 text-xs font-black transition-all cursor-pointer flex items-center justify-center gap-1.5 rounded-xl ${
+                      activeTab === 'google_leads' ? 'bg-[#FFFFFF] text-[#DD6B20] shadow-xs border border-slate-200' : 'text-[#6B7280] bg-transparent hover:text-[#1A365D]'
+                    }`}
+                  >
+                    <span className="relative flex h-2 w-2">
+                      <span className={`animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75 ${activeGoogleLeads.length === 0 ? 'hidden' : ''}`}></span>
+                      <span className={`relative inline-flex rounded-full h-2 w-2 bg-red-500 ${activeGoogleLeads.length === 0 ? 'hidden' : ''}`}></span>
+                    </span>
+                    <span>عملاء مكتشفون ({activeGoogleLeads.length})</span>
+                  </button>
 
-              <button
-                type="button"
-                onClick={() => setActiveTab('google_leads')}
-                className={`flex-1 text-center py-2.5 text-xs font-black transition-all cursor-pointer flex items-center justify-center gap-1.5 rounded-xl ${
-                  activeTab === 'google_leads' ? 'bg-[#FFFFFF] text-[#DD6B20] shadow-xs border border-slate-200' : 'text-[#6B7280] bg-transparent hover:text-[#1A365D]'
-                }`}
-              >
-                <span className="relative flex h-2 w-2">
-                  <span className={`animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75 ${activeGoogleLeads.length === 0 ? 'hidden' : ''}`}></span>
-                  <span className={`relative inline-flex rounded-full h-2 w-2 bg-red-500 ${activeGoogleLeads.length === 0 ? 'hidden' : ''}`}></span>
-                </span>
-                <span>عملاء مكتشفين ({activeGoogleLeads.length})</span>
-              </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('potential_leads')}
+                    className={`flex-1 text-center py-2.5 text-xs font-black transition-all cursor-pointer flex items-center justify-center gap-1.5 rounded-xl ${
+                      activeTab === 'potential_leads' ? 'bg-[#FFFFFF] text-[#DD6B20] shadow-xs border border-slate-200' : 'text-[#6B7280] bg-transparent hover:text-[#1A365D]'
+                    }`}
+                  >
+                    <span className="relative flex h-2 w-2">
+                      <span className={`animate-ping absolute inline-flex h-full w-full rounded-full bg-orange-400 opacity-75 ${activePotentialLeads.length === 0 ? 'hidden' : ''}`}></span>
+                      <span className={`relative inline-flex rounded-full h-2 w-2 bg-orange-500 ${activePotentialLeads.length === 0 ? 'hidden' : ''}`}></span>
+                    </span>
+                    <span>عملاء محتملون ({activePotentialLeads.length})</span>
+                  </button>
+                </>
+              )}
             </div>
           );
         })()}
@@ -1415,7 +1610,7 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
         )}
 
         {/* 2. OSM Customer Lead Finder */}
-        {activeTab === 'maps_finder' && (
+        {false && activeTab === 'maps_finder' && (
           <div className="flex flex-col gap-4 animate-fade-in" id="google-maps-finder">
             
             {/* Search inputs */}
@@ -1431,27 +1626,21 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                   <div className="col-span-1 sm:col-span-2">
                     <label className="inline-block bg-sky-100 text-sky-950 border border-sky-200 text-xs font-black px-2.5 py-1 rounded-md mb-2 shadow-sm">الأنشطة التجارية المستهدفة (يمكنك اختيار أكثر من نشاط)</label>
                     <div className="flex flex-wrap gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setStoreTypes(['الكل'])}
-                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer select-none ${storeTypes.includes('الكل') ? 'bg-[#1A365D] text-white shadow-sm' : 'bg-[#F7FAFC] text-[#1A365D] border border-slate-200 hover:bg-slate-100'}`}
-                      >الكل</button>
-                      {['هايبر ماركت', 'سوبر ماركت', 'ميني ماركت', 'تجارة جملة', 'نصف جملة', 'توزيع أغذية', 'حلواني ومخبز', 'عطارة', 'بقالة تموينية', 'مطاعم', 'مطابخ وتجهيزات'].map(t => (
+                      {['سوبر ماركت', 'ميني ماركت', 'هايبر ماركت', 'بقالة تموينية', 'تجارة جملة', 'نصف جملة', 'توزيع أغذية', 'حلواني ومخبز', 'عطارة', 'مطاعم'].map(t => (
                         <button
                           key={t}
                           type="button"
                           onClick={() => {
                             let newTypes = [...storeTypes];
-                            if (newTypes.includes('الكل')) newTypes = [];
                             if (newTypes.includes(t)) {
                               newTypes = newTypes.filter(x => x !== t);
-                              if (newTypes.length === 0) newTypes = ['الكل'];
+                              if (newTypes.length === 0) newTypes = ['سوبر ماركت'];
                             } else {
                               newTypes.push(t);
                             }
                             setStoreTypes(newTypes);
                           }}
-                          className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer select-none ${storeTypes.includes(t) && !storeTypes.includes('الكل') ? 'bg-[#DD6B20] text-white shadow-sm' : 'bg-[#F7FAFC] text-[#1A365D] border border-slate-200 hover:bg-slate-100'}`}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer select-none ${storeTypes.includes(t) ? 'bg-[#DD6B20] text-white shadow-sm' : 'bg-[#F7FAFC] text-[#1A365D] border border-slate-200 hover:bg-slate-100'}`}
                         >
                           {t}
                         </button>
@@ -1481,6 +1670,7 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                   isSearching={isSearchingMaps} 
                   setIsSearching={setIsSearchingMaps}
                   apiKey={googleMapsApiKey || settings.googleMapsApiKey?.trim() || localStorage.getItem('GMP_API_KEY_FALLBACK')?.trim() || ''}
+                  results={mapsResults}
                 />
               </div>
             </div>
@@ -1620,7 +1810,7 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                               <div className="flex flex-col gap-1 text-xs">
                                 <span className={`font-bold flex items-center gap-1 ${isNoPhone ? 'text-rose-600' : 'text-slate-650'}`}>
                                   {isNoPhone ? <PhoneOff className="h-3.5 w-3.5 text-rose-500" /> : <Phone className="h-3.5 w-3.5 text-[#1A365D]" />}
-                                  رقم التواصل الهاتف: {isNoPhone ? <span className="font-bold">غير متوفر</span> : <a href={`tel:${lead.phone}`} className="hover:underline font-mono font-bold text-[#1A365D]">{lead.phone}</a>}
+                                  رقم التواصل الهاتف: {isNoPhone ? <span className="font-bold">{lead.phone?.includes('انتظار') ? 'في انتظار الاستخراج ⏳' : 'غير متوفر'}</span> : <a href={`tel:${lead.phone}`} className="hover:underline font-mono font-bold text-[#1A365D]">{lead.phone}</a>}
                                 </span>
                                 <span className="font-bold text-slate-650 flex items-center gap-1 mt-0.5">
                                   <MapPin className="h-3.5 w-3.5 text-emerald-500" />
@@ -1823,8 +2013,8 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
               <div className="border-b border-slate-100 pb-3 flex flex-col gap-2">
                 <div className="flex justify-between items-center">
                   <div className="flex flex-col">
-                    <h3 className="font-bold text-[#1A365D] text-base">العملاء المكتشفين (ذاكرة مؤقتة)</h3>
-                    <p className="text-[10.5px] text-[#2B6CB0] font-bold mt-0.5">يتم الاحتفاظ بالعملاء هنا حتى بدون إنترنت للعودة إليهم</p>
+                    <h3 className="font-bold text-[#1A365D] text-base">العملاء المكتشفون (من الشيت)</h3>
+                    <p className="text-[10.5px] text-[#2B6CB0] font-bold mt-0.5">عملاء تم إضافتهم من شيت جوجل لمتابعتهم والاتصال بهم</p>
                   </div>
                   <div className="flex gap-2 items-center">
                     {currentUser?.role === 'owner' && (
@@ -2001,7 +2191,7 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                       <Compass className="h-8 w-8 text-indigo-300 animate-pulse" />
                       <p className="text-gray-400 text-sm font-bold">لا يوجد عملاء مكتشفين مطابقين حالياً.</p>
                       <p className="text-[11px] text-slate-450 leading-relaxed max-w-xs mt-1">
-                        استخدم أداة "استكشاف عملاء" لإضافة عملاء إلى هذه الذاكرة المؤقتة.
+                        استخدم شيت جوجل "عملاء_مكتشفين" لتسجيل وإظهار العملاء الجدد هنا.
                       </p>
                     </div>
                   );
@@ -2098,29 +2288,18 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                               >
                                 <Edit className="h-3 w-3" />
                               </button>
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setGoogleLeads(prevLeads => prevLeads.map(l => l.id === lead.id ? { ...l, visited: !l.visited } : l));
-                                  showToast(lead.visited ? 'تم إلغاء علامة الزيارة' : '✓ تم تسجيل المحل كمُزار');
-                                }}
-                                className={`text-[10px] font-bold px-2 py-0.5 rounded border transition-colors ${lead.visited ? 'bg-teal-100 text-teal-800 border-teal-300' : 'bg-white text-slate-500 border-slate-200 hover:bg-teal-50 hover:text-teal-700'}`}
-                                title={lead.visited ? "إلغاء الزيارة" : "تحديد كمزار"}
-                              >
-                                {lead.visited ? '✅ تمت الزيارة' : '🚶‍♂️ تسجيل كزيارة'}
-                              </button>
                               {!showConfirmed && (
                                 <button
                                   type="button"
                                   onClick={(e) => {
                                     e.stopPropagation();
-                                    handleConfirmGoogleLead(lead);
+                                    handleMoveToPotential(lead);
                                   }}
-                                  className="text-[10px] font-bold px-2 py-0.5 rounded border transition-colors bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100"
-                                  title="نقل إلى دليل العملاء الفعليين"
+                                  className="text-[10px] font-bold px-3 py-1 rounded border transition-colors bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100 flex items-center gap-1 active:scale-95"
+                                  title="الموافقة على الطلب/الأوردر ونقل للعملاء المحتملين"
                                 >
-                                  <Plus className="h-3 w-3 inline-block ml-0.5" /> نقل للعملاء
+                                  <Check className="h-3 w-3 inline-block" />
+                                  <span>طلب/أوردر 🤝</span>
                                 </button>
                               )}
                               </div>
@@ -2185,7 +2364,7 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                               <div className="flex flex-col gap-1 text-xs">
                                   <span className={`font-bold flex items-center gap-1 ${isNoPhone ? 'text-rose-600' : 'text-slate-650'}`}>
                                     {isNoPhone ? <PhoneOff className="h-3.5 w-3.5 text-rose-500" /> : <Phone className="h-3.5 w-3.5 text-[#1A365D]" />}
-                                    رقم الهاتف: {isNoPhone ? <span className="font-bold">غير متوفر</span> : <a href={`tel:${lead.phone}`} className="hover:underline font-mono font-bold text-[#1A365D]">{lead.phone}</a>}
+                                    رقم الهاتف: {isNoPhone ? <span className="font-bold">{lead.phone?.includes('انتظار') ? 'في انتظار الاستخراج ⏳' : 'غير متوفر'}</span> : <a href={`tel:${lead.phone}`} className="hover:underline font-mono font-bold text-[#1A365D]">{lead.phone}</a>}
                                 </span>
                                 <span className="font-bold text-slate-650 flex items-center gap-1 mt-0.5">
                                   <MapPin className="h-3.5 w-3.5 text-emerald-500" />
@@ -2231,13 +2410,13 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                               </div>
                             </div>
 
-                            {/* Staging Confirmation Action Button */}
+                            {/* Staging Move to Potential Action Button */}
                             <div className="flex justify-end pt-1.5 border-t border-slate-100">
                               <button
                                 type="button"
                                 onClick={() => {
                                   if (!showConfirmed) {
-                                    handleConfirmGoogleLead(lead);
+                                    handleMoveToPotential(lead);
                                   } else {
                                     setSearchQuery((lead.name || '').trim());
                                     setActiveTab('list');
@@ -2246,8 +2425,8 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                                 }}
                                 className={`w-full sm:w-auto px-4.5 py-2.5 text-xs font-black rounded-xl transition-all flex items-center justify-center gap-1.5 shrink-0 hover:shadow active:scale-95 cursor-pointer ${
                                   showConfirmed
-                                    ? 'bg-emerald-600 text-white hover:bg-emerald-705 shadow-md'
-                                    : 'bg-[#DD6B20] text-white hover:bg-[#C05621] text-white shadow'
+                                    ? 'bg-emerald-600 text-white hover:bg-emerald-700 shadow-md'
+                                    : 'bg-emerald-600 text-white hover:bg-emerald-700 shadow shadow-emerald-250'
                                 }`}
                               >
                                 {showConfirmed ? (
@@ -2257,8 +2436,8 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                                   </>
                                 ) : (
                                   <>
-                                    <Plus className="h-4 w-4" />
-                                    <span>نقل وإضافة إلى قاعدة العملاء 👥</span>
+                                    <Check className="h-4 w-4" />
+                                    <span>موافقة ونقل للعملاء المحتملين 🤝</span>
                                   </>
                                 )}
                               </button>
@@ -2269,6 +2448,408 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                     );
                   })}
                 </div>
+                );
+              })()}
+            </div>
+          </div>
+        )}
+
+        {/* 4. Potential Leads Tab */}
+        {activeTab === 'potential_leads' && (
+          <div className="flex flex-col gap-4 animate-fade-in" id="potential-leads-tab">
+            <div className="bg-[#FFFFFF] p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col gap-4">
+              <div className="border-b border-slate-100 pb-3 flex flex-col gap-2">
+                <div className="flex justify-between items-center">
+                  <div className="flex flex-col">
+                    <h3 className="font-bold text-[#1A365D] text-base">العملاء المحتملون (بانتظار الزيارة)</h3>
+                    <p className="text-[10.5px] text-[#2B6CB0] font-bold mt-0.5">عملاء وافقوا على طلب/أوردر وبانتظار زيارة المندوب لتفعيلهم</p>
+                  </div>
+                  <div className="flex gap-2 items-center">
+                    {currentUser?.role === 'owner' && (
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          if (selectedLeads.length > 0) {
+                            const proceed = await confirmDialog(`هل أنت متأكد من مسح ${selectedLeads.length} عميل محدد؟`);
+                            if (proceed) {
+                              setPotentialLeads(prev => prev.filter(g => !selectedLeads.includes(g.id)));
+                              const deleted = JSON.parse(localStorage.getItem('deleted_records_sys') || '[]');
+                              selectedLeads.forEach(id => { if (!deleted.includes(id)) deleted.push(id); });
+                              localStorage.setItem('deleted_records_sys', JSON.stringify(deleted));
+                              setSelectedLeads([]);
+                              showToast('✓ تم مسح العملاء المحددين بنجاح!');
+                            }
+                          } else {
+                            const proceed = await confirmDialog('هل أنت متأكد من مسح جميع العملاء المحتملين من الذاكرة المؤقتة نهائياً؟');
+                            if (proceed) {
+                              potentialLeads.forEach(l => {
+                                const deleted = JSON.parse(localStorage.getItem('deleted_records_sys') || '[]');
+                                if (!deleted.includes(l.id)) {
+                                  deleted.push(l.id);
+                                  localStorage.setItem('deleted_records_sys', JSON.stringify(deleted));
+                                }
+                              });
+                              setPotentialLeads([]);
+                              showToast('✓ تم مسح جميع العملاء المحتملين بنجاح!');
+                            }
+                          }
+                        }}
+                        className={`text-[10px] font-black px-2 py-1.5 rounded-lg flex items-center gap-1 cursor-pointer shadow-xs transition-colors border ${
+                          selectedLeads.length > 0 
+                            ? 'bg-rose-100 hover:bg-rose-200 text-rose-800 border-rose-300' 
+                            : 'bg-rose-50 hover:bg-rose-100 text-rose-700 border-rose-200'
+                        }`}
+                        title={selectedLeads.length > 0 ? "مسح العملاء المحددين" : "مسح جميع العملاء المحتملين"}
+                      >
+                        <Trash2 className="h-3 w-3" />
+                        <span className="hidden sm:inline-block">
+                          {selectedLeads.length > 0 ? `مسح المحدد (${selectedLeads.length})` : 'مسح الكل'}
+                        </span>
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const exportData = activePotentialLeads.map(l => ({ 'المعرف': l.id, 'المحافظة': l.governorate || '', 'المنطقة': l.area || '', 'اسم العميل': l.name, 'رقم الهاتف': l.phone, 'العنوان': l.detailedAddress || '', 'النشاط': l.type || '', 'رابط جوجل ماب': l.locationLink }));
+                        exportToCSV(exportData, `العملاء_المحتملين_${new Date().toLocaleDateString('ar-EG')}.csv`);
+                      }}
+                      className="text-[10px] bg-emerald-600 hover:bg-emerald-700 text-white font-black px-2 py-1.5 rounded-lg flex items-center gap-1 cursor-pointer shadow-sm transition-colors"
+                    >
+                      <Download className="h-3 w-3" />
+                      <span>تصدير CSV</span>
+                    </button>
+                    <span className="text-xs bg-orange-50 text-orange-750 font-black px-2.5 py-1.5 rounded-lg border border-orange-150">
+                      {activePotentialLeads.length} محتمل
+                    </span>
+                  </div>
+                </div>
+
+                {/* حقل البحث النصي السريع */}
+                <div className="relative leading-none w-full mt-2">
+                  <Search className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-orange-500" />
+                  <input
+                    type="text"
+                    placeholder="ابحث سريعاً بالاسم، رقم الهاتف، أو المنطقة..."
+                    value={potentialSearchQuery}
+                    onChange={(e) => setPotentialSearchQuery(e.target.value)}
+                    className="w-full bg-[#F7FAFC] pr-9 pl-3 py-2 border border-slate-200 rounded-lg text-xs font-bold focus:ring-1 focus:ring-orange-500 text-right text-[#1A365D]"
+                  />
+                </div>
+
+                {/* أزرار التصفية السريعة للمحافظات المحتملة */}
+                {Object.keys(potentialGovCounts).length > 1 && (
+                  <div className="flex flex-wrap gap-1.5 mt-2 bg-[#F7FAFC] p-2.5 rounded-xl border border-slate-150">
+                    <span className="text-[10px] font-bold text-[#2B6CB0] w-full mb-0.5">تصفية حسب المحافظة (يمكنك اختيار أكثر من محافظة):</span>
+                    <button
+                      type="button"
+                      onClick={() => { setPotentialGovsFilter([]); setPotentialAreasFilter([]); }}
+                      className={`px-2.5 py-1.5 rounded-lg text-[10px] font-bold transition-all cursor-pointer select-none ${potentialGovsFilter.length === 0 ? 'bg-[#1A365D] text-white shadow-sm' : 'bg-white text-[#1A365D] border border-slate-200 hover:bg-slate-50'}`}
+                    >
+                      الكل ({activePotentialLeads.length})
+                    </button>
+                    {Object.entries(potentialGovCounts).sort(([, a], [, b]) => b - a).map(([gov, count]) => (
+                      <button
+                        key={gov}
+                        type="button"
+                        onClick={() => {
+                          setPotentialGovsFilter(prev => prev.includes(gov) ? prev.filter(x => x !== gov) : [...prev, gov]);
+                          setPotentialAreasFilter([]);
+                        }}
+                        className={`px-2.5 py-1.5 rounded-lg text-[10px] font-bold transition-all cursor-pointer select-none ${potentialGovsFilter.includes(gov) ? 'bg-[#DD6B20] text-white shadow-sm' : 'bg-white text-[#1A365D] border border-slate-200 hover:bg-slate-50'}`}
+                      >
+                        {gov} ({count})
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {/* أزرار التصفية للمناطق المحتملة */}
+                {potentialGovsFilter.length > 0 && Object.keys(potentialAreaCounts).length > 1 && (
+                  <div className="flex flex-wrap gap-1.5 mt-2 bg-[#F7FAFC] p-2.5 rounded-xl border border-slate-150">
+                    <span className="text-[10px] font-bold text-[#2B6CB0] w-full mb-0.5">تصفية حسب المنطقة:</span>
+                    <button
+                      type="button"
+                      onClick={() => setPotentialAreasFilter([])}
+                      className={`px-2.5 py-1.5 rounded-lg text-[10px] font-bold transition-all cursor-pointer select-none ${potentialAreasFilter.length === 0 ? 'bg-[#1A365D] text-white shadow-sm' : 'bg-white text-[#1A365D] border border-slate-200 hover:bg-slate-50'}`}
+                    >
+                      الكل ({potentialLeadsFilteredByGov.length})
+                    </button>
+                    {Object.entries(potentialAreaCounts).sort(([, a], [, b]) => b - a).map(([area, count]) => (
+                      <button
+                        key={area}
+                        type="button"
+                        onClick={() => {
+                          setPotentialAreasFilter(prev => prev.includes(area) ? prev.filter(x => x !== area) : [...prev, area]);
+                        }}
+                        className={`px-2.5 py-1.5 rounded-lg text-[10px] font-bold transition-all cursor-pointer select-none ${potentialAreasFilter.includes(area) ? 'bg-[#DD6B20] text-white shadow-sm' : 'bg-white text-[#1A365D] border border-slate-200 hover:bg-slate-50'}`}
+                      >
+                        {area} ({count})
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {/* أزرار التصفية حسب النشاط التجاري للعملاء المحتملين */}
+                {activePotentialLeads.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 mt-1 bg-[#F7FAFC] p-2.5 rounded-xl border border-slate-150">
+                    <span className="text-[10px] font-bold text-[#2B6CB0] w-full mb-0.5">تصفية حسب النشاط التجاري (يمكنك اختيار أكثر من نشاط):</span>
+                    <button
+                      type="button"
+                      onClick={() => setPotentialTypesFilter([])}
+                      className={`px-2.5 py-1.5 rounded-lg text-[10px] font-bold transition-all cursor-pointer select-none ${potentialTypesFilter.length === 0 ? 'bg-[#1A365D] text-white shadow-sm' : 'bg-white text-[#1A365D] border border-slate-200 hover:bg-slate-50'}`}
+                    >
+                      الكل ({potentialLeadsFilteredByArea.length})
+                    </button>
+                    {Object.entries(potentialLeadTypeCounts).sort(([, a], [, b]) => b - a).map(([type, count]) => (
+                      <button
+                        key={type}
+                        type="button"
+                        onClick={() => {
+                          setPotentialTypesFilter(prev => prev.includes(type) ? prev.filter(x => x !== type) : [...prev, type]);
+                        }}
+                        className={`px-2.5 py-1.5 rounded-lg text-[10px] font-bold transition-all cursor-pointer select-none ${potentialTypesFilter.includes(type) ? 'bg-[#DD6B20] text-white shadow-sm' : 'bg-white text-[#1A365D] border border-slate-200 hover:bg-slate-50'}`}
+                      >
+                        {type} ({count})
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {(() => {
+                const filteredPotentialLeads = potentialLeadsFilteredByArea.filter(lead => {
+                  const leadType = lead.type || 'غير محدد';
+                  const matchesType = potentialTypesFilter.length === 0 || potentialTypesFilter.includes(leadType);
+
+                  const q = potentialSearchQuery.trim().toLowerCase();
+                  const matchesSearch = !q || 
+                    (lead.name && lead.name.toLowerCase().includes(q)) ||
+                    (lead.phone && lead.phone.includes(q)) ||
+                    (lead.area && lead.area.toLowerCase().includes(q)) ||
+                    (lead.detailedAddress && lead.detailedAddress.toLowerCase().includes(q));
+
+                  return matchesType && matchesSearch;
+                }).reverse();
+
+                if (filteredPotentialLeads.length === 0) {
+                  return (
+                    <div className="text-center py-10 flex flex-col items-center justify-center gap-2">
+                      <Users className="h-8 w-8 text-orange-300 animate-pulse" />
+                      <p className="text-gray-400 text-sm font-bold">لا يوجد عملاء محتملين مطابقين حالياً.</p>
+                      <p className="text-[11px] text-slate-450 leading-relaxed max-w-xs mt-1">
+                        وافق على الطلب/الأوردر للعملاء في تبويب "عملاء مكتشفون" لنقلهم إلى هنا.
+                      </p>
+                    </div>
+                  );
+                }
+
+                return (
+                  <div className="flex flex-col gap-3.5">
+                    {currentUser?.role === 'owner' && (
+                      <div className="flex items-center justify-between px-2 pb-1 border-b border-slate-100">
+                        <label className="flex items-center gap-2 text-xs font-bold text-[#1A365D] cursor-pointer">
+                          <input 
+                            type="checkbox"
+                            checked={filteredPotentialLeads.length > 0 && selectedLeads.length === filteredPotentialLeads.length}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setSelectedLeads(filteredPotentialLeads.map(l => l.id));
+                              } else {
+                                setSelectedLeads([]);
+                              }
+                            }}
+                            className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                          />
+                          تحديد الكل ({filteredPotentialLeads.length})
+                        </label>
+                      </div>
+                    )}
+                    {filteredPotentialLeads.map((lead) => {
+                      const alreadyRealCustomer = customers.some(c => c.phone === lead.phone || c.name.toLowerCase() === lead.name.toLowerCase());
+                      const isStagedExpanded = !!expandedPotentialLeads[lead.id];
+                      const isNoPhone = hasNoPhone(lead.phone);
+                      const themeClass = getLeadCardTheme(lead.type);
+                      const badgeClass = getLeadBadgeTheme(lead.type);
+
+                      return (
+                        <div key={lead.id} className={`border rounded-xl overflow-hidden transition-all flex flex-col ${
+                          alreadyRealCustomer 
+                            ? 'bg-emerald-50/40 border-emerald-150/60' 
+                            : isNoPhone 
+                            ? 'bg-rose-50/40 border-rose-200 hover:border-rose-300'
+                            : themeClass
+                        }`}>
+                          
+                          <div 
+                            onClick={() => setExpandedPotentialLeads(prev => prev[lead.id] ? {} : { [lead.id]: true })}
+                            className="p-4 bg-[#F7FAFC]/50 hover:bg-[#F7FAFC] flex items-center justify-between gap-4 cursor-pointer select-none"
+                          >
+                            <div className="flex flex-col gap-1 text-sm select-none">
+                              <span className="font-extrabold text-slate-850 text-base flex items-center gap-2 leading-snug">
+                                <input
+                                  type="checkbox"
+                                  checked={selectedLeads.includes(lead.id)}
+                                  onChange={(e) => {
+                                    if (e.target.checked) {
+                                      setSelectedLeads(prev => [...prev, lead.id]);
+                                    } else {
+                                      setSelectedLeads(prev => prev.filter(id => id !== lead.id));
+                                    }
+                                  }}
+                                  onClick={(e) => e.stopPropagation()}
+                                  className="h-4 w-4 rounded border-slate-300 text-rose-600 focus:ring-rose-500 cursor-pointer"
+                                />
+                                {alreadyRealCustomer ? (
+                                  <span className="h-2.5 w-2.5 rounded-full bg-emerald-500 shrink-0"></span>
+                                ) : (
+                                  <span className={`h-2.5 w-2.5 rounded-full shrink-0 transition-all bg-orange-400`}></span>
+                                )}
+                                {lead.name}
+                              </span>
+                              <div className="flex flex-wrap gap-1.5 mt-0.5">
+                                <span className={`text-[10px] font-extrabold py-0.5 px-2 rounded border self-start ${badgeClass}`}>
+                                  تصنيف: {lead.type || 'غير محدد'}
+                                </span>
+                                {lead.dateAdded && (
+                                  <span className="text-[9.5px] text-[#2B6CB0] bg-[#FFFFFF] py-0.5 px-1.5 rounded border border-slate-150 font-mono font-bold">
+                                    تاريخ الإضافة: {lead.dateAdded}
+                                  </span>
+                                )}
+                                {alreadyRealCustomer && (
+                                  <span className="text-[10px] text-emerald-800 font-extrabold bg-emerald-100/80 py-0.5 px-1.5 rounded border border-emerald-200">
+                                    مسجل مسبقاً بقاعدة العملاء ✓
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-2 font-black text-xs text-[#2B6CB0]">
+                              <span>{isStagedExpanded ? 'إخفاء التفاصيل ▲' : 'عرض التفاصيل ▼'}</span>
+                            </div>
+                          </div>
+
+                          {isStagedExpanded && (
+                            <div className="p-4 border-t border-slate-100 bg-[#FFFFFF] flex flex-col gap-3.5 animate-fade-in transition-all">
+                              
+                              <div className="flex justify-between items-center bg-[#F7FAFC] p-2.5 rounded-xl border border-slate-150 flex-wrap sm:flex-nowrap gap-2">
+                                <span className="text-xs font-bold text-slate-650">خرائط ومسودات جوجل:</span>
+                                <div className="flex items-center gap-1.5">
+                                  {lead.locationLink && (
+                                    <a
+                                      href={lead.locationLink}
+                                      target="_blank"
+                                      rel="referrer"
+                                      className="p-1 px-3 bg-[#FFFFFF] text-[#1A365D] border border-slate-200 hover:bg-[#F7FAFC] rounded-lg text-xs font-bold flex items-center gap-1 transition-colors"
+                                      title="عرض الموقع المكتشف بخرائط جوجل"
+                                    >
+                                      <ExternalLink className="h-3.5 w-3.5" />
+                                      <span>فتح الموقع بالخرائط</span>
+                                    </a>
+                                  )}
+                                  {currentUser?.role === 'owner' && (
+                                    <button
+                                      type="button"
+                                      onClick={async () => {
+                                        if (await confirmDialog('هل تود إزالة هذا العميل المحتمل من القائمة؟')) {
+                                          handleDeletePotentialLead(lead.id);
+                                        }
+                                      }}
+                                      className="p-1 px-2.5 text-rose-500 hover:bg-rose-50 border border-transparent hover:border-rose-100 rounded-lg text-xs font-bold transition-colors cursor-pointer flex items-center gap-1"
+                                      title="حذف المحتمل"
+                                    >
+                                      <Trash2 className="h-4 w-4" />
+                                      <span>مسح</span>
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+
+                              <div className="bg-[#F7FAFC]/50 border border-slate-150 p-3 rounded-xl flex flex-col gap-3">
+                                <div className="flex flex-col gap-1 text-xs">
+                                  <span className={`font-bold flex items-center gap-1 ${isNoPhone ? 'text-rose-600' : 'text-slate-650'}`}>
+                                    {isNoPhone ? <PhoneOff className="h-3.5 w-3.5 text-rose-500" /> : <Phone className="h-3.5 w-3.5 text-[#1A365D]" />}
+                                    رقم الهاتف: {isNoPhone ? <span className="font-bold">غير متوفر</span> : <a href={`tel:${lead.phone}`} className="hover:underline font-mono font-bold text-[#1A365D]">{lead.phone}</a>}
+                                  </span>
+                                  <span className="font-bold text-slate-650 flex items-center gap-1 mt-0.5">
+                                    <MapPin className="h-3.5 w-3.5 text-emerald-500" />
+                                    العنوان بالتفصيل: <strong className="text-[#1A365D] font-extrabold">{lead.detailedAddress || lead.area}</strong>
+                                  </span>
+                                </div>
+
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 border-t border-slate-150/60 pt-3">
+                                  {isNoPhone ? (
+                                    <button disabled className="px-3.5 py-1.5 bg-slate-50 text-slate-400 border border-slate-200 rounded-lg text-xs font-black flex items-center justify-center gap-1.5 text-center cursor-not-allowed">
+                                      <PhoneOff className="h-3.5 w-3.5" />
+                                      <span>لا يوجد رقم</span>
+                                    </button>
+                                  ) : (
+                                    <a
+                                      href={`tel:${lead.phone}`}
+                                      className="px-3.5 py-1.5 bg-[#F7FAFC] hover:bg-blue-100/85 text-blue-700 border border-blue-200 rounded-lg text-xs font-black flex items-center justify-center gap-1.5 transition-colors active:scale-95 text-center"
+                                      title="اتصال هاتفي مباشر"
+                                    >
+                                      <Phone className="h-3.5 w-3.5" />
+                                      <span>اتصال هاتفي</span>
+                                    </a>
+                                  )}
+
+                                  {isNoPhone ? (
+                                    <button disabled className="px-3.5 py-1.5 bg-slate-50 text-slate-400 border border-slate-200 rounded-lg text-xs font-black flex items-center justify-center gap-1.5 text-center cursor-not-allowed">
+                                      <MessageSquare className="h-3.5 w-3.5" />
+                                      <span>لا يوجد واتساب</span>
+                                    </button>
+                                  ) : (
+                                    <a
+                                      href={formatWhatsAppLink(lead.phone)}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="px-3.5 py-1.5 bg-emerald-50 hover:bg-emerald-100/85 text-[#DD6B20] border border-emerald-200 rounded-lg text-xs font-black flex items-center justify-center gap-1.5 transition-colors active:scale-95 text-center"
+                                      title="مراسلة سريعة عبر واتساب"
+                                    >
+                                      <MessageSquare className="h-3.5 w-3.5" />
+                                      <span>واتساب مباشر</span>
+                                    </a>
+                                  )}
+                                </div>
+                              </div>
+
+                              <div className="flex justify-end pt-1.5 border-t border-slate-100">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (!alreadyRealCustomer) {
+                                      handleConfirmPotentialLead(lead);
+                                    } else {
+                                      setSearchQuery((lead.name || '').trim());
+                                      setActiveTab('list');
+                                      window.scrollTo({ top: 0, left: 0, behavior: 'smooth' });
+                                    }
+                                  }}
+                                  className={`w-full sm:w-auto px-4.5 py-2.5 text-xs font-black rounded-xl transition-all flex items-center justify-center gap-1.5 shrink-0 hover:shadow active:scale-95 cursor-pointer ${
+                                    alreadyRealCustomer
+                                      ? 'bg-emerald-600 text-white hover:bg-emerald-705 shadow-md'
+                                      : 'bg-orange-500 text-white hover:bg-orange-600 text-white shadow shadow-orange-200'
+                                  }`}
+                                >
+                                  {alreadyRealCustomer ? (
+                                    <>
+                                      <Check className="h-4 w-4" />
+                                      <span>العميل متواجد بالفعل بالقاعدة (الذهاب للعميل)</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <Plus className="h-4 w-4" />
+                                      <span>تأكيد الزيارة ونقل للعملاء الفعليين 👥</span>
+                                    </>
+                                  )}
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
                 );
               })()}
             </div>

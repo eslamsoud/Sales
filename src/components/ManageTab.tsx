@@ -319,6 +319,15 @@ function doGet(e) {
       };
     });
 
+    // ط.2 جلب العملاء المحتملين
+    result.potentialLeads = safeGetSheetData('عملاء_محتملين', function(row) {
+      return { 
+        id: getSafeString(row[0]), governorate: getSafeString(row[1]), area: getSafeString(row[2]), 
+        name: getSafeString(row[3]), phone: getSafePhone(row[4]), detailedAddress: getSafeString(row[5]), 
+        locationLink: getSafeString(row[6]), type: getSafeString(row[7]), dateAdded: getSafeString(row[8])
+      };
+    });
+
     return ContentService.createTextOutput(JSON.stringify(result))
       .setMimeType(ContentService.MimeType.JSON);
   } catch(error) {
@@ -574,6 +583,16 @@ function doPost(e) {
       });
       upsertData('عملاء_مكتشفين', ['المعرف', 'المحافظة', 'المنطقة', 'اسم العميل', 'رقم الهاتف', 'العنوان', 'رابط جوجل ماب', 'النشاط', 'تاريخ الإضافة'], discoveredRows, "#fff2cc", deletedIds);
 
+      // 8.2 المحتملين
+      var potentialRows = (data.potentialLeads || []).map(function(l) { 
+        return [
+          l.id, l.governorate || '', l.area || '', l.name || '', 
+          formatPhone(l.phone), l.detailedAddress || '', l.locationLink || '',
+          l.type || '', l.dateAdded || ''
+        ]; 
+      });
+      upsertData('عملاء_محتملين', ['المعرف', 'المحافظة', 'المنطقة', 'اسم العميل', 'رقم الهاتف', 'العنوان', 'رابط جوجل ماب', 'النشاط', 'تاريخ الإضافة'], potentialRows, "#d9ead3", deletedIds);
+
       // 9. الملخص
       var summarySheet = ss.getSheetByName('الملخص');
       if (!summarySheet) {
@@ -662,7 +681,7 @@ export default function ManageTab({
       case 'customers':
         return [
           { id: 'customers_list', name: 'دليل العملاء وبرامج الترويج 🏢' },
-          { id: 'customers_maps_finder', name: 'منقّب عملاء Google Maps 🧭' }
+          { id: 'customers_maps_finder', name: 'العملاء المكتشفون والمحتملون 🧭' }
         ];
       case 'invoice':
         return [
@@ -1134,6 +1153,12 @@ export default function ManageTab({
         discoveredLeads = googleLeadsRaw ? JSON.parse(googleLeadsRaw) : [];
       } catch(e) {}
 
+      let potentialLeads = [];
+      try {
+        const potentialLeadsRaw = localStorage.getItem('potential_leads_sys');
+        potentialLeads = potentialLeadsRaw ? JSON.parse(potentialLeadsRaw) : [];
+      } catch(e) {}
+
       const invoicesByCustomer = new Map();
       invoices.forEach(inv => {
         if (!invoicesByCustomer.has(inv.customerId)) invoicesByCustomer.set(inv.customerId, []);
@@ -1269,6 +1294,17 @@ export default function ManageTab({
           };
         }),
         discoveredLeads: discoveredLeads.map((l: any) => ({
+          id: l.id,
+          governorate: l.governorate || 'القاهرة',
+          area: l.area,
+          name: l.name,
+          phone: l.phone,
+          detailedAddress: l.detailedAddress,
+          locationLink: l.locationLink,
+          type: l.type || '',
+          dateAdded: l.dateAdded || ''
+        })),
+        potentialLeads: potentialLeads.map((l: any) => ({
           id: l.id,
           governorate: l.governorate || 'القاهرة',
           area: l.area,

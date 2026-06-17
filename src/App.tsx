@@ -976,6 +976,12 @@ export default function App() {
         discoveredLeads = googleLeadsRaw ? JSON.parse(googleLeadsRaw) : [];
       } catch (e) {}
 
+      let potentialLeads: any[] = [];
+      try {
+        const potentialLeadsRaw = localStorage.getItem('potential_leads_sys');
+        potentialLeads = potentialLeadsRaw ? JSON.parse(potentialLeadsRaw) : [];
+      } catch (e) {}
+
       const invoicesByCustomer = new Map();
       currentInvoices.forEach(inv => {
         if (!invoicesByCustomer.has(inv.customerId)) invoicesByCustomer.set(inv.customerId, []);
@@ -1108,6 +1114,17 @@ export default function App() {
           };
         }),
         discoveredLeads: discoveredLeads.map((l: any) => ({
+          id: l.id,
+          governorate: l.governorate || 'القاهرة',
+          area: l.area,
+          name: l.name,
+          phone: l.phone,
+          detailedAddress: l.detailedAddress,
+          locationLink: l.locationLink,
+          type: l.type || '',
+          dateAdded: l.dateAdded || ''
+        })),
+        potentialLeads: potentialLeads.map((l: any) => ({
           id: l.id,
           governorate: l.governorate || 'القاهرة',
           area: l.area,
@@ -1681,6 +1698,33 @@ export default function App() {
           }
         }
 
+        if (data.potentialLeads && Array.isArray(data.potentialLeads)) {
+          const mappedPotential = data.potentialLeads.map((l: any) => ({
+            id: String(l.id || Math.random()).replace(/^'/, ''),
+            governorate: l.governorate || 'القاهرة',
+            area: l.area || '',
+            name: l.name || '',
+            phone: String(l.phone || '').replace(/^'/, ''),
+            detailedAddress: l.detailedAddress || '',
+            locationLink: l.locationLink || '',
+            type: l.type || '',
+            dateAdded: l.dateAdded || ''
+          }));
+          let localPotentialRaw = localStorage.getItem('potential_leads_sys');
+          let localPotential = localPotentialRaw ? JSON.parse(localPotentialRaw) : [];
+          if (shouldReplace) {
+            localStorage.setItem('potential_leads_sys', JSON.stringify(mappedPotential));
+          } else {
+            const merged = [...localPotential];
+            mappedPotential.forEach((nl: any) => {
+              const idx = merged.findIndex((l: any) => l.id === nl.id);
+              if (idx > -1) merged[idx] = nl;
+              else merged.push(nl);
+            });
+            localStorage.setItem('potential_leads_sys', JSON.stringify(merged));
+          }
+        }
+
         if (data.expenses && Array.isArray(data.expenses)) {
           const mappedExpenses = data.expenses.map((e: any) => {
             const isShifted = e.date === 'مصروف' || e.date === 'إيراد' || e.date === 'expense' || e.date === 'revenue' || !e.date || !String(e.date).includes('-');
@@ -1821,7 +1865,7 @@ export default function App() {
   const filteredExpenses = isManager ? expenses : expenses.filter(e => e.delegatePhone === effectiveUser?.phone || (e.delegateName && effectiveUser?.name && e.delegateName.includes(effectiveUser.name.replace(/ \(.*?\)/, '').trim())));
   const filteredTrips = isManager ? trips : trips.filter(t => t.delegatePhone === effectiveUser?.phone || (t.delegateName && effectiveUser?.name && t.delegateName.includes(effectiveUser.name.replace(/ \(.*?\)/, '').trim())));
 
-  const MAPS_LIBRARIES: any[] = ['places', 'geocoding', 'geometry', 'marker'];
+  const MAPS_LIBRARIES: any[] = ['places', 'geocoding', 'geometry'];
 
   // قراءة المفتاح بالأولوية الصحيحة:
   // 1. متغيّر بيئة Vercel للبيئة التطويرية/معاينة
