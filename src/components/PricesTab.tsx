@@ -84,7 +84,7 @@ export default function PricesTab({ products: rawProducts, onGoBack, permittedSu
     const footerHeight = 160; 
     const weightsCount = prod.weights.length;
     
-    canvas.width = 800;
+    canvas.width = 600;
     canvas.height = headerHeight + (weightsCount * rowHeight * 2) + footerHeight + 10;
 
     // Background
@@ -118,32 +118,32 @@ export default function PricesTab({ products: rawProducts, onGoBack, permittedSu
     ctx.fillText(`يوم ${weekdayName} بتاريخ: ${toArabicNumerals(formattedDatePart)}`, canvas.width / 2, 72);
 
     // Table Header Structure (RTL)
-    // Draw Column 1 & 2 headers spanning 2 rows: y=92 to 160
+    // Draw Column 1, 2 headers: y=92 to 160
     ctx.fillStyle = '#111827'; 
-    ctx.fillRect(480, 92, 320, 68); 
+    ctx.fillRect(360, 92, 240, 68); 
 
     ctx.fillStyle = '#FBBF24'; // Gold text
-    ctx.font = 'bold 16px Cairo, system-ui, sans-serif';
-    ctx.fillText('السعة اللترية', 720, 132);
-    ctx.fillText('سعر التجزئة', 560, 132);
+    ctx.font = 'bold 14px Cairo, system-ui, sans-serif';
+    ctx.fillText('السعة اللترية', 540, 132);
+    ctx.fillText('سعر التجزئة', 420, 132);
 
     // Draw Spanned Columns 3, 4, 5
     // Row 1: y=92 to 125 (Merged "نسبة خصم الجملة")
     ctx.fillStyle = '#1E293B';
-    ctx.fillRect(0, 92, 480, 33);
+    ctx.fillRect(0, 92, 360, 33);
     ctx.fillStyle = '#FFFFFF';
-    ctx.font = 'bold 15px Cairo, system-ui, sans-serif';
-    ctx.fillText('نسبة خصم الجملة', 240, 114);
+    ctx.font = 'bold 14px Cairo, system-ui, sans-serif';
+    ctx.fillText('نسبة خصم الجملة', 180, 114);
 
     // Row 2: y=125 to 160 (Discount percentages)
     ctx.fillStyle = '#1E3A8A'; // Blue
-    ctx.fillRect(0, 125, 480, 35);
+    ctx.fillRect(0, 125, 360, 35);
 
     ctx.fillStyle = '#FFFFFF';
     ctx.font = 'bold 14px Cairo, system-ui, sans-serif';
-    ctx.fillText('%١,٠٠', 400, 147);
-    ctx.fillText('%١,٢٥', 240, 147);
-    ctx.fillText('%١,٥٠', 80, 147);
+    ctx.fillText('%١,٠٠', 300, 147);
+    ctx.fillText('%١,٢٥', 180, 147);
+    ctx.fillText('%١,٥٠', 60, 147);
 
     // Draw Table Grid Header Borders
     ctx.strokeStyle = '#000000';
@@ -152,11 +152,11 @@ export default function PricesTab({ products: rawProducts, onGoBack, permittedSu
     
     // Draw vertical column separators for Header
     ctx.beginPath();
-    ctx.moveTo(640, 92); ctx.lineTo(640, 160);
     ctx.moveTo(480, 92); ctx.lineTo(480, 160);
-    ctx.moveTo(320, 125); ctx.lineTo(320, 160);
-    ctx.moveTo(160, 125); ctx.lineTo(160, 160);
-    ctx.moveTo(0, 125); ctx.lineTo(480, 125);
+    ctx.moveTo(360, 92); ctx.lineTo(360, 160);
+    ctx.moveTo(240, 125); ctx.lineTo(240, 160);
+    ctx.moveTo(120, 125); ctx.lineTo(120, 160);
+    ctx.moveTo(0, 125); ctx.lineTo(360, 125);
     ctx.stroke();
 
     let currentY = 160;
@@ -165,7 +165,7 @@ export default function PricesTab({ products: rawProducts, onGoBack, permittedSu
     prod.weights.forEach((w: any, idx: number) => {
       const theme = getSizeRowColors(idx);
 
-      // Access exact computed prices from the helper
+      // Access exact computed prices
       const retailCarton = w.cartonPriceFromFactory + (w.addedValue || 0);
       const marketCarton = w.carton1;
       const halfWholesaleCarton = w.carton125;
@@ -176,34 +176,34 @@ export default function PricesTab({ products: rawProducts, onGoBack, permittedSu
       const halfWholesalePiece = w.unit125;
       const wholesalePiece = w.unit15;
 
-      // 1. Carton Row Background (Full wrap colored theme)
+      // 1. Carton Row Background
       ctx.fillStyle = theme.bg;
-      ctx.fillRect(0, currentY, 800, 45);
+      ctx.fillRect(0, currentY, 600, 45);
 
       // Add text for Carton row
       ctx.fillStyle = theme.text;
-      ctx.font = 'bold 15px Cairo, system-ui, sans-serif';
+      ctx.font = 'bold 14px Cairo, system-ui, sans-serif';
       ctx.textAlign = 'center';
       
-      ctx.fillText(toArabicNumerals(w.size), 720, currentY + 28);
-      ctx.fillText(formatPriceWithCurrencyAndDecimal(retailCarton), 560, currentY + 28);
-      ctx.fillText(formatPriceWithCurrencyAndDecimal(marketCarton), 400, currentY + 28);
-      ctx.fillText(formatPriceWithCurrencyAndDecimal(halfWholesaleCarton), 240, currentY + 28);
-      ctx.fillText(formatPriceWithCurrencyAndDecimal(wholesaleCarton), 80, currentY + 28);
+      ctx.fillText(toArabicNumerals(w.size), 540, currentY + 28);
+      ctx.fillText(formatPriceWithCurrencyAndDecimal(retailCarton), 420, currentY + 28);
+      ctx.fillText(formatPriceWithCurrencyAndDecimal(marketCarton), 300, currentY + 28);
+      ctx.fillText(formatPriceWithCurrencyAndDecimal(halfWholesaleCarton), 180, currentY + 28);
+      ctx.fillText(formatPriceWithCurrencyAndDecimal(wholesaleCarton), 60, currentY + 28);
 
-      // 2. Piece Row Background (Lighter wrap colored theme)
+      // 2. Piece Row Background
       ctx.fillStyle = theme.subBg;
-      ctx.fillRect(0, currentY + 45, 800, 45);
+      ctx.fillRect(0, currentY + 45, 600, 45);
 
       // Add text for Piece row
       ctx.fillStyle = theme.subText;
-      ctx.font = 'bold 13.5px Cairo, system-ui, sans-serif';
+      ctx.font = 'bold 12.5px Cairo, system-ui, sans-serif';
       
-      ctx.fillText('سعر القطعه', 720, currentY + 73);
-      ctx.fillText(formatPriceWithCurrencyAndDecimal(retailPiece), 560, currentY + 73);
-      ctx.fillText(formatPriceWithCurrencyAndDecimal(marketPiece), 400, currentY + 73);
-      ctx.fillText(formatPriceWithCurrencyAndDecimal(halfWholesalePiece), 240, currentY + 73);
-      ctx.fillText(formatPriceWithCurrencyAndDecimal(wholesalePiece), 80, currentY + 73);
+      ctx.fillText('سعر القطعه', 540, currentY + 73);
+      ctx.fillText(formatPriceWithCurrencyAndDecimal(retailPiece), 420, currentY + 73);
+      ctx.fillText(formatPriceWithCurrencyAndDecimal(marketPiece), 300, currentY + 73);
+      ctx.fillText(formatPriceWithCurrencyAndDecimal(halfWholesalePiece), 180, currentY + 73);
+      ctx.fillText(formatPriceWithCurrencyAndDecimal(wholesalePiece), 60, currentY + 73);
 
       // Draw horizontal lines & column separators for this weight block
       ctx.strokeStyle = '#000000';
@@ -214,43 +214,43 @@ export default function PricesTab({ products: rawProducts, onGoBack, permittedSu
       ctx.moveTo(0, currentY + 90); ctx.lineTo(canvas.width, currentY + 90);
       
       // Vertical borders
-      ctx.moveTo(800, currentY); ctx.lineTo(800, currentY + 90);
-      ctx.moveTo(640, currentY); ctx.lineTo(640, currentY + 90);
+      ctx.moveTo(600, currentY); ctx.lineTo(600, currentY + 90);
       ctx.moveTo(480, currentY); ctx.lineTo(480, currentY + 90);
-      ctx.moveTo(320, currentY); ctx.lineTo(320, currentY + 90);
-      ctx.moveTo(160, currentY); ctx.lineTo(160, currentY + 90);
+      ctx.moveTo(360, currentY); ctx.lineTo(360, currentY + 90);
+      ctx.moveTo(240, currentY); ctx.lineTo(240, currentY + 90);
+      ctx.moveTo(120, currentY); ctx.lineTo(120, currentY + 90);
       ctx.moveTo(0, currentY); ctx.lineTo(0, currentY + 90);
       ctx.stroke();
 
       currentY += 90;
     });
 
-    // Draw Footer Bar 1: Discount source info aligned perfectly underneath specific columns
+    // Draw Footer Bar 1: Discount source info
     ctx.fillStyle = '#0F172A';
-    ctx.fillRect(480, currentY, 320, 45); // Below Capacity & Retail Columns
+    ctx.fillRect(360, currentY, 240, 45);
     ctx.fillStyle = '#1E293B';
-    ctx.fillRect(0, currentY, 480, 45); // Below Discount Columns
+    ctx.fillRect(0, currentY, 360, 45);
 
     ctx.fillStyle = '#FBBF24'; // gold
-    ctx.font = 'bold 13.5px Cairo, system-ui, sans-serif';
-    ctx.fillText('يتم احتساب الخصم من', 640, currentY + 27); // Centered across Col 1 & 2 (spacing under Capacity + Retail)
+    ctx.font = 'bold 12.5px Cairo, system-ui, sans-serif';
+    ctx.fillText('يتم احتساب الخصم من', 480, currentY + 27);
 
     ctx.fillStyle = '#FFFFFF';
     ctx.font = 'bold 13px Cairo, system-ui, sans-serif';
-    ctx.fillText('فوق ٣٠ كرتونة', 400, currentY + 27); // Under Col 3 (%1,00)
-    ctx.fillText('فوق ٥٠ كرتونة', 240, currentY + 27); // Under Col 4 (%1,25)
-    ctx.fillText('فوق ١٠٠ كرتونة', 80, currentY + 27); // Under Col 5 (%1,50)
+    ctx.fillText('فوق ٣٠ كرتونة', 300, currentY + 27);
+    ctx.fillText('فوق ٥٠ كرتونة', 180, currentY + 27);
+    ctx.fillText('فوق ١٠٠ كرتونة', 60, currentY + 27);
 
     ctx.strokeStyle = '#000000';
     ctx.lineWidth = 2;
     ctx.strokeRect(0, currentY, canvas.width, 45);
     ctx.beginPath();
-    ctx.moveTo(480, currentY); ctx.lineTo(480, currentY + 45);
-    ctx.moveTo(320, currentY); ctx.lineTo(320, currentY + 45);
-    ctx.moveTo(160, currentY); ctx.lineTo(160, currentY + 45);
+    ctx.moveTo(360, currentY); ctx.lineTo(360, currentY + 45);
+    ctx.moveTo(240, currentY); ctx.lineTo(240, currentY + 45);
+    ctx.moveTo(120, currentY); ctx.lineTo(120, currentY + 45);
     ctx.stroke();
 
-    // Draw Footer Bar 2: Variable price warning (currentY + 45 to currentY + 95)
+    // Draw Footer Bar 2: Variable price warning
     ctx.fillStyle = '#B91C1C';
     ctx.fillRect(0, currentY + 45, canvas.width, 50);
     
@@ -260,7 +260,7 @@ export default function PricesTab({ products: rawProducts, onGoBack, permittedSu
 
     ctx.strokeRect(0, currentY + 45, canvas.width, 50);
 
-    // Draw Greetings Card (currentY + 95 to currentY + 160)
+    // Draw Greetings Card
     ctx.fillStyle = '#FFFDFC';
     ctx.fillRect(0, currentY + 95, canvas.width, 65);
 
@@ -272,12 +272,227 @@ export default function PricesTab({ products: rawProducts, onGoBack, permittedSu
     ctx.font = 'bold italic 13.5px Cairo, system-ui, sans-serif';
     ctx.fillText('عميلنا العزيز، نسعد لخدمتكم دائماً ونفخر بكونكم شركاء نجاحنا وتقدمنا.', canvas.width / 2, currentY + 132);
 
-    // Border surrounding whole canvas to make it super elegant
+    // Border surrounding whole canvas
     ctx.strokeStyle = '#000000';
     ctx.lineWidth = 4;
     ctx.strokeRect(0, 0, canvas.width, canvas.height);
 
     return canvas;
+  };
+
+  const generateAllPricesCanvas = (): HTMLCanvasElement | null => {
+    if (productPriceDetails.length === 0) return null;
+
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+    ctx.direction = 'rtl';
+
+    const headerHeight = 92;
+    const spacing = 30;
+    
+    let totalHeight = headerHeight;
+    productPriceDetails.forEach(prod => {
+      const weightsCount = prod.weights.length;
+      totalHeight += 45; // Product Title
+      totalHeight += 68; // Table Header
+      totalHeight += weightsCount * 90; // Rows
+      totalHeight += 45; // Discount info footer
+      totalHeight += spacing; // Spacing
+    });
+    totalHeight += 50; // Warning warning
+    totalHeight += 65; // Greeting card
+    totalHeight += 20; // margin
+
+    canvas.width = 600;
+    canvas.height = totalHeight;
+
+    // Background
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Main Header (Deep Slate Blue)
+    ctx.fillStyle = '#0F172A'; 
+    ctx.fillRect(0, 0, canvas.width, 92);
+
+    // Yellow accent dividing line
+    ctx.fillStyle = '#FBBF24'; 
+    ctx.fillRect(0, 90, canvas.width, 2);
+
+    // Draw Title (Centered)
+    ctx.fillStyle = '#FFFFFF';
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 23px Cairo, system-ui, sans-serif';
+    ctx.fillText('قائمة الأسعار المعتمدة ومستويات الخصم', canvas.width / 2, 38);
+
+    const today = new Date();
+    const weekdayName = today.toLocaleDateString('ar-EG', { weekday: 'long' });
+    const formattedDatePart = `${today.getDate()} / ${today.getMonth() + 1} / ${today.getFullYear()}`;
+    
+    ctx.fillStyle = '#FBBF24';
+    ctx.font = 'bold 15px Cairo, system-ui, sans-serif';
+    ctx.fillText(`يوم ${weekdayName} بتاريخ: ${toArabicNumerals(formattedDatePart)}`, canvas.width / 2, 72);
+
+    let currentY = 105;
+
+    productPriceDetails.forEach((prod, pIdx) => {
+      // 1. Product Title
+      ctx.fillStyle = '#f7f3bd'; 
+      ctx.fillRect(0, currentY, canvas.width, 45);
+      
+      ctx.strokeStyle = '#000000';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(0, currentY, canvas.width, 45);
+
+      ctx.fillStyle = '#1A365D';
+      ctx.textAlign = 'center';
+      ctx.font = 'bold 16px Cairo, system-ui, sans-serif';
+      const cleanProdLabel = prod.name.startsWith('زيت') ? prod.name : `زيت ${prod.name}`;
+      ctx.fillText(cleanProdLabel, canvas.width / 2, currentY + 28);
+      
+      currentY += 45;
+
+      // 2. Table Header
+      ctx.fillStyle = '#111827'; 
+      ctx.fillRect(360, currentY, 240, 68); 
+
+      ctx.fillStyle = '#FBBF24'; 
+      ctx.font = 'bold 14px Cairo, system-ui, sans-serif';
+      ctx.fillText('السعة اللترية', 540, currentY + 40);
+      ctx.fillText('سعر التجزئة', 420, currentY + 40);
+
+      ctx.fillStyle = '#1E293B';
+      ctx.fillRect(0, currentY, 360, 33);
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fillText('نسبة خصم الجملة', 180, currentY + 22);
+
+      ctx.fillStyle = '#1E3A8A';
+      ctx.fillRect(0, currentY + 33, 360, 35);
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fillText('%١,٠٠', 300, currentY + 55);
+      ctx.fillText('%١,٢٥', 180, currentY + 55);
+      ctx.fillText('%١,٥٠', 60, currentY + 55);
+
+      ctx.strokeStyle = '#000000';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(0, currentY, canvas.width, 68);
+      
+      ctx.beginPath();
+      ctx.moveTo(480, currentY); ctx.lineTo(480, currentY + 68);
+      ctx.moveTo(360, currentY); ctx.lineTo(360, currentY + 68);
+      ctx.moveTo(240, currentY + 33); ctx.lineTo(240, currentY + 68);
+      ctx.moveTo(120, currentY + 33); ctx.lineTo(120, currentY + 68);
+      ctx.moveTo(0, currentY + 33); ctx.lineTo(360, currentY + 33);
+      ctx.stroke();
+
+      currentY += 68;
+
+      // 3. Rows
+      prod.weights.forEach((w: any, idx: number) => {
+        const theme = getSizeRowColors(idx);
+        const retailCarton = w.cartonPriceFromFactory + (w.addedValue || 0);
+        const retailPiece = w.retailPricePerUnit;
+
+        // Carton
+        ctx.fillStyle = theme.bg;
+        ctx.fillRect(0, currentY, 600, 45);
+        ctx.fillStyle = theme.text;
+        ctx.font = 'bold 14px Cairo, system-ui, sans-serif';
+        ctx.fillText(toArabicNumerals(w.size), 540, currentY + 28);
+        ctx.fillText(formatPriceWithCurrencyAndDecimal(retailCarton), 420, currentY + 28);
+        ctx.fillText(formatPriceWithCurrencyAndDecimal(w.carton1), 300, currentY + 28);
+        ctx.fillText(formatPriceWithCurrencyAndDecimal(w.carton125), 180, currentY + 28);
+        ctx.fillText(formatPriceWithCurrencyAndDecimal(w.carton15), 60, currentY + 28);
+
+        // Piece
+        ctx.fillStyle = theme.subBg;
+        ctx.fillRect(0, currentY + 45, 600, 45);
+        ctx.fillStyle = theme.subText;
+        ctx.font = 'bold 12.5px Cairo, system-ui, sans-serif';
+        ctx.fillText('سعر القطعه', 540, currentY + 73);
+        ctx.fillText(formatPriceWithCurrencyAndDecimal(retailPiece), 420, currentY + 73);
+        ctx.fillText(formatPriceWithCurrencyAndDecimal(w.unit1), 300, currentY + 73);
+        ctx.fillText(formatPriceWithCurrencyAndDecimal(w.unit125), 180, currentY + 73);
+        ctx.fillText(formatPriceWithCurrencyAndDecimal(w.unit15), 60, currentY + 73);
+
+        ctx.strokeStyle = '#000000';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(0, currentY + 45); ctx.lineTo(600, currentY + 45);
+        ctx.moveTo(0, currentY + 90); ctx.lineTo(600, currentY + 90);
+        ctx.moveTo(480, currentY); ctx.lineTo(480, currentY + 90);
+        ctx.moveTo(360, currentY); ctx.lineTo(360, currentY + 90);
+        ctx.moveTo(240, currentY); ctx.lineTo(240, currentY + 90);
+        ctx.moveTo(120, currentY); ctx.lineTo(120, currentY + 90);
+        ctx.stroke();
+
+        currentY += 90;
+      });
+
+      // 4. Discount Info
+      ctx.fillStyle = '#0F172A';
+      ctx.fillRect(360, currentY, 240, 45);
+      ctx.fillStyle = '#1E293B';
+      ctx.fillRect(0, currentY, 360, 45);
+
+      ctx.fillStyle = '#FBBF24';
+      ctx.font = 'bold 12.5px Cairo, system-ui, sans-serif';
+      ctx.fillText('يتم احتساب الخصم من', 480, currentY + 27);
+
+      ctx.fillStyle = '#FFFFFF';
+      ctx.font = 'bold 13px Cairo, system-ui, sans-serif';
+      ctx.fillText('فوق ٣٠ كرتونة', 300, currentY + 27);
+      ctx.fillText('فوق ٥٠ كرتونة', 180, currentY + 27);
+      ctx.fillText('فوق ١٠٠ كرتونة', 60, currentY + 27);
+
+      ctx.strokeStyle = '#000000';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(0, currentY, canvas.width, 45);
+      ctx.beginPath();
+      ctx.moveTo(360, currentY); ctx.lineTo(360, currentY + 45);
+      ctx.moveTo(240, currentY); ctx.lineTo(240, currentY + 45);
+      ctx.moveTo(120, currentY); ctx.lineTo(120, currentY + 45);
+      ctx.stroke();
+
+      currentY += 45 + spacing;
+    });
+
+    // Warning
+    ctx.fillStyle = '#B91C1C';
+    ctx.fillRect(0, currentY, canvas.width, 50);
+    ctx.fillStyle = '#FFFFFF';
+    ctx.font = 'bold 16px Cairo, system-ui, sans-serif';
+    ctx.fillText('الاسعار متغيرة طبقا للسعر اليومي 📢', canvas.width / 2, currentY + 32);
+    ctx.strokeStyle = '#000000';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(0, currentY, canvas.width, 50);
+
+    currentY += 50;
+
+    // Greeting card
+    ctx.fillStyle = '#FFFDFC';
+    ctx.fillRect(0, currentY, canvas.width, 65);
+    ctx.strokeStyle = '#FBBF24';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(20, currentY + 10, canvas.width - 40, 45);
+    ctx.fillStyle = '#1E293B';
+    ctx.font = 'bold italic 13.5px Cairo, system-ui, sans-serif';
+    ctx.fillText('عميلنا العزيز، نسعد لخدمتكم دائماً ونفخر بكونكم شركاء نجاحنا وتقدمنا.', canvas.width / 2, currentY + 37);
+
+    ctx.strokeStyle = '#000000';
+    ctx.lineWidth = 4;
+    ctx.strokeRect(0, 0, canvas.width, canvas.height);
+
+    return canvas;
+  };
+
+  const downloadAllPricesAsImage = () => {
+    const canvas = generateAllPricesCanvas();
+    if (!canvas) return;
+    const link = document.createElement('a');
+    link.download = `بيان_أسعار_شامل_${new Date().toISOString().substring(0, 10)}.png`;
+    link.href = canvas.toDataURL('image/png');
+    link.click();
   };
 
   const downloadPriceListAsImage = (prod: any) => {
@@ -616,13 +831,21 @@ export default function PricesTab({ products: rawProducts, onGoBack, permittedSu
                 <span className="text-xs font-black text-[#1A365D] flex items-center gap-1.5">
                   📱 خيارات مشاركة قائمة الأسعار السريعة مع العملاء عبر الواتساب:
                 </span>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                   <button
                     type="button"
                     onClick={handleShareAllWhatsApp}
                     className="bg-[#25D366] hover:bg-[#20ba5a] active:scale-95 text-white border border-black/5 rounded-xl py-2 px-3 text-xs font-black transition-all flex items-center justify-center gap-1.5 cursor-pointer select-none shadow-xs"
                   >
                     <span>مشاركة جميع الأسعار واتساب 📱</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={downloadAllPricesAsImage}
+                    className="bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white border border-black/5 rounded-xl py-2 px-3 text-xs font-black transition-all flex items-center justify-center gap-1.5 cursor-pointer select-none shadow-xs"
+                  >
+                    <Download className="h-4.5 w-4.5 shrink-0 text-white" />
+                    <span>تنزيل صورة للكل 🖼️</span>
                   </button>
                   <button
                     type="button"
@@ -639,56 +862,57 @@ export default function PricesTab({ products: rawProducts, onGoBack, permittedSu
               <p className="text-center text-gray-400 py-12 text-sm">لا توجد منتجات مسجلة بعد، يرجى إضافتها أولاً من تبويب المصنع.</p>
             ) : (
               productPriceDetails.map(prod => (
-                <div key={prod.id} className="border border-slate-200 rounded-2xl bg-[#F7FAFC]/50 overflow-hidden shadow-sm flex flex-col gap-3 p-4">
+                <div key={prod.id} className="border border-slate-200 rounded-2xl bg-white overflow-hidden shadow-sm flex flex-col gap-3 p-4">
                   <div className="bg-[#f7f3bd]/80 -mx-4 -mt-4 px-4 py-3 border-b border-slate-200 flex justify-between items-center font-bold text-sm text-[#1A365D]" style={{ backgroundColor: '#f7f3bd' }}>
                     <span className="text-[#1A365D] font-black text-sm">{prod.name}</span>
                   </div>
 
-                  {/* Weights container stack displaying the clean classic grid with 3 original columns */}
-                  <div className="flex flex-col gap-3">
-                    {prod.weights.map((w, index) => (
-                      <div key={w.id || index} className="bg-[#FFFFFF] border border-slate-150 rounded-xl p-3 flex flex-col gap-2 shadow-xs">
-                        <div className="flex items-center justify-between border-b border-slate-100 pb-1.5 gap-2 flex-wrap">
-                          <span className="text-xs font-black text-[#9B111E] flex items-center gap-1">
-                            <Scale className="h-3.5 w-3.5 text-[#9B111E]" />
-                            حجم العبوة: {toArabicNumerals(w.size)}
-                          </span>
-                        </div>
-
-                        {/* Pricing grids with 4 framed discount tiers */}
-                        <div className="grid grid-cols-4 gap-1.5 text-center text-[10px] font-semibold text-[#1A365D]">
+                  {/* Weights container displaying HTML Table */}
+                  <div className="overflow-x-auto -mx-4 sm:mx-0">
+                    <table className="w-full text-xs text-right border-collapse border border-slate-200 min-w-[650px]">
+                      <thead className="bg-[#1A365D] text-white text-[11px]">
+                        <tr>
+                          <th className="p-2 border border-slate-200 text-center">الصنف / الحجم</th>
+                          <th className="p-2 border border-slate-200 text-center">الوحدة</th>
+                          <th className="p-2 border border-slate-200 text-center">التجزئة (0%)</th>
+                          <th className="p-2 border border-slate-200 text-center">جملة (1%)</th>
+                          <th className="p-2 border border-slate-200 text-center">نصف جملة (1.25%)</th>
+                          <th className="p-2 border border-slate-200 text-center">كبار العملاء (1.5%)</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {prod.weights.map((w, index) => {
+                          const retailCarton = w.cartonPriceFromFactory + (w.addedValue || 0);
                           
-                          {/* 0% Discount tier */}
-                          <div className="border border-slate-200 rounded-lg p-1.5 bg-slate-50/50 flex flex-col justify-between shadow-xs">
-                            <span className="block font-black text-slate-500 mb-1 border-b border-slate-100 pb-1">خصم 0%</span>
-                            <strong dir="ltr" className="text-[11px] font-black text-slate-900 block">{formatPriceWithCurrencyAndDecimal(w.cartonPriceFromFactory + (w.addedValue || 0))}</strong>
-                            <span dir="ltr" className="block text-[9px] text-[#DD6B20] font-black mt-1">{formatPriceWithCurrencyAndDecimal(w.retailPricePerUnit)}</span>
-                          </div>
-
-                          {/* 1% Discount tier */}
-                          <div className="border border-slate-200 rounded-lg p-1.5 bg-white flex flex-col justify-between shadow-xs">
-                            <span className="block font-black text-slate-500 mb-1 border-b border-slate-100 pb-1">خصم 1%</span>
-                            <strong dir="ltr" className="text-[11px] font-black text-slate-900 block">{formatPriceWithCurrencyAndDecimal(w.carton1)}</strong>
-                            <span dir="ltr" className="block text-[9px] text-[#DD6B20] font-black mt-1">{formatPriceWithCurrencyAndDecimal(w.unit1)}</span>
-                          </div>
-
-                          {/* 1.25% Discount tier */}
-                          <div className="border border-slate-200 rounded-lg p-1.5 bg-white flex flex-col justify-between shadow-xs">
-                            <span className="block font-black text-slate-500 mb-1 border-b border-slate-100 pb-1">خصم 1.25%</span>
-                            <strong dir="ltr" className="text-[11px] font-black text-slate-900 block">{formatPriceWithCurrencyAndDecimal(w.carton125)}</strong>
-                            <span dir="ltr" className="block text-[9px] text-[#DD6B20] font-black mt-1">{formatPriceWithCurrencyAndDecimal(w.unit125)}</span>
-                          </div>
-
-                          {/* 1.5% Discount tier */}
-                          <div className="border border-slate-200 rounded-lg p-1.5 bg-white flex flex-col justify-between shadow-xs">
-                            <span className="block font-black text-slate-500 mb-1 border-b border-slate-100 pb-1">خصم 1.5%</span>
-                            <strong dir="ltr" className="text-[11px] font-black text-slate-900 block">{formatPriceWithCurrencyAndDecimal(w.carton15)}</strong>
-                            <span dir="ltr" className="block text-[9px] text-[#DD6B20] font-black mt-1">{formatPriceWithCurrencyAndDecimal(w.unit15)}</span>
-                          </div>
-
-                        </div>
-                      </div>
-                    ))}
+                          return (
+                            <React.Fragment key={w.id || index}>
+                              {/* كرتونة Row */}
+                              <tr className="bg-slate-50/70 border-t border-slate-200 font-bold text-center">
+                                <td className="p-2 border border-slate-200 font-black text-[#1A365D]" rowSpan={2}>
+                                  <div className="flex items-center justify-center gap-1">
+                                    <Scale className="h-3.5 w-3.5 text-[#9B111E] shrink-0" />
+                                    <span>{toArabicNumerals(w.size)}</span>
+                                  </div>
+                                </td>
+                                <td className="p-2 border border-slate-200 text-[#1A365D] font-bold">كرتونة</td>
+                                <td className="p-2 border border-slate-200 font-mono text-emerald-700">{formatPriceWithCurrencyAndDecimal(retailCarton)}</td>
+                                <td className="p-2 border border-slate-200 font-mono text-slate-700">{formatPriceWithCurrencyAndDecimal(w.carton1)}</td>
+                                <td className="p-2 border border-slate-200 font-mono text-slate-700">{formatPriceWithCurrencyAndDecimal(w.carton125)}</td>
+                                <td className="p-2 border border-slate-200 font-mono text-slate-700">{formatPriceWithCurrencyAndDecimal(w.carton15)}</td>
+                              </tr>
+                              {/* قطعة Row */}
+                              <tr className="bg-white hover:bg-slate-50 transition-colors text-center">
+                                <td className="p-2 border border-slate-200 text-slate-500 font-bold">قطعة</td>
+                                <td className="p-2 border border-slate-200 font-mono text-emerald-650 font-bold">{formatPriceWithCurrencyAndDecimal(w.retailPricePerUnit)}</td>
+                                <td className="p-2 border border-slate-200 font-mono text-slate-650">{formatPriceWithCurrencyAndDecimal(w.unit1)}</td>
+                                <td className="p-2 border border-slate-200 font-mono text-slate-650">{formatPriceWithCurrencyAndDecimal(w.unit125)}</td>
+                                <td className="p-2 border border-slate-200 font-mono text-slate-650">{formatPriceWithCurrencyAndDecimal(w.unit15)}</td>
+                              </tr>
+                            </React.Fragment>
+                          );
+                        })}
+                      </tbody>
+                    </table>
                   </div>
 
                   {/* Dual export actions to download as highly stylized Image or PDF */}

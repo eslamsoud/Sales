@@ -33,7 +33,7 @@ import InvoiceTab from './components/InvoiceTab';
 import AuthGate from './components/AuthGate';
 import AiChatAssistant from './components/AiChatAssistant';
 import { Lock, Fingerprint, Key, ShieldAlert, CheckCircle, RefreshCw, Save, LogOut, MessageCircle, Bell, Settings as SettingsIcon, HelpCircle, AlertCircle } from 'lucide-react';
-import { confirmEvents, confirmDialog } from './utils/confirm';
+import { confirmDialog } from './utils/confirm';
 import { idbGet, idbSet } from './utils/idb';
 
 // 🌐 رابط جوجل شيت الموحد والمدمج في التطبيق مباشرة
@@ -51,7 +51,6 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<string>('dashboard');
   const [isChatOpen, setIsChatOpen] = useState<boolean>(false);
   const [customToast, setCustomToast] = useState<{message: string, id: number} | null>(null);
-  const [confirmState, setConfirmState] = useState<{message: string, isAlert: boolean, resolve: (val: boolean)=>void} | null>(null);
 
   useEffect(() => {
     window.gm_authFailure = () => {
@@ -67,13 +66,7 @@ export default function App() {
     };
   }, []);
 
-  useEffect(() => {
-    const handleShowConfirm = (e: any) => {
-      setConfirmState(e.detail);
-    };
-    confirmEvents.addEventListener('show-confirm', handleShowConfirm);
-    return () => confirmEvents.removeEventListener('show-confirm', handleShowConfirm);
-  }, []);
+
 
   useEffect(() => {
     const handleShowToast = (e: any) => {
@@ -286,12 +279,19 @@ export default function App() {
             localStorage.setItem('users_permissions_sys', JSON.stringify(updated));
             return updated;
           });
+          // Silent background sync of GPS coordinates and last seen to Google Sheets
+          setTimeout(() => {
+            syncAllDataToGoogle(true);
+          }, 800);
         }, () => {
           setUsersList(prev => {
             const updated = prev.map(u => u.phone === currentUser.phone ? { ...u, lastActive: new Date().toISOString() } : u);
             localStorage.setItem('users_permissions_sys', JSON.stringify(updated));
             return updated;
           });
+          setTimeout(() => {
+            syncAllDataToGoogle(true);
+          }, 800);
         }, { enableHighAccuracy: false, maximumAge: 60000, timeout: 5000 });
       } else {
         setUsersList(prev => {
@@ -299,6 +299,10 @@ export default function App() {
           localStorage.setItem('users_permissions_sys', JSON.stringify(updated));
           return updated;
         });
+        // Owner active bump triggers silent sync to keep lastActive updated in Google Sheets
+        setTimeout(() => {
+          syncAllDataToGoogle(true);
+        }, 800);
       }
     };
     bumpActive();
@@ -1071,27 +1075,51 @@ export default function App() {
             lastPurchaseDate: c.lastPurchaseDate || ''
           }
         }),
-        users: isSyncManager ? freshUsersList.map(u => ({
-          name: u.name.replace(/\s*\(.*?\)/g, '').trim(),
-          phone: u.phone,
-          role: u.role,
-          status: u.status,
-          password: (() => {
-            try { return decodeURIComponent(atob(u.password || '')); }
-            catch(e) { return u.password || '1234'; }
-          })(),
-          customRoleName: u.customRoleName || '',
-          permittedTabs: (u.permittedTabs || []).join(','),
-          permittedSubTabs: (u.permittedSubTabs || []).join(','),
-            canEditPrices: u.canEditPrices !== false,
-            lastActive: u.lastActive || '',
-            lastLat: u.lastLat || '',
-            lastLng: u.lastLng || '',
-            canUseAiAssistant: u.canUseAiAssistant !== false,
-            canApplyDiscount: u.canApplyDiscount !== false,
-            maxDiscountPercentOfProfit: u.maxDiscountPercentOfProfit !== undefined ? u.maxDiscountPercentOfProfit : 100,
-            maxExtraDiscountAmount: u.maxExtraDiscountAmount !== undefined ? u.maxExtraDiscountAmount : ''
-        })) : [],
+        users: isSyncManager 
+          ? freshUsersList.map(u => ({
+              name: u.name.replace(/\s*\(.*?\)/g, '').trim(),
+              phone: u.phone,
+              role: u.role,
+              status: u.status,
+              password: (() => {
+                try { return decodeURIComponent(atob(u.password || '')); }
+                catch(e) { return u.password || '1234'; }
+              })(),
+              customRoleName: u.customRoleName || '',
+              permittedTabs: (u.permittedTabs || []).join(','),
+              permittedSubTabs: (u.permittedSubTabs || []).join(','),
+              canEditPrices: u.canEditPrices !== false,
+              lastActive: u.lastActive || '',
+              lastLat: u.lastLat || '',
+              lastLng: u.lastLng || '',
+              canUseAiAssistant: u.canUseAiAssistant !== false,
+              canApplyDiscount: u.canApplyDiscount !== false,
+              maxDiscountPercentOfProfit: u.maxDiscountPercentOfProfit !== undefined ? u.maxDiscountPercentOfProfit : 100,
+              maxExtraDiscountAmount: u.maxExtraDiscountAmount !== undefined ? u.maxExtraDiscountAmount : '',
+              workArea: u.workArea || 'الكل'
+            })) 
+          : freshUsersList.filter(u => u.phone === (currentUser?.phone || '')).map(u => ({
+              name: u.name.replace(/\s*\(.*?\)/g, '').trim(),
+              phone: u.phone,
+              role: u.role,
+              status: u.status,
+              password: (() => {
+                try { return decodeURIComponent(atob(u.password || '')); }
+                catch(e) { return u.password || '1234'; }
+              })(),
+              customRoleName: u.customRoleName || '',
+              permittedTabs: (u.permittedTabs || []).join(','),
+              permittedSubTabs: (u.permittedSubTabs || []).join(','),
+              canEditPrices: u.canEditPrices !== false,
+              lastActive: u.lastActive || '',
+              lastLat: u.lastLat || '',
+              lastLng: u.lastLng || '',
+              canUseAiAssistant: u.canUseAiAssistant !== false,
+              canApplyDiscount: u.canApplyDiscount !== false,
+              maxDiscountPercentOfProfit: u.maxDiscountPercentOfProfit !== undefined ? u.maxDiscountPercentOfProfit : 100,
+              maxExtraDiscountAmount: u.maxExtraDiscountAmount !== undefined ? u.maxExtraDiscountAmount : '',
+              workArea: u.workArea || 'الكل'
+            })),
         factoryLoads: (currentLoads || []).map(fl => {
           const prod = productsMap.get(String(fl.productId).trim());
           const activeWeights = prod ? (prod.weights && prod.weights.length > 0 ? prod.weights : getProductWeightsFallback(prod)) : [];
@@ -1451,6 +1479,7 @@ export default function App() {
             lastActive: u.lastActive || undefined,
             lastLat: Number(u.lastLat) || undefined,
             lastLng: Number(u.lastLng) || undefined,
+            workArea: u.workArea || 'الكل',
             createdAt: u.createdAt || new Date().toISOString()
           })).map((u: any) => ENSURE_OWNER_PERMS(u));
 
@@ -1608,7 +1637,8 @@ export default function App() {
             purchasesCount: Number(c.purchasesCount || 0),
             salesManager: c.salesManager || '',
             totalSpent: Number(c.totalSpent || 0),
-            lastPurchaseDate: c.lastPurchaseDate || ''
+            lastPurchaseDate: c.lastPurchaseDate || '',
+            type: c.type || c.activity || c.businessActivity || ''
           })).filter((c: any) => !deletedIds.includes(c.id));
           if (shouldReplace) {
             finalCustomers = mappedCustomers;

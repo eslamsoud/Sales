@@ -4081,12 +4081,17 @@ export default function FactoryTab({
 
                         {/* List nested weights of this category */}
                         <div className="bg-[#FFFFFF] rounded-lg border border-slate-100 p-2 text-xs flex flex-col gap-1.5 divide-y divide-slate-100">
-                          {ws.map((w, index) => (
-                            <div key={w.id || index} className="pt-1.5 first:pt-0 flex flex-wrap justify-between items-center text-[11px] text-[#2B6CB0] font-medium border-b-0 pb-1 mb-1 border-b border-b-slate-100/50">
-                              <span>وزن: <strong className="text-slate-850 font-bold">{w.size}</strong></span>
-                              <span>سعر {labelUnit}: <strong className="text-[#1A365D] font-bold">{w.cartonPriceFromFactory}ج.م</strong></span>
-                            </div>
-                          ))}
+                          {ws.map((w, index) => {
+                            const retailPrice = w.cartonPriceFromFactory + (w.addedValue || 0);
+                            return (
+                              <div key={w.id || index} className="pt-1.5 first:pt-0 flex flex-wrap justify-between items-center text-[11px] text-[#2B6CB0] font-medium border-b-0 pb-1 mb-1 border-b border-b-slate-100/50 gap-2">
+                                <span>الوزن/الحجم: <strong className="text-slate-850 font-bold">{w.size}</strong></span>
+                                <span>سعر المصنع للـ {labelUnit}: <strong className="text-blue-750 font-bold">{w.cartonPriceFromFactory}ج.م</strong></span>
+                                <span>قيمة مضافة: <strong className="text-orange-700 font-bold">{w.addedValue || 0}ج.م</strong></span>
+                                <span>التجزئة (التسليم): <strong className="text-emerald-700 font-bold">{retailPrice}ج.م</strong></span>
+                              </div>
+                            );
+                          })}
                         </div>
                       </div>
                     );

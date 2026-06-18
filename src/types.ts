@@ -57,6 +57,7 @@ export interface Customer {
   salesManager?: string; // مدير البيع (لغرض البحث فقط)
   totalSpent?: number;
   lastPurchaseDate?: string;
+  type?: string; // النشاط التجاري / تصنيف العميل
 }
 
 export interface InvoiceItem {
@@ -155,6 +156,7 @@ export interface UserAuth {
   canApplyDiscount?: boolean; // السماح بالخصم الإضافي للمندوب
   maxDiscountPercentOfProfit?: number; // أقصى نسبة خصم من صافي الأرباح (مثال 20%)
   maxExtraDiscountAmount?: number; // أقصى قيمة لمبلغ الخصم الإضافي بالجنيه
+  workArea?: string; // نطاق منطقة العمل المحددة للمندوب (مثال: الشرقية - أبو حماد أو الكل)
   createdAt: string;
 }
 

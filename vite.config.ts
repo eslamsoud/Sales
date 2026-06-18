@@ -13,7 +13,7 @@ export default defineConfig(() => {
     plugins: [
       react(),
       tailwindcss(),
-      VitePWA({
+      ...(process.env.NODE_ENV === 'production' ? [VitePWA({
         registerType: 'autoUpdate',
         injectRegister: 'auto',
         workbox: {
@@ -45,7 +45,7 @@ export default defineConfig(() => {
             }
           ]
         }
-      })
+      })] : [])
     ],
     resolve: {
       alias: {

@@ -74,6 +74,25 @@ const getGovernorateForArea = (area: string): string => {
   return 'أخرى';
 };
 
+const getResolvedGov = (lead: any): string => {
+  if (!lead) return 'أخرى';
+  const areaVal = (lead.area || '').trim();
+  if (!areaVal) return lead.governorate || 'أخرى';
+  
+  // First, check if the area matches any city in EGYPT_CITIES
+  for (const [gov, cities] of Object.entries(EGYPT_CITIES)) {
+    if (cities.some(city => areaVal.includes(city) || city.includes(areaVal))) {
+      return gov;
+    }
+  }
+
+  const resolved = getGovernorateForArea(areaVal);
+  if (resolved && resolved !== 'أخرى') {
+    return resolved;
+  }
+  return lead.governorate || 'أخرى';
+};
+
 const formatWhatsAppLink = (phone: string, encodedText: string = '') => {
   let cleaned = (phone || '').replace(/[^0-9]/g, '');
   if (!cleaned) return `https://wa.me/?text=${encodedText}`;
@@ -86,6 +105,26 @@ const formatWhatsAppLink = (phone: string, encodedText: string = '') => {
 };
 
 const hasNoPhone = (phone?: string) => !phone || phone === 'غير مسجل' || phone.trim() === '' || phone.includes('انتظار');
+
+const isLeadInWorkArea = (leadGov: string, leadArea: string, workArea?: string) => {
+  if (!workArea || workArea === 'الكل') return true;
+  
+  const zones = workArea.split(',').map(s => s.trim()).filter(Boolean);
+  if (zones.length === 0) return true;
+  
+  return zones.some(zone => {
+    if (zone === 'الكل') return true;
+    if (zone.includes(' - ')) {
+      const parts = zone.split(' - ');
+      const targetGov = parts[0].trim();
+      const targetArea = parts[1].trim();
+      return leadGov === targetGov && leadArea === targetArea;
+    } else {
+      // Governorate level only
+      return leadGov === zone;
+    }
+  });
+};
 
 const getLeadCardTheme = (type: string) => {
   const t = type || '';
@@ -148,6 +187,7 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
   const [governorate, setGovernorate] = useState('');
   const [salesManager, setSalesManager] = useState('');
   const [detailedAddress, setDetailedAddress] = useState('');
+  const [type, setType] = useState('');
   const [showAreaDropdown, setShowAreaDropdown] = useState(false);
   const [locationLink, setLocationLink] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
@@ -207,6 +247,31 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
   React.useEffect(() => {
     window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
   }, [activeTab]);
+
+  React.useEffect(() => {
+    if (currentUser && currentUser.role !== 'owner' && currentUser.workArea && currentUser.workArea !== 'الكل') {
+      const zones = currentUser.workArea.split(',').map(s => s.trim()).filter(Boolean);
+      const govs: string[] = [];
+      const areas: string[] = [];
+      
+      zones.forEach(zone => {
+        if (zone.includes(' - ')) {
+          const parts = zone.split(' - ');
+          govs.push(parts[0].trim());
+          areas.push(parts[1].trim());
+        } else {
+          govs.push(zone);
+        }
+      });
+      
+      if (govs.length > 0) {
+        setDiscoveredGovsFilter(Array.from(new Set(govs)));
+      }
+      if (areas.length > 0) {
+        setDiscoveredAreasFilter(Array.from(new Set(areas)));
+      }
+    }
+  }, [currentUser]);
 
   const handleGenerateAndSendWA = async (customer: Customer) => {
     setWaLoadingId(customer.id);
@@ -270,11 +335,20 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
     const seenNames = new Set<string>();
     const seenPhones = new Set<string>();
 
+    const workArea = currentUser?.workArea;
+
     return googleLeads.filter(lead => {
       const leadName = (lead.name || '').trim().toLowerCase();
       const leadPhone = (lead.phone || '').trim();
 
       if (!leadName) return false;
+
+      // Check workArea restriction
+      const leadGov = getResolvedGov(lead);
+      const leadArea = (lead.area || '').trim();
+      if (currentUser?.role !== 'owner' && !isLeadInWorkArea(leadGov, leadArea, workArea)) {
+        return false;
+      }
       
       const alreadyRealCustomer = customers.some(c => 
         (c.phone || '').trim() === leadPhone || 
@@ -301,7 +375,7 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
   // حصر المحافظات المكتشفة للتصفية السريعة
   const discoveredGovCounts = React.useMemo(() => {
     return activeGoogleLeads.reduce((acc, lead) => {
-        const gov = lead.governorate || getGovernorateForArea(lead.area || '') || 'أخرى';
+        const gov = getResolvedGov(lead);
         acc[gov] = (acc[gov] || 0) + 1;
         return acc;
     }, {} as Record<string, number>);
@@ -311,7 +385,7 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
   const leadsFilteredByGov = React.useMemo(() => {
     if (discoveredGovsFilter.length === 0) return activeGoogleLeads;
     return activeGoogleLeads.filter(lead => {
-        const gov = lead.governorate || getGovernorateForArea(lead.area || '') || 'أخرى';
+        const gov = getResolvedGov(lead);
         return discoveredGovsFilter.includes(gov);
     });
   }, [activeGoogleLeads, discoveredGovsFilter]);
@@ -349,11 +423,20 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
     const seenNames = new Set<string>();
     const seenPhones = new Set<string>();
 
+    const workArea = currentUser?.workArea;
+
     return potentialLeads.filter(lead => {
       const leadName = (lead.name || '').trim().toLowerCase();
       const leadPhone = (lead.phone || '').trim();
 
       if (!leadName) return false;
+
+      // Check workArea restriction
+      const leadGov = getResolvedGov(lead);
+      const leadArea = (lead.area || '').trim();
+      if (currentUser?.role !== 'owner' && !isLeadInWorkArea(leadGov, leadArea, workArea)) {
+        return false;
+      }
 
       const alreadyRealCustomer = customers.some(c => 
         (c.phone || '').trim() === leadPhone || 
@@ -375,7 +458,7 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
   // حصر المحافظات المحتملة للتصفية السريعة
   const potentialGovCounts = React.useMemo(() => {
     return activePotentialLeads.reduce((acc, lead) => {
-        const gov = lead.governorate || getGovernorateForArea(lead.area || '') || 'أخرى';
+        const gov = getResolvedGov(lead);
         acc[gov] = (acc[gov] || 0) + 1;
         return acc;
     }, {} as Record<string, number>);
@@ -385,7 +468,7 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
   const potentialLeadsFilteredByGov = React.useMemo(() => {
     if (potentialGovsFilter.length === 0) return activePotentialLeads;
     return activePotentialLeads.filter(lead => {
-        const gov = lead.governorate || getGovernorateForArea(lead.area || '') || 'أخرى';
+        const gov = getResolvedGov(lead);
         return potentialGovsFilter.includes(gov);
     });
   }, [activePotentialLeads, potentialGovsFilter]);
@@ -652,7 +735,7 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
     }
 
     const finalArea = (lead.detailedAddress || lead.area || 'أخرى').trim();
-    const gov = getGovernorateForArea(finalArea);
+    const gov = getResolvedGov({ ...lead, area: finalArea });
     const updated = [...googleLeads, { ...lead, governorate: gov, dateAdded: new Date().toLocaleDateString('ar-EG'), confirmed: false }];
     setGoogleLeads(updated);
     setAddedLeadIds(prev => [...prev, lead.id]);
@@ -660,7 +743,7 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
 
   const handleConfirmGoogleLead = async (lead: any) => {
     const finalArea = (lead.detailedAddress || lead.area || 'أخرى').trim();
-    const gov = lead.governorate || getGovernorateForArea(finalArea);
+    const gov = getResolvedGov({ ...lead, area: finalArea });
     
     const existsInReal = customers.find(c => c.phone === lead.phone || c.name.toLowerCase() === lead.name.toLowerCase());
     if (existsInReal) {
@@ -685,6 +768,7 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
     setGovernorate(gov);
     setLocationLink(lead.locationLink || `https://maps.google.com/?q=${encodeURIComponent((lead.name || '').trim() + ' ' + finalArea)}`);
     setDetailedAddress(lead.detailedAddress || '');
+    setType(lead.type || '');
     
     setPendingLeadToCustomer(lead);
     setActiveTab('list');
@@ -721,7 +805,7 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
 
   const handleConfirmPotentialLead = async (lead: any) => {
     const finalArea = (lead.detailedAddress || lead.area || 'أخرى').trim();
-    const gov = lead.governorate || getGovernorateForArea(finalArea);
+    const gov = getResolvedGov({ ...lead, area: finalArea });
     
     const existsInReal = customers.find(c => c.phone === lead.phone || c.name.toLowerCase() === lead.name.toLowerCase());
     if (existsInReal) {
@@ -745,6 +829,7 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
     setGovernorate(gov);
     setLocationLink(lead.locationLink || `https://maps.google.com/?q=${encodeURIComponent((lead.name || '').trim() + ' ' + finalArea)}`);
     setDetailedAddress(lead.detailedAddress || '');
+    setType(lead.type || '');
     
     setPendingPotentialLead(lead);
     setActiveTab('list');
@@ -782,7 +867,7 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
       return;
     }
 
-    const finalGov = governorate.trim() || getGovernorateForArea(finalArea);
+    const finalGov = governorate.trim() || getResolvedGov({ area: finalArea });
 
     const cleanPhone = phone.trim();
     const cleanName = name.trim().toLowerCase();
@@ -814,7 +899,8 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
         governorate: finalGov,
         salesManager: salesManager.trim(),
         locationLink: locationLink.trim() || `https://maps.google.com/?q=${encodeURIComponent(name.trim() + ' ' + finalArea)}`,
-        detailedAddress: detailedAddress.trim()
+        detailedAddress: detailedAddress.trim(),
+        type: type.trim()
       });
       showToast('✓ تم تعديل بيانات العميل بنجاح.');
     } else {
@@ -825,7 +911,8 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
         governorate: finalGov,
         salesManager: salesManager.trim(),
         locationLink: locationLink.trim() || `https://maps.google.com/?q=${encodeURIComponent(name.trim() + ' ' + finalArea)}`,
-        detailedAddress: detailedAddress.trim()
+        detailedAddress: detailedAddress.trim(),
+        type: type.trim()
       });
       
       // مسح العميل من قائمة "المكتشفين" إذا كان منقولاً منها
@@ -847,6 +934,7 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
     setSalesManager('');
     setLocationLink('');
     setDetailedAddress('');
+    setType('');
     setGeoStatusMsg('');
     setShowAddForm(false);
     setEditingCustomer(null);
@@ -964,7 +1052,7 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                     <td><b>${customer.name}</b></td>
                     <td><b style="font-family: monospace;">${customer.phone}</b></td>
                     <td>${customer.area}</td>
-                    <td>${customer.governorate || getGovernorateForArea(customer.area)}</td>
+                    <td>${getResolvedGov(customer)}</td>
                     <td><span style="font-size: 10px; color: #475569;">${customer.locationLink ? 'متوفر (الرابط مسجل)' : 'غير متوفر'}</span></td>
                   </tr>
                 `).join('')
@@ -993,6 +1081,13 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
   // Filtering
   const filteredCustomers = React.useMemo(() => {
     let result = customers.filter(c => {
+      // Check workArea restriction
+      const customerGov = getResolvedGov(c);
+      const customerArea = (c.area || '').trim();
+      if (currentUser?.role !== 'owner' && !isLeadInWorkArea(customerGov, customerArea, currentUser?.workArea)) {
+        return false;
+      }
+
       const q = searchQuery.trim().toLowerCase();
       const gq = govSearchQuery.trim().toLowerCase();
       
@@ -1002,11 +1097,11 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
         c.phone.includes(q) ||
         c.area.toLowerCase().includes(q) ||
         (c.salesManager || '').toLowerCase().includes(q) ||
-        (c.governorate || getGovernorateForArea(c.area)).toLowerCase().includes(q)
+        (c.governorate || getResolvedGov(c)).toLowerCase().includes(q) ||
+        (c.type || '').toLowerCase().includes(q)
       );
 
       // Check governorate query starting with letter or matching entirely
-      const customerGov = c.governorate || getGovernorateForArea(c.area);
       const matchesGov = !gq || customerGov.toLowerCase().includes(gq);
 
       return matchesGeneral && matchesGov;
@@ -1146,7 +1241,7 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                 </div>
 
                 <div className="grid grid-cols-1 gap-3">
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
                     <div>
                       <label className="inline-block bg-indigo-100 text-indigo-950 border border-indigo-200 text-xs font-black px-2.5 py-1 rounded-md mb-2 shadow-sm">اسم العميل</label>
                       <input
@@ -1178,6 +1273,30 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                         onChange={(e) => setSalesManager(e.target.value)}
                         className="w-full bg-[#F7FAFC] border border-slate-200 rounded-lg p-2.5 text-sm font-semibold focus:ring-2 focus:ring-indigo-500"
                       />
+                    </div>
+                    <div>
+                      <label className="inline-block bg-amber-100 text-amber-950 border border-amber-200 text-xs font-black px-2.5 py-1 rounded-md mb-2 shadow-sm">النشاط التجاري</label>
+                      <input
+                        type="text"
+                        list="client-types-list"
+                        placeholder="اختر أو اكتب النشاط التجاري"
+                        value={type}
+                        onChange={(e) => setType(e.target.value)}
+                        className="w-full bg-[#F7FAFC] border border-slate-200 rounded-lg p-2.5 text-sm font-semibold focus:ring-2 focus:ring-indigo-500 font-bold text-[#1A365D]"
+                      />
+                      <datalist id="client-types-list">
+                        <option value="سوبر ماركت" />
+                        <option value="بقالة" />
+                        <option value="هايبر ماركت" />
+                        <option value="كشك" />
+                        <option value="جملة" />
+                        <option value="نصف جملة" />
+                        <option value="مطعم" />
+                        <option value="كافيه" />
+                        <option value="عطارة" />
+                        <option value="حلواني" />
+                        <option value="أخرى" />
+                      </datalist>
                     </div>
                   </div>
 
@@ -1379,7 +1498,17 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                     <button
                       type="button"
                       onClick={() => {
-                        const exportData = filteredCustomers.map(c => ({ 'المعرف': c.id, 'المحافظة': c.governorate || '', 'المنطقة': c.area, 'اسم العميل': c.name, 'رقم الهاتف': c.phone, 'مدير البيع': c.salesManager || '', 'العنوان': c.detailedAddress || '', 'رابط جوجل ماب': c.locationLink }));
+                        const exportData = filteredCustomers.map(c => ({ 
+                          'المعرف': c.id, 
+                          'المحافظة': getResolvedGov(c), 
+                          'المنطقة': c.area, 
+                          'اسم العميل': c.name, 
+                          'رقم الهاتف': c.phone, 
+                          'مدير البيع': c.salesManager || '', 
+                          'النشاط': c.type || '',
+                          'العنوان': c.detailedAddress || '', 
+                          'رابط جوجل ماب': c.locationLink 
+                        }));
                         exportToCSV(exportData, `العملاء_الفعليين_${new Date().toLocaleDateString('ar-EG')}.csv`);
                       }}
                       className="bg-emerald-600 hover:bg-emerald-700 text-[#ffffff] font-extrabold text-[11px] py-2 px-3 rounded-xl shadow-xs transition-colors flex items-center gap-1 cursor-pointer border-none"
@@ -1453,8 +1582,13 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                               {customer.area}
                             </span>
                             <span className="text-[10.5px] bg-sky-100 text-sky-850 font-extrabold px-2 py-0.5 rounded-md border border-sky-200">
-                              {customer.governorate || getGovernorateForArea(customer.area)}
+                              {getResolvedGov(customer)}
                             </span>
+                            {customer.type && (
+                              <span className={`text-[10px] font-extrabold px-2 py-0.5 rounded-md border ${getLeadBadgeTheme(customer.type)}`}>
+                                النشاط: {customer.type}
+                              </span>
+                            )}
                             {isNewCustomer ? (
                               <span className="text-[10px] bg-amber-100 text-amber-800 font-extrabold px-2 py-0.5 rounded-md border border-amber-200 flex items-center gap-1">
                                 ✨ جديد (مكتشف)
@@ -1562,6 +1696,7 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                                     setPhone(customer.phone);
                                     setSalesManager(customer.salesManager || '');
                                     setDetailedAddress(customer.detailedAddress || '');
+                                    setType(customer.type || '');
                                     const areaExists = allAreas.includes(customer.area);
                                     if (areaExists) {
                                       setArea(customer.area);
@@ -1571,7 +1706,7 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                                       setCustomArea(customer.area);
                                     }
                                     const matchedGovForCustomer = settings.workAreas?.find(w => w.area === customer.area)?.governorate;
-                                    setGovernorate(customer.governorate || matchedGovForCustomer || getGovernorateForArea(customer.area));
+                                    setGovernorate(customer.governorate || matchedGovForCustomer || getResolvedGov(customer));
                                     setLocationLink(customer.locationLink || '');
                                     setShowAddForm(true);
                                     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -2051,7 +2186,7 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                     <button
                       type="button"
                       onClick={() => {
-                        const exportData = activeGoogleLeads.map(l => ({ 'المعرف': l.id, 'المحافظة': l.governorate || '', 'المنطقة': l.area || '', 'اسم العميل': l.name, 'رقم الهاتف': l.phone, 'العنوان': l.detailedAddress || '', 'النشاط': l.type || '', 'رابط جوجل ماب': l.locationLink }));
+                        const exportData = activeGoogleLeads.map(l => ({ 'المعرف': l.id, 'المحافظة': getResolvedGov(l), 'المنطقة': l.area || '', 'اسم العميل': l.name, 'رقم الهاتف': l.phone, 'العنوان': l.detailedAddress || '', 'النشاط': l.type || '', 'رابط جوجل ماب': l.locationLink }));
                         exportToCSV(exportData, `العملاء_المكتشفين_${new Date().toLocaleDateString('ar-EG')}.csv`);
                       }}
                       className="text-[10px] bg-emerald-600 hover:bg-emerald-700 text-white font-black px-2 py-1.5 rounded-lg flex items-center gap-1 cursor-pointer shadow-sm transition-colors"
@@ -2078,7 +2213,7 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                 </div>
 
                 {/* أزرار التصفية السريعة للمحافظات المكتشفة */}
-                {Object.keys(discoveredGovCounts).length > 1 && (
+                {Object.keys(discoveredGovCounts).length > 0 && (
                   <div className="flex flex-wrap gap-1.5 mt-2 bg-[#F7FAFC] p-2.5 rounded-xl border border-slate-150">
                     <span className="text-[10px] font-bold text-[#2B6CB0] w-full mb-0.5">تصفية حسب المحافظة (يمكنك اختيار أكثر من محافظة):</span>
                     <button
@@ -2105,7 +2240,7 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                 )}
 
                 {/* أزرار التصفية للمناطق (تظهر فقط عند اختيار محافظة) */}
-                {discoveredGovsFilter.length > 0 && Object.keys(discoveredAreaCounts).length > 1 && (
+                {discoveredGovsFilter.length > 0 && Object.keys(discoveredAreaCounts).length > 0 && (
                   <div className="flex flex-wrap gap-1.5 mt-2 bg-[#F7FAFC] p-2.5 rounded-xl border border-slate-150">
                     <span className="text-[10px] font-bold text-[#2B6CB0] w-full mb-0.5">تصفية حسب المنطقة (داخل المحافظات المحددة):</span>
                     <button
@@ -2185,6 +2320,8 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                   return matchesType && matchesSearch && matchesVisited;
                 }).reverse(); // ترتيب الأحدث أولاً (التاريخ التنازلي بناءً على وقت الإضافة)
 
+                 // removed empty governorate/area warning banner to allow showing all leads when "الكل" is selected
+
                 if (filteredGoogleLeads.length === 0) {
                   return (
                     <div className="text-center py-10 flex flex-col items-center justify-center gap-2">
@@ -2224,7 +2361,12 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                     const isStagedExpanded = !!expandedStagedLeads[lead.id];
                     const isNoPhone = hasNoPhone(lead.phone);
                     const isVisited = lead.visited;
-                    const themeClass = isVisited ? 'bg-teal-50/80 border-teal-400 shadow-sm ring-1 ring-teal-300' : getLeadCardTheme(lead.type);
+                    const isWillVisit = lead.willVisit;
+                    const themeClass = isVisited 
+                        ? 'bg-teal-50/80 border-teal-400 shadow-sm ring-1 ring-teal-300' 
+                        : isWillVisit
+                            ? 'bg-amber-50/80 border-amber-400 shadow-sm ring-1 ring-amber-300'
+                            : getLeadCardTheme(lead.type);
                     const badgeClass = getLeadBadgeTheme(lead.type);
 
                     return (
@@ -2232,9 +2374,11 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                           ? 'bg-emerald-50/40 border-emerald-150/60' 
                           : isVisited
                               ? 'bg-teal-50/80 border-teal-400 shadow-sm'
-                              : isNoPhone 
-                              ? 'bg-rose-50/40 border-rose-200 hover:border-rose-300'
-                              : themeClass
+                              : isWillVisit
+                                  ? 'bg-amber-50/80 border-amber-400 shadow-sm ring-1 ring-amber-300'
+                                  : isNoPhone 
+                                  ? 'bg-rose-50/40 border-rose-200 hover:border-rose-300 shadow-sm'
+                                  : themeClass
                       }`}>
                         
                         {/* Watchlist Header - Toggle Collapsible Card */}
@@ -2263,7 +2407,8 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                                 <span className={`h-2.5 w-2.5 rounded-full shrink-0 transition-all ${isStagedExpanded ? 'bg-[#FFFFFF] text-[#1A365D] border-b-2 border-[#DD6B20] shadow-sm' : 'bg-amber-400'}`}></span>
                               )}
                                 {isVisited && !showConfirmed && <span className="text-teal-600 text-[10px]" title="تمت الزيارة">✅</span>}
-                                {isNoPhone && !showConfirmed && !isVisited && <PhoneOff className="h-4 w-4 text-rose-600 shrink-0" />}
+                                {isWillVisit && !showConfirmed && !isVisited && <span className="text-amber-600 text-[10.5px] font-extrabold bg-amber-100/80 py-0.5 px-2 rounded border border-amber-200" title="سيتم الزيارة">⏳ سيتم الزيارة</span>}
+                                {isNoPhone && !showConfirmed && !isVisited && !isWillVisit && <PhoneOff className="h-4 w-4 text-rose-600 shrink-0" />}
                               {lead.name}
                             </span>
                             <div className="flex flex-wrap gap-1.5 mt-0.5">
@@ -2293,13 +2438,29 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                                   type="button"
                                   onClick={(e) => {
                                     e.stopPropagation();
-                                    handleMoveToPotential(lead);
+                                    setGoogleLeads(prevLeads => prevLeads.map(l => 
+                                      l.id === lead.id ? { ...l, willVisit: !l.willVisit } : l
+                                    ));
+                                    showToast(lead.willVisit ? '✓ تم إلغاء حالة "سيتم الزيارة".' : '✓ تم تمييز العميل بحالة "سيتم الزيارة".');
                                   }}
-                                  className="text-[10px] font-bold px-3 py-1 rounded border transition-colors bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100 flex items-center gap-1 active:scale-95"
-                                  title="الموافقة على الطلب/الأوردر ونقل للعملاء المحتملين"
+                                  className={`text-[10px] font-bold px-3 py-1 rounded border transition-colors flex items-center gap-1 active:scale-95 ${
+                                    isWillVisit 
+                                      ? 'bg-amber-500 text-white border-amber-500 hover:bg-amber-600 shadow-sm' 
+                                      : 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100'
+                                  }`}
+                                  title="تحديد سيتم الزيارة"
                                 >
-                                  <Check className="h-3 w-3 inline-block" />
-                                  <span>طلب/أوردر 🤝</span>
+                                  {isWillVisit ? (
+                                    <>
+                                      <Check className="h-3 w-3 inline-block" />
+                                      <span>سيتم الزيارة ✓</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <Compass className="h-3 w-3 inline-block" />
+                                      <span>سيتم الزيارة</span>
+                                    </>
+                                  )}
                                 </button>
                               )}
                               </div>
@@ -2510,7 +2671,7 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                     <button
                       type="button"
                       onClick={() => {
-                        const exportData = activePotentialLeads.map(l => ({ 'المعرف': l.id, 'المحافظة': l.governorate || '', 'المنطقة': l.area || '', 'اسم العميل': l.name, 'رقم الهاتف': l.phone, 'العنوان': l.detailedAddress || '', 'النشاط': l.type || '', 'رابط جوجل ماب': l.locationLink }));
+                        const exportData = activePotentialLeads.map(l => ({ 'المعرف': l.id, 'المحافظة': getResolvedGov(l), 'المنطقة': l.area || '', 'اسم العميل': l.name, 'رقم الهاتف': l.phone, 'العنوان': l.detailedAddress || '', 'النشاط': l.type || '', 'رابط جوجل ماب': l.locationLink }));
                         exportToCSV(exportData, `العملاء_المحتملين_${new Date().toLocaleDateString('ar-EG')}.csv`);
                       }}
                       className="text-[10px] bg-emerald-600 hover:bg-emerald-700 text-white font-black px-2 py-1.5 rounded-lg flex items-center gap-1 cursor-pointer shadow-sm transition-colors"
@@ -2626,6 +2787,8 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                     (lead.name && lead.name.toLowerCase().includes(q)) ||
                     (lead.phone && lead.phone.includes(q)) ||
                     (lead.area && lead.area.toLowerCase().includes(q)) ||
+                    (getResolvedGov(lead) && getResolvedGov(lead).toLowerCase().includes(q)) ||
+                    (lead.type && lead.type.toLowerCase().includes(q)) ||
                     (lead.detailedAddress && lead.detailedAddress.toLowerCase().includes(q));
 
                   return matchesType && matchesSearch;
@@ -2709,6 +2872,12 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                               <div className="flex flex-wrap gap-1.5 mt-0.5">
                                 <span className={`text-[10px] font-extrabold py-0.5 px-2 rounded border self-start ${badgeClass}`}>
                                   تصنيف: {lead.type || 'غير محدد'}
+                                </span>
+                                <span className="text-[10px] text-purple-800 bg-purple-50 border border-purple-200 font-extrabold py-0.5 px-2 rounded self-start">
+                                  المنطقة: {lead.area || 'غير محدد'}
+                                </span>
+                                <span className="text-[10px] text-teal-800 bg-teal-50 border border-teal-200 font-extrabold py-0.5 px-2 rounded self-start">
+                                  المحافظة: {getResolvedGov(lead)}
                                 </span>
                                 {lead.dateAdded && (
                                   <span className="text-[9.5px] text-[#2B6CB0] bg-[#FFFFFF] py-0.5 px-1.5 rounded border border-slate-150 font-mono font-bold">
