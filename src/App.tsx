@@ -521,7 +521,37 @@ export default function App() {
 
         setTrips(migrate(tr, 'trips_sys', []));
         setSyncLogs(migrate(logs, 'sync_logs_sys', []));
-        setSettings(migrate(set, 'settings_sys', DEFAULT_SETTINGS));
+        const loadedSettings = migrate(set, 'settings_sys', DEFAULT_SETTINGS);
+        // استخراج تلقائي لمناطق العمل من العملاء الحاليين والعملاء المكتشفين والعملاء المحتملين عند أول تحميل
+        const loadedCustomers = migrate(cust, 'customers_sys', DEFAULT_CUSTOMERS);
+        let loadedGoogleLeads: any[] = [];
+        try {
+          const raw = localStorage.getItem('google_leads_staging_sys');
+          if (raw) loadedGoogleLeads = JSON.parse(raw);
+        } catch (e) {}
+        let loadedPotentialLeads: any[] = [];
+        try {
+          const raw = localStorage.getItem('potential_leads_sys');
+          if (raw) loadedPotentialLeads = JSON.parse(raw);
+        } catch (e) {}
+
+        const existingWorkAreaPairs = new Set((loadedSettings.workAreas || []).map((w: any) => `${w.governorate}||${w.area}`));
+        const derivedWorkAreas: { governorate: string; area: string }[] = [...(loadedSettings.workAreas || [])];
+
+        const addPair = (gov: string, area: string) => {
+          const cleanGov = (gov || 'أخرى').trim();
+          const cleanArea = (area || '').trim();
+          if (cleanArea && !existingWorkAreaPairs.has(`${cleanGov}||${cleanArea}`)) {
+            existingWorkAreaPairs.add(`${cleanGov}||${cleanArea}`);
+            derivedWorkAreas.push({ governorate: cleanGov, area: cleanArea });
+          }
+        };
+
+        loadedCustomers.forEach((c: any) => addPair(c.governorate, c.area));
+        loadedGoogleLeads.forEach((c: any) => addPair(c.governorate, c.area));
+        loadedPotentialLeads.forEach((c: any) => addPair(c.governorate, c.area));
+
+        setSettings({ ...loadedSettings, workAreas: derivedWorkAreas });
       } catch (e) { console.error("DB Load Error", e); } finally { setIsDbLoaded(true); }
     }
     loadData();
@@ -1018,9 +1048,9 @@ export default function App() {
           return {
             id: inv.id,
             invNum: inv.invoiceNumber,
-            customerName: cust ? cust.name : 'عميل مجهول',
+            customerName: cust ? cust.name : (inv.customerName || 'عميل مجهول'),
             customerId: inv.customerId,
-            area: cust ? cust.area : 'منطقة مجهولة',
+            area: cust ? cust.area : (inv.customerArea || 'منطقة مجهولة'),
             date: inv.date,
             totalBeforeDiscount: inv.totalBeforeDiscount,
             total: inv.totalAfterDiscount,
@@ -1655,6 +1685,37 @@ export default function App() {
             finalCustomers = merged;
           }
           setCustomers(finalCustomers);
+
+          // تحديث تلقائي لـ workAreas من بيانات العملاء المسحوبة من الشيت (عملاء، عملاء مكتشفين، عملاء محتملين)
+          setSettings(prev => {
+            const existingPairs = new Set((prev.workAreas || []).map(w => `${w.governorate}||${w.area}`));
+            const newPairs: { governorate: string; area: string }[] = [];
+
+            const addPair = (gov: string, area: string) => {
+              const cleanGov = (gov || 'أخرى').trim();
+              const cleanArea = (area || '').trim();
+              if (cleanArea && !existingPairs.has(`${cleanGov}||${cleanArea}`)) {
+                existingPairs.add(`${cleanGov}||${cleanArea}`);
+                newPairs.push({ governorate: cleanGov, area: cleanArea });
+              }
+            };
+
+            // 1. العملاء الفعليين
+            finalCustomers.forEach((c: any) => addPair(c.governorate, c.area));
+
+            // 2. العملاء المكتشفين
+            if (data.discoveredLeads && Array.isArray(data.discoveredLeads)) {
+              data.discoveredLeads.forEach((c: any) => addPair(c.governorate, c.area));
+            }
+
+            // 3. العملاء المحتملين
+            if (data.potentialLeads && Array.isArray(data.potentialLeads)) {
+              data.potentialLeads.forEach((c: any) => addPair(c.governorate, c.area));
+            }
+
+            if (newPairs.length === 0) return prev;
+            return { ...prev, workAreas: [...(prev.workAreas || []), ...newPairs] };
+          });
         }
 
         // 4. Update operational tables (Invoices, Expenses, Trips, Factory loads)
@@ -1668,6 +1729,8 @@ export default function App() {
               id: inv.id || inv.invNum || inv.invoiceNumber || String(Math.random()),
               invoiceNumber: inv.invNum || inv.invoiceNumber,
               customerId: cust ? cust.id : (inv.customerId || 'cust_' + Date.now()),
+              customerName: inv.customerName || (cust ? cust.name : 'عميل مجهول'),
+              customerArea: inv.area || (cust ? cust.area : 'منطقة مجهولة'),
               date: inv.date || new Date().toISOString(),
               items: Array.isArray(inv.items) ? inv.items : [],
               discount: inv.discount || 0,
@@ -1678,7 +1741,7 @@ export default function App() {
               notes: inv.notes || '',
               delegateName: inv.delegateName || 'مجهول',
               delegatePhone: inv.delegatePhone || '',
-            isDelivered: (inv.isDelivered === '' || inv.isDelivered === undefined) ? true : (inv.isDelivered === 'true' || inv.isDelivered === true)
+              isDelivered: (inv.isDelivered === '' || inv.isDelivered === undefined) ? true : (inv.isDelivered === 'true' || inv.isDelivered === true)
             };
           }).filter((inv: any) => !deletedIds.includes(inv.id)).filter((inv: any) => {
             // تصفية الفواتير القديمة (أكثر من 30 يوم ومسددة بالكامل) لتوفير المساحة

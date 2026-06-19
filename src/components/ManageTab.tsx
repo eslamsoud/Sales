@@ -604,6 +604,365 @@ function doPost(e) {
 }
 `;
 };
+const WorkAreaSelector = ({ user, usersList, customers, settings, onUpdateUsersList, onTriggerSync, showToast }) => {
+  const [selectedGov, setSelectedGov] = useState('الكل');
+  const [selectedAreas, setSelectedAreas] = useState<string[]>([]);
+  const [assignedZones, setAssignedZones] = useState<string[]>([]);
+
+  const sheetAreasByGov = useMemo(() => {
+    const map: Record<string, Set<string>> = {};
+    (settings.workAreas || []).forEach((w) => {
+      const governorate = (w.governorate || '').trim();
+      const area = (w.area || '').trim();
+      if (!governorate) return;
+      if (!map[governorate]) map[governorate] = new Set();
+      if (area) map[governorate].add(area);
+    });
+    return map;
+  }, [settings.workAreas]);
+
+  const registeredGovernorates = useMemo(() => {
+    return Object.keys(sheetAreasByGov).sort();
+  }, [sheetAreasByGov]);
+
+  const registeredAreasForSelectedGov = useMemo(() => {
+    if (selectedGov === 'الكل') return [];
+    if (sheetAreasByGov[selectedGov]) {
+      return Array.from(sheetAreasByGov[selectedGov]).sort();
+    }
+    return [];
+  }, [selectedGov, sheetAreasByGov]);
+
+  useEffect(() => {
+    if (!user.workArea || user.workArea === 'الكل') {
+      setAssignedZones(user.workArea === 'الكل' ? ['الكل'] : []);
+      setSelectedGov('الكل');
+      setSelectedAreas([]);
+      return;
+    }
+    const parsed = user.workArea
+      .split(',')
+      .map(zone => zone.trim())
+      .filter(Boolean);
+    const uniqueZones = Array.from(new Set(parsed));
+    setAssignedZones(uniqueZones);
+
+    const firstZone = uniqueZones.find(zone => zone !== 'الكل');
+    if (!firstZone) {
+      setSelectedGov('الكل');
+      setSelectedAreas([]);
+      return;
+    }
+    const selectedGovernorate = firstZone.includes(' - ') ? firstZone.split(' - ')[0].trim() : firstZone;
+    setSelectedGov(selectedGovernorate || 'الكل');
+
+    const selectedGovernorateAreas = uniqueZones
+      .filter(zone => zone.startsWith(`${selectedGovernorate} - `))
+      .map(zone => zone.split(' - ')[1].trim())
+      .filter(Boolean);
+    setSelectedAreas(selectedGovernorateAreas);
+  }, [user.workArea]);
+
+  const toggleSelectedArea = (area: string) => {
+    setSelectedAreas(prev =>
+      prev.includes(area) ? prev.filter(item => item !== area) : [...prev, area]
+    );
+  };
+
+  const selectAllAreas = () => {
+    if (selectedGov === 'الكل') return;
+    setSelectedAreas(registeredAreasForSelectedGov);
+  };
+
+  const clearSelectedAreas = () => setSelectedAreas([]);
+
+  const addSelectedZone = () => {
+    if (selectedGov === 'الكل') {
+      setAssignedZones(['الكل']);
+      setSelectedAreas([]);
+      showToast('✓ تم تحديد الكل - سيظهر المندوب كل المناطق');
+      return;
+    }
+    if (selectedAreas.length > 0) {
+      let addedCount = 0;
+      setAssignedZones(prev => {
+        if (prev.includes('الكل')) {
+          showToast('⚠️ المندوب لديه صلاحية الكل بالفعل');
+          return prev;
+        }
+        const withoutGovOnly = prev.filter(z => z !== selectedGov);
+        const newZones = selectedAreas.map(area => `${selectedGov} - ${area}`);
+        const toAdd = newZones.filter(zone => !withoutGovOnly.includes(zone));
+        addedCount = toAdd.length;
+        return [...withoutGovOnly, ...toAdd];
+      });
+      setSelectedAreas([]);
+      setTimeout(() => {
+        if (addedCount > 0) {
+          showToast(`✓ تم إضافة ${addedCount} منطقة من ${selectedGov}`);
+        } else {
+          showToast('ℹ️ هذه المناطق مضافة مسبقاً');
+        }
+      }, 0);
+      return;
+    }
+    showToast('⚠️ اختر منطقة واحدة على الأقل أو استخدم "إضافة المحافظة كاملة"');
+  };
+
+  const addGovOnly = () => {
+    if (selectedGov === 'الكل') {
+      setAssignedZones(['الكل']);
+      setSelectedAreas([]);
+      showToast('✓ تم تحديد الكل');
+      return;
+    }
+    setAssignedZones(prev => {
+      if (prev.includes('الكل')) {
+        showToast('⚠️ المندوب لديه صلاحية الكل بالفعل');
+        return prev;
+      }
+      const withoutThisGov = prev.filter(z => !z.startsWith(`${selectedGov} - `) && z !== selectedGov);
+      return [...withoutThisGov, selectedGov];
+    });
+    setSelectedAreas([]);
+    showToast('✓ تم إضافة محافظة ' + selectedGov + ' كاملة');
+  };
+
+  const removeAssignedZone = (zoneToRemove: string) => {
+    setAssignedZones(prev => prev.filter(zone => zone !== zoneToRemove));
+  };
+
+  const setAllZones = () => {
+    setAssignedZones(['الكل']);
+    setSelectedGov('الكل');
+    setSelectedAreas([]);
+    showToast('✓ تم تعيين الكل');
+  };
+
+  const groupedAssignedZones = useMemo(() => {
+    if (assignedZones.includes('الكل')) return { 'الكل': ['الكل'] };
+    const map: Record<string, string[]> = {};
+    assignedZones.forEach(zone => {
+      if (zone.includes(' - ')) {
+        const parts = zone.split(' - ');
+        const gov = parts[0].trim();
+        const area = parts.slice(1).join(' - ').trim();
+        if (!map[gov]) map[gov] = [];
+        map[gov].push(area);
+      } else {
+        if (!map[zone]) map[zone] = [];
+      }
+    });
+    return map;
+  }, [assignedZones]);
+
+  const handleSaveWorkArea = () => {
+    if (assignedZones.length === 0) {
+      showToast('⚠️ لم يتم تحديد أي منطقة — يُرجى إضافة مناطق أولاً');
+      return;
+    }
+    const finalArea = assignedZones.includes('الكل') ? 'الكل' : assignedZones.join(', ');
+    const updated = usersList.map(u =>
+      u.phone === user.phone ? { ...u, workArea: finalArea } : u
+    );
+    onUpdateUsersList(updated);
+    localStorage.setItem('users_permissions_sys', JSON.stringify(updated));
+    showToast('✓ تم حفظ مناطق عمل المندوب بنجاح!');
+    onTriggerSync?.('تعديل مناطق عمل المندوب');
+  };
+
+  return (
+    <div className="mt-3 bg-emerald-50/50 p-3 rounded-xl border border-emerald-150 flex flex-col gap-4">
+      <div className="flex flex-col gap-2">
+        <span className="text-[11px] font-black text-emerald-900">🗺️ تحديد مناطق عمل المندوب:</span>
+        <p className="text-[10px] text-slate-600">اختر المحافظة ثم فعّل المناطق التي تريد إضافتها. يمكنك تحديد أكثر من منطقة لكل محافظة، أو إضافة المحافظة كاملة، أو اختيار الكل.</p>
+      </div>
+
+      <div className="space-y-3">
+        {/* اختيار المحافظة */}
+        <div>
+          <div className="text-[10px] font-bold text-[#2B6CB0] mb-2">اختر المحافظة (من الشيت):</div>
+          {registeredGovernorates.length === 0 ? (
+            <div className="rounded-xl bg-amber-50 border border-amber-200 p-3 text-[11px] text-amber-800 font-bold">
+              ⚠️ لا توجد محافظات في الشيت بعد — يُرجى إضافة مناطق العمل أولاً في إعدادات مناطق العمل.
+            </div>
+          ) : (
+            <div className="flex flex-wrap gap-2 max-h-44 overflow-auto pr-1">
+              <button
+                type="button"
+                onClick={() => { setSelectedGov('الكل'); setSelectedAreas([]); }}
+                className={`px-3 py-2 rounded-full text-[11px] font-black transition ${selectedGov === 'الكل' ? 'bg-slate-900 text-white' : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-100'}`}
+              >
+                الكل
+              </button>
+              {registeredGovernorates.map(gov => (
+                <button
+                  key={gov}
+                  type="button"
+                  onClick={() => { setSelectedGov(gov); setSelectedAreas([]); }}
+                  className={`px-3 py-2 rounded-full text-[11px] font-black transition ${selectedGov === gov ? 'bg-emerald-700 text-white' : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-100'}`}
+                >
+                  {gov}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div>
+          <div className="text-[10px] font-bold text-[#2B6CB0] mb-2">المناطق المتاحة للاختيار (من الشيت):</div>
+          {selectedGov === 'الكل' ? (
+            <div className="rounded-xl bg-white border border-slate-200 p-3 text-[11px] text-slate-500 text-center">اختر محافظة أولاً لعرض مناطقها من الشيت.</div>
+          ) : registeredAreasForSelectedGov.length === 0 ? (
+            <div className="rounded-xl bg-amber-50 border border-amber-200 p-3 text-[11px] text-amber-800">
+              ⚠️ لا توجد مناطق مُضافة لمحافظة <strong>{selectedGov}</strong> في الشيت بعد.<br/>
+              <span className="text-[10px] text-amber-600">أضف مناطق لهذه المحافظة من قسم «إعدادات مناطق العمل» ثم ستظهر هنا تلقائياً.</span>
+            </div>
+          ) : (
+            <>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 max-h-52 overflow-auto p-1 bg-white rounded-xl border border-slate-200">
+                {registeredAreasForSelectedGov.map(area => {
+                  const isSelected = selectedAreas.includes(area);
+                  return (
+                    <button
+                      key={area}
+                      type="button"
+                      onClick={() => toggleSelectedArea(area)}
+                      className={`text-right px-3 py-2 rounded-xl text-[11px] font-bold transition ${isSelected ? 'bg-slate-900 text-white' : 'bg-slate-50 text-slate-700 border border-slate-200 hover:bg-slate-100'}`}
+                    >
+                      {area}
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="flex flex-wrap gap-2 mt-2">
+                <button
+                  type="button"
+                  onClick={selectAllAreas}
+                  className="px-3 py-2 rounded-2xl bg-slate-900 text-white text-[11px] font-black hover:bg-slate-800"
+                >
+                  تحديد كل المناطق ({registeredAreasForSelectedGov.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={clearSelectedAreas}
+                  disabled={selectedAreas.length === 0}
+                  className="px-3 py-2 rounded-2xl bg-white text-slate-700 text-[11px] font-black border border-slate-200 hover:bg-slate-100 disabled:opacity-50"
+                >
+                  مسح التحديد
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* أزرار الإضافة */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+        <button
+          type="button"
+          onClick={addSelectedZone}
+          className={`w-full font-black rounded-2xl py-2 px-4 text-xs transition-all flex items-center justify-center gap-1 ${selectedAreas.length > 0 ? 'bg-slate-900 hover:bg-slate-800 text-white' : 'bg-slate-200 text-slate-500'}`}
+        >
+          إضافة المناطق المحددة
+          {selectedAreas.length > 0 && (
+            <span className="bg-white text-slate-900 rounded-full px-1.5 py-0.5 text-[10px] font-black min-w-[20px] text-center">{selectedAreas.length}</span>
+          )}
+        </button>
+        <button
+          type="button"
+          onClick={addGovOnly}
+          disabled={selectedGov === 'الكل'}
+          className="w-full bg-blue-700 hover:bg-blue-600 disabled:bg-slate-200 disabled:text-slate-400 text-white font-black rounded-2xl py-2 px-4 text-xs transition-all"
+        >
+          إضافة المحافظة كاملة
+        </button>
+        <button
+          type="button"
+          onClick={setAllZones}
+          className="w-full bg-emerald-700 hover:bg-emerald-600 text-white font-black rounded-2xl py-2 px-4 text-xs transition-all"
+        >
+          الكل
+        </button>
+      </div>
+
+      {/* النطاقات المختارة */}
+      <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <div className="text-[10px] font-black text-slate-600">النطاقات المختارة للمندوب:</div>
+          {assignedZones.length > 0 && !assignedZones.includes('الكل') && (
+            <button
+              type="button"
+              onClick={() => setAssignedZones([])}
+              className="text-[10px] text-rose-500 hover:text-rose-700 font-bold"
+            >
+              مسح الكل
+            </button>
+          )}
+        </div>
+        {assignedZones.length === 0 ? (
+          <div className="px-3 py-3 rounded-xl bg-white border border-slate-200 text-[11px] text-slate-400 text-center">لم يتم تحديد أي منطقة بعد</div>
+        ) : assignedZones.includes('الكل') ? (
+          <div className="inline-flex items-center gap-2 rounded-full bg-emerald-100 border border-emerald-300 px-4 py-2 text-[12px] text-emerald-900 font-black">
+            🇪🇬 الكل (جميع المناطق والمحافظات)
+            <button type="button" onClick={() => setAssignedZones([])} className="text-rose-500 hover:text-rose-700 font-black text-sm">×</button>
+          </div>
+        ) : (
+          <div className="flex flex-col gap-2">
+            {Object.entries(groupedAssignedZones).map(([gov, areas]) => (
+              <div key={gov} className="rounded-xl bg-white border border-slate-200 p-2">
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-[11px] font-black text-slate-800">📍 {gov}</span>
+                  <button
+                    type="button"
+                    onClick={() => setAssignedZones(prev => prev.filter(z => z !== gov && !z.startsWith(`${gov} - `)))}
+                    className="text-[10px] text-rose-400 hover:text-rose-600 font-bold"
+                  >
+                    حذف المحافظة
+                  </button>
+                </div>
+                {areas.length === 0 ? (
+                  <span className="inline-flex items-center text-[10px] text-slate-500 bg-slate-50 rounded-lg px-2 py-1">كل مناطق المحافظة</span>
+                ) : (
+                  <div className="flex flex-wrap gap-1.5">
+                    {areas.map(area => (
+                      <span key={area} className="inline-flex items-center gap-1 rounded-full bg-slate-100 border border-slate-200 px-2.5 py-1 text-[10px] text-slate-700 font-semibold">
+                        {area}
+                        <button
+                          type="button"
+                          onClick={() => removeAssignedZone(`${gov} - ${area}`)}
+                          className="text-rose-400 hover:text-rose-600 leading-none"
+                        >×</button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* حفظ */}
+      <div className="flex flex-col sm:flex-row items-center gap-2 justify-between">
+        <div className="text-right text-[10px] text-slate-600">
+          <div>الحفظ سيجعل هذه المناطق متاحة لهذا المندوب.</div>
+          <div className="font-black text-slate-900">
+            {assignedZones.includes('الكل') ? 'الكل' : assignedZones.length === 0 ? 'لم يحدد' : assignedZones.length + ' نطاق'}
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={handleSaveWorkArea}
+          className="w-full sm:w-auto bg-[#1A365D] hover:bg-[#142A4A] text-white font-black rounded-2xl py-2 px-5 text-xs transition-all cursor-pointer"
+        >
+          حفظ المناطق
+        </button>
+      </div>
+    </div>
+  );
+};
+
 interface ManageTabProps {
   products: Product[];
   customers: Customer[];
@@ -922,294 +1281,12 @@ export default function ManageTab({
     };
   }, [subTab, managerSubTab, isLiveTracking, onRefreshData]);
 
-const WorkAreaSelector = ({ user, usersList, customers, onUpdateUsersList, onTriggerSync, showToast }) => {
-  const [selectedGov, setSelectedGov] = useState('الكل');
-  const [selectedAreas, setSelectedAreas] = useState<string[]>([]);
-  const [assignedZones, setAssignedZones] = useState<string[]>([]);
 
-  const sheetAreasByGov = useMemo(() => {
-    const map: Record<string, Set<string>> = {};
-    (settings.workAreas || []).forEach((w) => {
-      const governorate = (w.governorate || '').trim();
-      const area = (w.area || '').trim();
-      if (!governorate) return;
-      if (!map[governorate]) map[governorate] = new Set();
-      if (area) map[governorate].add(area);
-    });
-    return map;
-  }, [settings.workAreas]);
 
-  const registeredGovernorates = useMemo(() => {
-    const govs = Object.keys(sheetAreasByGov);
-    return govs.length > 0 ? govs.sort() : Object.keys(EGYPT_CITIES).sort();
-  }, [sheetAreasByGov]);
 
-  const registeredAreasForSelectedGov = useMemo(() => {
-    if (selectedGov === 'الكل') return [];
-    const areaSet = new Set<string>();
-    if (sheetAreasByGov[selectedGov]) {
-      sheetAreasByGov[selectedGov].forEach(area => areaSet.add(area));
-    }
-    if (EGYPT_CITIES[selectedGov]) {
-      EGYPT_CITIES[selectedGov].forEach(area => areaSet.add(area));
-    }
-    return Array.from(areaSet).sort();
-  }, [selectedGov, sheetAreasByGov]);
 
-  useEffect(() => {
-    if (!user.workArea || user.workArea === 'الكل') {
-      setAssignedZones(user.workArea === 'الكل' ? ['الكل'] : []);
-      setSelectedGov('الكل');
-      setSelectedAreas([]);
-      return;
-    }
 
-    const parsed = user.workArea
-      .split(',')
-      .map(zone => zone.trim())
-      .filter(Boolean);
-    const uniqueZones = Array.from(new Set(parsed));
-    setAssignedZones(uniqueZones);
 
-    const firstZone = uniqueZones.find(zone => zone !== 'الكل');
-    if (!firstZone) {
-      setSelectedGov('الكل');
-      setSelectedAreas([]);
-      return;
-    }
-
-    const selectedGovernorate = firstZone.includes(' - ') ? firstZone.split(' - ')[0].trim() : firstZone;
-    setSelectedGov(selectedGovernorate || 'الكل');
-
-    const selectedGovernorateAreas = uniqueZones
-      .filter(zone => zone.startsWith(`${selectedGovernorate} - `))
-      .map(zone => zone.split(' - ')[1].trim())
-      .filter(Boolean);
-    setSelectedAreas(selectedGovernorateAreas);
-  }, [user.workArea]);
-
-  const suggestedDisplay = assignedZones.length === 0 ? 'لم يتم تحديد أي منطقة بعد' : assignedZones.join('، ');
-
-  const toggleSelectedArea = (area: string) => {
-    setSelectedAreas(prev =>
-      prev.includes(area)
-        ? prev.filter(item => item !== area)
-        : [...prev, area]
-    );
-  };
-
-  const selectAllAreas = () => {
-    if (selectedGov === 'الكل') return;
-    setSelectedAreas(registeredAreasForSelectedGov);
-  };
-
-  const clearSelectedAreas = () => setSelectedAreas([]);
-
-  const addSelectedZone = () => {
-    if (selectedGov === 'الكل') {
-      setAssignedZones(['الكل']);
-      setSelectedAreas([]);
-      return;
-    }
-    if (selectedAreas.length > 0) {
-      setAssignedZones(prev => {
-        if (prev.includes('الكل')) return prev;
-        const newZones = selectedAreas.map(area => `${selectedGov} - ${area}`);
-        return [...prev, ...newZones.filter(zone => !prev.includes(zone))];
-      });
-      return;
-    }
-    setAssignedZones(prev => {
-      if (prev.includes('الكل') || prev.includes(selectedGov)) return prev;
-      return [...prev, selectedGov];
-    });
-  };
-
-  const addGovOnly = () => {
-    if (selectedGov === 'الكل') {
-      setAssignedZones(['الكل']);
-      setSelectedAreas([]);
-      return;
-    }
-    setAssignedZones(prev => {
-      if (prev.includes('الكل') || prev.includes(selectedGov)) return prev;
-      return [...prev, selectedGov];
-    });
-    setSelectedAreas([]);
-  };
-
-  const removeAssignedZone = (zoneToRemove: string) => {
-    setAssignedZones(prev => prev.filter(zone => zone !== zoneToRemove));
-  };
-
-  const setAllZones = () => {
-    setAssignedZones(['الكل']);
-    setSelectedGov('الكل');
-    setSelectedAreas([]);
-  };
-
-  const handleSaveWorkArea = () => {
-    const finalArea = assignedZones.includes('الكل') ? 'الكل' : assignedZones.join(', ');
-    const updated = usersList.map(u =>
-      u.phone === user.phone
-        ? { ...u, workArea: finalArea }
-        : u
-    );
-    onUpdateUsersList(updated);
-    localStorage.setItem('users_permissions_sys', JSON.stringify(updated));
-    showToast('✓ تم حفظ مناطق عمل المندوب بنجاح!');
-    onTriggerSync?.('تعديل مناطق عمل المندوب');
-  };
-
-  return (
-    <div className="mt-3 bg-emerald-50/50 p-3 rounded-xl border border-emerald-150 flex flex-col gap-4">
-      <div className="flex flex-col gap-2">
-        <span className="text-[11px] font-black text-emerald-900">🗺️ تحديد مناطق عمل المندوب:</span>
-        <p className="text-[10px] text-slate-600">اختر المحافظة ثم فعّل المناطق التي تريد إضافتها. يمكنك تحديد أكثر من منطقة لكل محافظة، أو إضافة المحافظة كاملة، أو اختيار الكل.</p>
-      </div>
-
-      <div className="space-y-3">
-        <div>
-          <div className="text-[10px] font-bold text-[#2B6CB0] mb-2">اختر المحافظة:</div>
-          <div className="flex flex-wrap gap-2 max-h-44 overflow-auto pr-1">
-            <button
-              type="button"
-              onClick={() => {
-                setSelectedGov('الكل');
-                setSelectedAreas([]);
-              }}
-              className={`px-3 py-2 rounded-full text-[11px] font-black transition ${selectedGov === 'الكل' ? 'bg-slate-900 text-white' : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-100'}`}
-            >
-              الكل
-            </button>
-            {registeredGovernorates.map(gov => (
-              <button
-                key={gov}
-                type="button"
-                onClick={() => {
-                  setSelectedGov(gov);
-                  setSelectedAreas([]);
-                }}
-                className={`px-3 py-2 rounded-full text-[11px] font-black transition ${selectedGov === gov ? 'bg-emerald-700 text-white' : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-100'}`}
-              >
-                {gov}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div>
-          <div className="text-[10px] font-bold text-[#2B6CB0] mb-2">المناطق المتاحة للاختيار:</div>
-          {selectedGov === 'الكل' ? (
-            <div className="rounded-xl bg-white border border-slate-200 p-3 text-[11px] text-slate-600">اختر محافظة أولاً لعرض المناطق المتاحة.</div>
-          ) : (
-            <>
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 max-h-52 overflow-auto p-1 bg-white rounded-xl border border-slate-200">
-                {registeredAreasForSelectedGov.length === 0 ? (
-                  <div className="col-span-full text-[11px] text-slate-500">لا توجد مناطق مسجلة حالياً لهذه المحافظة.</div>
-                ) : (
-                  registeredAreasForSelectedGov.map(area => {
-                    const isSelected = selectedAreas.includes(area);
-                    return (
-                      <button
-                        key={area}
-                        type="button"
-                        onClick={() => toggleSelectedArea(area)}
-                        className={`text-right px-3 py-2 rounded-xl text-[11px] font-bold transition ${isSelected ? 'bg-slate-900 text-white' : 'bg-slate-50 text-slate-700 border border-slate-200 hover:bg-slate-100'}`}
-                      >
-                        {area}
-                      </button>
-                    );
-                  })
-                )}
-              </div>
-              <div className="flex flex-wrap gap-2 mt-2">
-                <button
-                  type="button"
-                  onClick={selectAllAreas}
-                  disabled={registeredAreasForSelectedGov.length === 0}
-                  className="px-3 py-2 rounded-2xl bg-slate-900 text-white text-[11px] font-black hover:bg-slate-800 disabled:bg-slate-200 disabled:text-slate-400"
-                >
-                  تحديد كل المناطق
-                </button>
-                <button
-                  type="button"
-                  onClick={clearSelectedAreas}
-                  disabled={selectedAreas.length === 0}
-                  className="px-3 py-2 rounded-2xl bg-white text-slate-700 text-[11px] font-black border border-slate-200 hover:bg-slate-100 disabled:opacity-50"
-                >
-                  مسح التحديد
-                </button>
-              </div>
-            </>
-          )}
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-        <button
-          type="button"
-          onClick={addSelectedZone}
-          className="w-full bg-slate-900 hover:bg-slate-800 text-white font-black rounded-2xl py-2 px-4 text-xs transition-all"
-        >
-          إضافة المناطق المحددة
-        </button>
-        <button
-          type="button"
-          onClick={addGovOnly}
-          className="w-full bg-blue-700 hover:bg-blue-600 text-white font-black rounded-2xl py-2 px-4 text-xs transition-all"
-        >
-          إضافة المحافظة كاملة
-        </button>
-        <button
-          type="button"
-          onClick={setAllZones}
-          className="w-full bg-emerald-700 hover:bg-emerald-600 text-white font-black rounded-2xl py-2 px-4 text-xs transition-all"
-        >
-          الكل
-        </button>
-      </div>
-
-      <div className="space-y-2">
-        <div className="text-[10px] font-black text-slate-600">النطاقات المختارة للمندوب:</div>
-        <div className="flex flex-wrap gap-2">
-          {assignedZones.length === 0 ? (
-            <span className="px-3 py-2 rounded-full bg-white border border-slate-200 text-[11px] text-slate-500">{suggestedDisplay}</span>
-          ) : (
-            assignedZones.map((zone) => (
-              <span key={zone} className="inline-flex items-center gap-2 rounded-full bg-white border border-slate-200 px-3 py-2 text-[11px] text-slate-800">
-                <span>{zone}</span>
-                {zone !== 'الكل' && (
-                  <button
-                    type="button"
-                    onClick={() => removeAssignedZone(zone)}
-                    className="text-rose-500 hover:text-rose-700"
-                  >
-                    ×
-                  </button>
-                )}
-              </span>
-            ))
-          )}
-        </div>
-      </div>
-
-      <div className="flex flex-col sm:flex-row items-center gap-2 justify-between">
-        <div className="text-right text-[10px] text-slate-600">
-          <div>الحفظ سيجعل هذه المناطق متاحة لهذه المندوب.</div>
-          <div className="font-black text-slate-900">{assignedZones.includes('الكل') ? 'الكل' : assignedZones.length === 0 ? 'لم يحدد' : assignedZones.length + ' نطاقات'}</div>
-        </div>
-        <button
-          type="button"
-          onClick={handleSaveWorkArea}
-          className="w-full sm:w-auto bg-[#1A365D] hover:bg-[#142A4A] text-white font-black rounded-2xl py-2 px-5 text-xs transition-all cursor-pointer"
-        >
-          حفظ المناطق
-        </button>
-      </div>
-    </div>
-  );
-};
 
   const handleAskAI = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
@@ -1456,9 +1533,9 @@ const WorkAreaSelector = ({ user, usersList, customers, onUpdateUsersList, onTri
           return {
             id: inv.id,
             invNum: inv.invoiceNumber,
-            customerName: cust ? cust.name : 'عميل مجهول',
+            customerName: cust ? cust.name : (inv.customerName || 'عميل مجهول'),
             customerId: inv.customerId,
-            area: cust ? cust.area : 'منطقة مجهولة',
+            area: cust ? cust.area : (inv.customerArea || 'منطقة مجهولة'),
             date: inv.date,
             totalBeforeDiscount: inv.totalBeforeDiscount,
             total: inv.totalAfterDiscount,
@@ -3134,6 +3211,7 @@ const WorkAreaSelector = ({ user, usersList, customers, onUpdateUsersList, onTri
                                 user={user}
                                 usersList={usersList}
                                 customers={customers}
+                                settings={settings}
                                 onUpdateUsersList={onUpdateUsersList}
                                 onTriggerSync={onTriggerSync}
                                 showToast={showToast}

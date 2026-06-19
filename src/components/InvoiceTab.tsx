@@ -345,15 +345,16 @@ export default function InvoiceTab({
       const stockKey = `${currentProductId}_${currentWeightId}`;
       const available = weightStocks[stockKey]?.remaining ?? 0;
       if (qty > available) {
+        let isConfirmed = false;
         if (sellUnitType === 'carton') {
           const availCartons = Math.floor(available / multiplier);
           const availPieces = available % multiplier;
           const availText = availPieces > 0 ? `${availCartons} كرتونة و ${availPieces} قطعة` : `${availCartons} كرتونة`;
-          await confirmDialog(`الطلب أكبر من الرصيد المتاح بالسيارة!\n\nالكمية المتاحة فقط: ${availText}`, true);
+          isConfirmed = await confirmDialog(`الطلب أكبر من الرصيد المسجل بالسيارة!\n(الرصيد المسجل: ${availText})\n\nهل ترغب في تجاوز الرصيد وإتمام البيع على أي حال؟`, false);
         } else {
-          await confirmDialog(`الطلب أكبر من الرصيد المتاح بالسيارة!\n\nالكمية المتاحة فقط: ${available} قطعة`, true);
+          isConfirmed = await confirmDialog(`الطلب أكبر من الرصيد المسجل بالسيارة!\n(الرصيد المسجل: ${available} قطعة)\n\nهل ترغب في تجاوز الرصيد وإتمام البيع على أي حال؟`, false);
         }
-        return;
+        if (!isConfirmed) return;
       }
 
       setBillItems(prevList => {
@@ -530,6 +531,8 @@ export default function InvoiceTab({
       const invoiceData = {
         invoiceNumber: nextInvNum,
         customerId: selectedCustomerId,
+        customerName: selectedCustomer?.name || 'عميل مجهول',
+        customerArea: selectedCustomer?.area || 'منطقة مجهولة',
         date: (invoiceDate ? new Date(invoiceDate) : new Date()).toISOString(),
         items: itemsToSave,
         totalBeforeDiscount: Number(totals.before.toFixed(2)),
@@ -1417,7 +1420,7 @@ export default function InvoiceTab({
                     className="w-full bg-[#FFFFFF] border border-slate-200 rounded-lg p-2 text-xs font-bold focus:outline-none text-[#1A365D]"
                   >
                     <option value="">-- اختر السعة / الوزن --</option>
-                    {activeProductWeights.filter(w => (weightStocks[`${currentProductId}_${w.id}`]?.remaining ?? 0) > 0).map(w => {
+                    {activeProductWeights.map(w => {
                       const stockVal = weightStocks[`${currentProductId}_${w.id}`]?.remaining ?? 0;
                       const stockText = formatCartonsAndPieces(stockVal, w.unitsPerCarton || 12);
                       return (

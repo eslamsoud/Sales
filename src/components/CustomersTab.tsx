@@ -106,22 +106,36 @@ const formatWhatsAppLink = (phone: string, encodedText: string = '') => {
 
 const hasNoPhone = (phone?: string) => !phone || phone === 'غير مسجل' || phone.trim() === '' || phone.includes('انتظار');
 
+const normalizeAr = (s: string) => (s || '').trim().replace(/\s+/g, ' ');
+
 const isLeadInWorkArea = (leadGov: string, leadArea: string, workArea?: string) => {
   if (!workArea || workArea === 'الكل') return true;
   
   const zones = workArea.split(',').map(s => s.trim()).filter(Boolean);
   if (zones.length === 0) return true;
-  
+
+  const normLeadGov = normalizeAr(leadGov);
+  const normLeadArea = normalizeAr(leadArea);
+
   return zones.some(zone => {
     if (zone === 'الكل') return true;
     if (zone.includes(' - ')) {
       const parts = zone.split(' - ');
-      const targetGov = parts[0].trim();
-      const targetArea = parts[1].trim();
-      return leadGov === targetGov && leadArea === targetArea;
+      const targetGov = normalizeAr(parts[0]);
+      const targetArea = normalizeAr(parts.slice(1).join(' - '));
+      // Match governorate exactly, and area with partial matching
+      const govMatch = normLeadGov === targetGov;
+      const areaMatch = normLeadArea === targetArea ||
+        normLeadArea.includes(targetArea) ||
+        targetArea.includes(normLeadArea);
+      return govMatch && areaMatch;
     } else {
-      // Governorate level only
-      return leadGov === zone;
+      // Governorate level only — match gov or area belongs to this gov
+      const targetGov = normalizeAr(zone);
+      if (normLeadGov === targetGov) return true;
+      // Also check if the lead area is within this governorate
+      const govCities = EGYPT_CITIES[targetGov] || [];
+      return govCities.some(city => normalizeAr(city) === normLeadArea || normLeadArea.includes(normalizeAr(city)));
     }
   });
 };
@@ -502,12 +516,17 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
     }, {} as Record<string, number>);
   }, [potentialLeadsFilteredByArea]);
 
+  const sheetAreas = (settings.workAreas || []).map(w => w.area).filter(Boolean);
+  const sheetGovs = (settings.workAreas || []).map(w => w.governorate).filter(Boolean);
+  const registeredCustomerAreas = Array.from(new Set(customers.map(c => c.area).filter(Boolean)));
   const DEFAULT_AREAS = ['الزقازيق', 'ميت غمر', 'بدر', 'العاشر من رمضان', 'بلبيس', 'القاهرة'];
-  const configuredAreas = (settings.workAreas || []).map(w => w.area);
-  const registeredAreas = Array.from(new Set(customers.map(c => c.area).filter(Boolean)));
-  const allAreas = Array.from(new Set([...DEFAULT_AREAS, ...configuredAreas, ...registeredAreas]));
-  const customGovs = (settings.workAreas || []).map(w => w.governorate);
-  const finalGovernorates = Array.from(new Set([...customGovs, ...EGYPT_GOVERNORATES]));
+  // If sheet has data, use ONLY sheet areas + existing customer areas; otherwise fallback to defaults
+  const allAreas = sheetAreas.length > 0
+    ? Array.from(new Set([...sheetAreas, ...registeredCustomerAreas]))
+    : Array.from(new Set([...DEFAULT_AREAS, ...registeredCustomerAreas]));
+  const finalGovernorates = sheetGovs.length > 0
+    ? Array.from(new Set([...sheetGovs, ...EGYPT_GOVERNORATES]))
+    : EGYPT_GOVERNORATES;
 
   // Google Maps Lead Finder State
   const [selectedSearchArea, setSelectedSearchArea] = useState('');
@@ -1347,53 +1366,52 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                             {(() => {
                               const query = (area || '').trim().toLowerCase();
                               const currentGov = (governorate || '').trim().toLowerCase();
-                              
-                              // Filter the allAreas to match currentGov if one is specified
-                              const matchedAreas = allAreas.filter(a => {
-                                if (!currentGov) return true; // If no governorate is selected, include all
-                                
-                                // Check settings.workAreas first for a match
-                                const workAreaMatch = (settings.workAreas || []).some(w => 
-                                  w.area === a && w.governorate.trim().toLowerCase() === currentGov
-                                );
-                                if (workAreaMatch) return true;
 
-                                // Check other customers for a match
-                                const customerMatch = customers.some(c => 
-                                  c.area === a && (c.governorate || getGovernorateForArea(c.area)).trim().toLowerCase() === currentGov
-                                );
-                                if (customerMatch) return true;
+                              // البناء الذكي: مناطق الشيت أولاً، ثم مناطق العملاء
+                              let matchedAreas: string[];
 
-                                // Check fallback function getGovernorateForArea
-                                if (getGovernorateForArea(a).trim().toLowerCase() === currentGov) return true;
-
-                                return false;
-                              });
-
-                              // الدمج الذكي للمدن والمراكز الرسمية التابعة للمحافظة المختارة
-                              if (currentGov) {
-                                const govKey = Object.keys(EGYPT_CITIES).find(k => k.toLowerCase() === currentGov);
-                                if (govKey && EGYPT_CITIES[govKey]) {
-                                  EGYPT_CITIES[govKey].forEach(city => {
-                                    if (!matchedAreas.includes(city)) {
-                                      matchedAreas.push(city);
-                                    }
-                                  });
+                              if (sheetAreas.length > 0) {
+                                // الشيت يحتوي على بيانات — نعتمد عليه فقط
+                                matchedAreas = sheetAreas.filter(a => {
+                                  if (!currentGov) return true;
+                                  const w = (settings.workAreas || []).find(w => w.area === a);
+                                  return w ? w.governorate.trim().toLowerCase() === currentGov : false;
+                                });
+                                // نضيف مناطق العملاء الحاليين التي ليست في الشيت
+                                registeredCustomerAreas.forEach(a => {
+                                  if (!matchedAreas.includes(a)) {
+                                    const gov = (customers.find(c => c.area === a)?.governorate || getGovernorateForArea(a)).toLowerCase();
+                                    if (!currentGov || gov === currentGov) matchedAreas.push(a);
+                                  }
+                                });
+                              } else {
+                                // لا يوجد شيت — نعود للسلوك القديم مع EGYPT_CITIES
+                                matchedAreas = allAreas.filter(a => {
+                                  if (!currentGov) return true;
+                                  const workAreaMatch = (settings.workAreas || []).some(w => w.area === a && w.governorate.trim().toLowerCase() === currentGov);
+                                  if (workAreaMatch) return true;
+                                  const customerMatch = customers.some(c => c.area === a && (c.governorate || getGovernorateForArea(c.area)).trim().toLowerCase() === currentGov);
+                                  if (customerMatch) return true;
+                                  if (getGovernorateForArea(a).trim().toLowerCase() === currentGov) return true;
+                                  return false;
+                                });
+                                if (currentGov) {
+                                  const govKey = Object.keys(EGYPT_CITIES).find(k => k.toLowerCase() === currentGov);
+                                  if (govKey && EGYPT_CITIES[govKey]) {
+                                    EGYPT_CITIES[govKey].forEach(city => { if (!matchedAreas.includes(city)) matchedAreas.push(city); });
+                                  }
                                 }
                               }
 
-                              const filtered = matchedAreas.filter(a => 
-                                !query || 
-                                a.toLowerCase().includes(query) ||
+                              const filtered = matchedAreas.filter(a =>
+                                !query || a.toLowerCase().includes(query) ||
                                 (settings.workAreas?.find(w => w.area === a)?.governorate || '').toLowerCase().includes(query)
                               );
 
                               if (filtered.length === 0) {
                                 return (
-                                  <div 
-                                    onClick={() => {
-                                      setShowAreaDropdown(false);
-                                    }}
+                                  <div
+                                    onClick={() => setShowAreaDropdown(false)}
                                     className="p-2 hover:bg-slate-50 cursor-pointer text-gray-500 font-bold"
                                   >
                                     استخدم القيمة الجديدة: "{area}"
@@ -1403,19 +1421,20 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
 
                               return filtered.map(a => {
                                 const gov = settings.workAreas?.find(w => w.area === a)?.governorate || getGovernorateForArea(a);
+                                const isFromSheet = sheetAreas.includes(a);
                                 return (
                                   <div
                                     key={a}
                                     onClick={() => {
                                       setArea(a);
-                                      if (gov && !governorate.trim()) {
-                                        setGovernorate(gov);
-                                      }
+                                      if (gov && !governorate.trim()) setGovernorate(gov);
                                       setShowAreaDropdown(false);
                                     }}
                                     className="p-2 hover:bg-indigo-50 border-b border-slate-100 last:border-none cursor-pointer flex justify-between font-bold text-slate-800"
                                   >
-                                    <span className="text-gray-400 font-medium">({gov || 'محافظة غير حددة'})</span>
+                                    <span className={`font-medium text-[10px] ${isFromSheet ? 'text-emerald-600' : 'text-gray-400'}`}>
+                                      {isFromSheet ? '📋 ' : ''}{gov || 'غير محدد'}
+                                    </span>
                                     <span>{a}</span>
                                   </div>
                                 );

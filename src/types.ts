@@ -74,6 +74,8 @@ export interface Invoice {
   id: string;
   invoiceNumber: string;
   customerId: string;
+  customerName?: string; // اسم العميل لحمايته من الفقدان (عميل مجهول)
+  customerArea?: string; // منطقة العميل لحمايتها من الفقدان (منطقة مجهولة)
   date: string;
   items: InvoiceItem[];
   totalBeforeDiscount: number;
