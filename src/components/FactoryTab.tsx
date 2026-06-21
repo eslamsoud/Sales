@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { confirmDialog } from '../utils/confirm';
+import { confirmDialog, duaConfirmDialog } from '../utils/confirm';
 import { jsPDF } from 'jspdf';
 /**
  * @license
@@ -7,7 +7,7 @@ import { jsPDF } from 'jspdf';
  */
 
 import React, { useState, useEffect, useMemo } from 'react';
-import { Product, FactoryLoad, CarBalance, ProductWeight, getProductWeightsFallback, Invoice, Trip, formatNum } from '../types';
+import { Product, FactoryLoad, CarBalance, ProductWeight, getProductWeightsFallback, Invoice, Trip, formatNum, Expense, UserAuth } from '../types';
 import { Truck, Plus, PackagePlus, ArrowRight, History, Trash2, AlertCircle, Edit, Save, HelpCircle, FileText, Image, Scale, CirclePercent, DollarSign, Box, Clock, CheckCircle2, ShieldMinus, Wallet, Printer, Calendar, MapPin, Download, ScanLine } from 'lucide-react';
 import { showToast } from '../utils/toast';
 
@@ -16,6 +16,7 @@ interface FactoryTabProps {
   factoryLoads: FactoryLoad[];
   invoices: Invoice[];
   trips: Trip[];
+  expenses: Expense[];
   onAddProduct: (product: Omit<Product, 'id'>) => void;
   onEditProduct: (product: Product) => void;
   onDeleteProduct: (id: string) => void;
@@ -30,6 +31,9 @@ interface FactoryTabProps {
   onGoBack: () => void;
   permittedSubTabs?: string[];
   canEditPrices?: boolean;
+  onAddExpense: (expense: Omit<Expense, 'id'>) => void;
+  onDeleteExpense: (id: string) => void;
+  currentUser?: UserAuth | null;
 }
 
 export default function FactoryTab({
@@ -37,6 +41,7 @@ export default function FactoryTab({
   factoryLoads,
   invoices,
   trips,
+  expenses,
   onAddProduct,
   onEditProduct,
   onDeleteProduct,
@@ -50,7 +55,10 @@ export default function FactoryTab({
   onClearAllData,
   onGoBack,
   permittedSubTabs,
-  canEditPrices = true
+  canEditPrices = true,
+  onAddExpense,
+  onDeleteExpense,
+  currentUser
 }: FactoryTabProps) {
   const [activeSubTab, setActiveSubTab] = useState<'loads' | 'products' | 'previous_loads' | 'factory_account' | 'trips'>(() => {
     if (permittedSubTabs && permittedSubTabs.length > 0) {
@@ -153,30 +161,94 @@ export default function FactoryTab({
   const [tripDate, setTripDate] = useState(() => new Date().toISOString().substring(0, 10));
   const [tripFilter, setTripFilter] = useState<'all' | 'collected' | 'pending'>('all');
 
-  // Persistent carried over debt for the factory
-  const [carriedOverDebt, setCarriedOverDebt] = useState<number>(() => {
-    return parseFloat(localStorage.getItem('factory_carried_debt_sys') || '0');
-  });
-  const [carriedOverDebtDate, setCarriedOverDebtDate] = useState<string>(() => {
-    return localStorage.getItem('factory_carried_debt_date_sys') || '';
-  });
+  const isManager = currentUser?.role === 'owner' || currentUser?.phone === '01228466613';
+
+  // Delegate filtering state for factory account
+  const [factoryDelegateFilter, setFactoryDelegateFilter] = useState<string>('all');
+
+  const selectedDelegatePhone = useMemo(() => {
+    if (!isManager) return currentUser?.phone || '';
+    return factoryDelegateFilter === 'all' ? '' : factoryDelegateFilter;
+  }, [isManager, currentUser, factoryDelegateFilter]);
+
+  const currentDelegateKey = useMemo(() => {
+    return selectedDelegatePhone || 'default';
+  }, [selectedDelegatePhone]);
+
+  // Helper to check if a record belongs to the selected delegate
+  const filterByFactoryDelegate = (item: any) => {
+    if (!isManager) return true; // Already filtered at app level
+    if (factoryDelegateFilter === 'all') return true;
+    
+    const itemPhone = (item.delegatePhone || '').trim();
+    const itemName = (item.delegateName || '').replace(/\s*\(.*?\)/g, '').trim();
+    const selectedDel = archiveDelegates.find(d => d.phone === factoryDelegateFilter || d.name === factoryDelegateFilter);
+    if (!selectedDel) return false;
+    
+    const matchPhone = selectedDel.phone !== 'مجهول' && itemPhone === selectedDel.phone;
+    const matchName = itemName === selectedDel.name;
+    return matchPhone || matchName;
+  };
+
+  // Persistent carried over debt for the factory, keyed per delegate
+  const [carriedOverDebt, setCarriedOverDebt] = useState<number>(0);
+  const [carriedOverDebtDate, setCarriedOverDebtDate] = useState<string>('');
 
   useEffect(() => {
-    localStorage.setItem('factory_carried_debt_sys', carriedOverDebt.toString());
-  }, [carriedOverDebt]);
+    const key = `factory_carried_debt_sys_${currentDelegateKey}`;
+    const dateKey = `factory_carried_debt_date_sys_${currentDelegateKey}`;
+    let val = parseFloat(localStorage.getItem(key) || 'NaN');
+    if (isNaN(val)) {
+      val = parseFloat(localStorage.getItem('factory_carried_debt_sys') || '0');
+    }
+    let dateVal = localStorage.getItem(dateKey);
+    if (dateVal === null) {
+      dateVal = localStorage.getItem('factory_carried_debt_date_sys') || '';
+    }
+    setCarriedOverDebt(val);
+    setCarriedOverDebtDate(dateVal);
+  }, [currentDelegateKey]);
 
   useEffect(() => {
-    localStorage.setItem('factory_carried_debt_date_sys', carriedOverDebtDate);
-  }, [carriedOverDebtDate]);
-
-  // Extra manual payments logged directly for the factory
-  const [extraPayments, setExtraPayments] = useState<{ id: string; amount: number; date: string; notes?: string; appliedToCarriedDebt?: number }[]>(() => {
-    return JSON.parse(localStorage.getItem('factory_extra_payments_sys') || '[]');
-  });
+    if (currentDelegateKey) {
+      localStorage.setItem(`factory_carried_debt_sys_${currentDelegateKey}`, carriedOverDebt.toString());
+    }
+  }, [carriedOverDebt, currentDelegateKey]);
 
   useEffect(() => {
-    localStorage.setItem('factory_extra_payments_sys', JSON.stringify(extraPayments));
-  }, [extraPayments]);
+    if (currentDelegateKey) {
+      localStorage.setItem(`factory_carried_debt_date_sys_${currentDelegateKey}`, carriedOverDebtDate);
+    }
+  }, [carriedOverDebtDate, currentDelegateKey]);
+
+  // Extra manual payments computed directly from synced expenses
+  const extraPayments = useMemo(() => {
+    return expenses
+      .filter(e => e.category === 'سداد للمصنع' || e.type === 'factory_payment')
+      .filter(filterByFactoryDelegate)
+      .map(e => {
+        let notes = e.description;
+        let appliedToCarriedDebt = 0;
+        if (e.description && e.description.startsWith('{')) {
+          try {
+            const parsed = JSON.parse(e.description);
+            notes = parsed.notes || '';
+            appliedToCarriedDebt = parsed.appliedToCarriedDebt || 0;
+          } catch (err) {}
+        }
+        return {
+          id: e.id,
+          amount: e.amount,
+          date: e.date && e.date.includes('-') && !isNaN(new Date(e.date).getTime())
+            ? new Date(e.date).toLocaleDateString('ar-EG') + ' ' + new Date(e.date).toLocaleTimeString('ar-EG')
+            : e.date || '',
+          notes,
+          appliedToCarriedDebt,
+          delegatePhone: e.delegatePhone,
+          delegateName: e.delegateName
+        };
+      });
+  }, [expenses, factoryDelegateFilter, isManager, currentUser, archiveDelegates]);
 
   // حساب الأرصدة الحالية في السيارة لكل صنف ووزن لعرضها في شاشة التحميل
   const weightStocks = useMemo(() => {
@@ -584,13 +656,17 @@ export default function FactoryTab({
   };
 
   // Submit all loaded weights quantities
-  const handleAddLoadSubmit = (e: React.FormEvent) => {
+  const handleAddLoadSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
     if (groupedDraftItems.length === 0) {
       showToast('⚠️ الرجاء إضافة كمية تحميل واحدة على الأقل.');
       return;
     }
+
+    const duaMsg = "اللهم إني أسألك خير هذا العمل وخير ما فيه، وأعوذ بك من شره وشر ما فيه. اللهم ارزقني فيه التوفيق، وبارك لي في وقتي وجهدي ورزقي";
+    const confirmed = await duaConfirmDialog("تأكيد تسجيل الحمولة: هل ترغب في ترحيل وحفظ حمولة السيارة المؤقتة الحالية؟", duaMsg, "توكلت على الله");
+    if (!confirmed) return;
 
     let hasAddedAny = false;
 
@@ -1153,6 +1229,10 @@ export default function FactoryTab({
     const doc = iframe.contentWindow?.document;
     if (!doc) return;
 
+    const filteredLoads = factoryLoads.filter(filterByFactoryDelegate);
+    const selectedDel = archiveDelegates.find(d => d.phone === factoryDelegateFilter || d.name === factoryDelegateFilter);
+    const delegateHeader = selectedDel ? `<p style="font-size: 14px; margin-top: 5px; color: #1e3a8a; font-weight: bold;">المندوب: ${selectedDel.name} ${selectedDel.phone !== 'مجهول' ? `(${selectedDel.phone})` : ''}</p>` : '';
+
     doc.open();
     doc.write(`
       <html dir="rtl" lang="ar">
@@ -1189,6 +1269,7 @@ export default function FactoryTab({
           <div class="header">
             <h1>كشف حساب المالي للمصنع والموردين</h1>
             <p>نظام التوزيع والمبيعات المعتمد للأغذية والمستودع</p>
+            ${delegateHeader}
           </div>
           
           <div class="meta-box">
@@ -1224,8 +1305,8 @@ export default function FactoryTab({
               </tr>
             </thead>
             <tbody>
-              ${factoryLoads.length === 0 ? '<tr><td colspan="6" style="text-align:center; color:#94a3b8;">لا توجد حمولات بضاعة مسجلة.</td></tr>' : 
-                factoryLoads.map((load, idx) => {
+              ${filteredLoads.length === 0 ? '<tr><td colspan="6" style="text-align:center; color:#94a3b8;">لا توجد حمولات بضاعة مسجلة.</td></tr>' : 
+                filteredLoads.map((load, idx) => {
                   const prod = products.find(p => String(p.id).trim() === String(load.productId).trim());
                   const weights = prod ? getProductWeightsFallback(prod) : [];
                   const weight = weights.find(w => String(w.id).trim() === String(load.weightId).trim());
@@ -1298,8 +1379,11 @@ export default function FactoryTab({
     let rawLoadedValue = 0; // إجمالي قيمة البضاعة المحملة فعلياً بسعر المصنع في الحمولة الحالية
     let currentAdvances = 0; // إجمالي مقدمات البضاعة المدفوعة للمصنع المرتبطة بالتحميل
     
+    const filteredLoads = factoryLoads.filter(filterByFactoryDelegate);
+    const filteredInvoices = invoices.filter(filterByFactoryDelegate);
+
     // Calculate total loaded costs from factoryLoads
-    factoryLoads.forEach(load => {
+    filteredLoads.forEach(load => {
       const prod = products.find(p => String(p.id).trim() === String(load.productId).trim());
       const weights = prod ? getProductWeightsFallback(prod) : [];
       const weight = weights.find(w => String(w.id).trim() === String(load.weightId).trim()) || weights[0];
@@ -1328,7 +1412,7 @@ export default function FactoryTab({
     let totalSoldValue = 0; // إجمالي قيمة المبيعات للعملاء
     const soldCounts: Record<string, { cartons: number, units: number, value: number }> = {}; // weightId -> counts
 
-    invoices.forEach(inv => {
+    filteredInvoices.forEach(inv => {
       inv.items.forEach(item => {
         const prod = products.find(p => String(p.id).trim() === String(item.productId).trim());
         if (!prod) return;
@@ -1359,7 +1443,7 @@ export default function FactoryTab({
       manualPaymentsSum,
       currentAdvances
     };
-  }, [factoryLoads, products, invoices, carriedOverDebt, extraPayments]);
+  }, [factoryLoads, products, invoices, carriedOverDebt, extraPayments, factoryDelegateFilter, isManager]);
 
   // Filters for the withdrawn goods visual component (Box 1 in Factory Account)
   const [accountLoadsFilter, setAccountLoadsFilter] = useState<'all' | 'daily' | 'weekly' | 'monthly' | 'custom'>('all');
@@ -1368,6 +1452,7 @@ export default function FactoryTab({
 
   const filteredAccountLoads = React.useMemo(() => {
     return factoryLoads.filter(load => {
+      if (!filterByFactoryDelegate(load)) return false;
       const loadDateObj = new Date(load.date);
       if (isNaN(loadDateObj.getTime())) return false;
       const now = new Date();
@@ -1381,7 +1466,7 @@ export default function FactoryTab({
       }
       return true;
     });
-  }, [factoryLoads, accountLoadsFilter, accountLoadsStartDate, accountLoadsEndDate]);
+  }, [factoryLoads, accountLoadsFilter, accountLoadsStartDate, accountLoadsEndDate, factoryDelegateFilter, isManager]);
 
   const accountLoadsSummary = useMemo(() => {
     return filteredAccountLoads.map(load => {
@@ -1602,6 +1687,11 @@ export default function FactoryTab({
     ctx.font = 'bold 16px system-ui, sans-serif';
     ctx.fillStyle = '#cbd5e1';
     ctx.fillText(`تاريخ الكشف: ${new Date().toLocaleDateString('ar-EG')} ${new Date().toLocaleTimeString('ar-EG')}`, canvas.width - 45, 115);
+    
+    if (factoryDelegateFilter !== 'all') {
+      const delName = archiveDelegates.find(d => d.phone === factoryDelegateFilter || d.name === factoryDelegateFilter)?.name || factoryDelegateFilter;
+      ctx.fillText(`المندوب: ${delName}`, canvas.width - 45, 138);
+    }
 
     // Balance Sheet Top Boxes - Three Columns
     let y = 180;
@@ -4124,6 +4214,24 @@ export default function FactoryTab({
               </button>
             </div>
 
+            {isManager && (
+              <div className="bg-white p-4.5 rounded-2xl border border-slate-200 shadow-xs flex flex-col gap-2">
+                <span className="text-xs font-black text-[#1A365D]">تصفية حساب المصنع حسب المندوب:</span>
+                <select
+                  value={factoryDelegateFilter}
+                  onChange={(e) => setFactoryDelegateFilter(e.target.value)}
+                  className="bg-[#F7FAFC] border border-slate-200 rounded-lg p-2 text-xs font-bold text-[#1A365D]"
+                >
+                  <option value="all">كل المناديب (تجميعي)</option>
+                  {archiveDelegates.map(d => (
+                    <option key={d.phone || d.name} value={d.phone !== 'مجهول' ? d.phone : d.name}>
+                      {d.name} {d.phone !== 'مجهول' ? `(${d.phone})` : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
             {/* Top Grid of Balance sheet */}
             <div className="grid grid-cols-3 gap-2 font-sans">
               <div className="bg-[#1A365D] text-white p-3 rounded-2xl shadow-sm flex flex-col justify-between">
@@ -4195,14 +4303,20 @@ export default function FactoryTab({
                         }
                       }
 
-                      const paymentItem = {
-                        id: Date.now().toString(),
+                      onAddExpense({
                         amount,
-                        appliedToCarriedDebt,
-                        date: new Date().toLocaleDateString('ar-EG') + ' ' + new Date().toLocaleTimeString('ar-EG'),
-                        notes: newPaymentNotes.trim() || 'تسديد مباشر'
-                      };
-                      setExtraPayments(prev => [...prev, paymentItem]);
+                        category: 'سداد للمصنع',
+                        type: 'factory_payment',
+                        date: new Date().toISOString(),
+                        description: JSON.stringify({
+                          notes: newPaymentNotes.trim() || 'تسديد مباشر',
+                          appliedToCarriedDebt
+                        }),
+                        delegateName: selectedDelegatePhone 
+                          ? (archiveDelegates.find(d => d.phone === selectedDelegatePhone)?.name || 'مجهول')
+                          : currentUser?.name || 'مجهول',
+                        delegatePhone: selectedDelegatePhone || currentUser?.phone || ''
+                      });
                       setNewPaymentAmount('');
                       setNewPaymentNotes('');
                       showToast(`✓ تم تسجيل دفعة مالية للمصنع بقيمة ${amount}ج.م بنجاح!`);
@@ -4236,16 +4350,22 @@ export default function FactoryTab({
                         const remainingAmount = factoryBalanceDetails.netRemainingDueToFactory;
                         const confirmed = await confirmDialog(`تأكيد السداد: هل تم بالفعل سداد كامل المبلغ الملاحظ للمصنع وهو بقيمة ${formatNum(remainingAmount)}ج.م، تمهيداً لترحيل وتصفير العملية كاملة للأرشيف المغلق؟`);
                         if (confirmed) {
-                          const settlementPayment = {
-                            id: Date.now().toString(),
+                          onAddExpense({
                             amount: remainingAmount,
-                            appliedToCarriedDebt: 0,
-                            date: new Date().toLocaleDateString('ar-EG') + ' ' + new Date().toLocaleTimeString('ar-EG'),
-                            notes: 'سداد كامل المبلغ المتبقي وتصفية الحساب'
-                          };
-                          setExtraPayments(prev => [...prev, settlementPayment]);
+                            category: 'سداد للمصنع',
+                            type: 'factory_payment',
+                            date: new Date().toISOString(),
+                            description: JSON.stringify({
+                              notes: 'سداد كامل المبلغ المتبقي وتصفية الحساب',
+                              appliedToCarriedDebt: 0
+                            }),
+                            delegateName: selectedDelegatePhone 
+                              ? (archiveDelegates.find(d => d.phone === selectedDelegatePhone)?.name || 'مجهول')
+                              : currentUser?.name || 'مجهول',
+                            delegatePhone: selectedDelegatePhone || currentUser?.phone || ''
+                          });
 
-                          // Save this settled cycle in archive
+                          // Save this settled cycle in archive delegate-specifically
                           const cycleArchive = {
                             id: Date.now().toString(),
                             clearedAt: new Date().toLocaleDateString('ar-EG') + ' ' + new Date().toLocaleTimeString('ar-EG'),
@@ -4253,8 +4373,9 @@ export default function FactoryTab({
                             totalAdvancePayments: factoryBalanceDetails.totalAdvancePayments + remainingAmount,
                             paymentsCount: extraPayments.length + 1
                           };
-                          const existingCycles = JSON.parse(localStorage.getItem('factory_settled_cycles_archive_sys') || '[]');
-                          localStorage.setItem('factory_settled_cycles_archive_sys', JSON.stringify([...existingCycles, cycleArchive]));
+                          const key = `factory_settled_cycles_archive_sys_${currentDelegateKey}`;
+                          const existingCycles = JSON.parse(localStorage.getItem(key) || '[]');
+                          localStorage.setItem(key, JSON.stringify([...existingCycles, cycleArchive]));
 
                           showToast("✓ تم تصفية مديونية المصنع بنجاح ونقلها للأرشيف!");
                         }
@@ -4295,7 +4416,7 @@ export default function FactoryTab({
                       <button
                         type="button"
                         onClick={async () => { if (await confirmDialog("هل ترغب بإلغاء أو حذف دفعة السداد هذه من مراجعة الحساب؟")) {
-                            setExtraPayments(prev => prev.filter(p => p.id !== pay.id));
+                            onDeleteExpense(pay.id);
                           }
                         }}
                         className="text-rose-500 hover:text-rose-700 bg-[#FFFFFF] hover:bg-rose-50 p-1.5 rounded-lg border border-slate-200"

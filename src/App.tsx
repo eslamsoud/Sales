@@ -32,20 +32,30 @@ import ReportsTab from './components/ReportsTab';
 import InvoiceTab from './components/InvoiceTab';
 import AuthGate from './components/AuthGate';
 import AiChatAssistant from './components/AiChatAssistant';
+import Adduaa from './components/Adduaa';
 import { Lock, Fingerprint, Key, ShieldAlert, CheckCircle, RefreshCw, Save, LogOut, MessageCircle, Bell, Settings as SettingsIcon, HelpCircle, AlertCircle } from 'lucide-react';
 import { confirmDialog } from './utils/confirm';
 import { idbGet, idbSet } from './utils/idb';
 
-// 🌐 رابط جوجل شيت الموحد والمدمج في التطبيق مباشرة
-const APP_SCRIPT_URL = import.meta.env.VITE_GOOGLE_SHEETS_URL || "https://script.google.com/macros/s/AKfycbyGO8Af8bOs75_F-ttOFqR8WjVj4l9IW1IJGgDqLEu1rGdbky3balgRpZUdo03r6Kla/exec";
-
-const getSafeScriptUrl = (savedUrl?: string) => {
-  const url = savedUrl?.trim();
-  if (!url || url === "ضع_رابط_الاسكريبت_الخاص_بك_هنا" || url.includes("AKfycbw64AiaMZkBBb2eJxUdCkRboejwIvWGxZoGo1Ub0LrqGtL8BeFim0qN_k02eaeasurU")) {
-    return APP_SCRIPT_URL;
-  }
-  return url;
+const getSafeScriptUrl = () => {
+  return "https://script.google.com/macros/s/AKfycbyGO8Af8bOs75_F-ttOFqR8WjVj4l9IW1IJGgDqLEu1rGdbky3balgRpZUdo03r6Kla/exec";
 };
+
+async function fetchWithTimeout(resource: string, options: any = {}, timeout = 12000) {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeout);
+  try {
+    const response = await fetch(resource, {
+      ...options,
+      signal: controller.signal
+    });
+    clearTimeout(id);
+    return response;
+  } catch (error) {
+    clearTimeout(id);
+    throw error;
+  }
+}
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<string>('dashboard');
@@ -385,14 +395,13 @@ export default function App() {
 
   // ☁️ مزامنة تلقائية صامتة عند بدء تشغيل التطبيق لضمان سحب أحدث بيانات المناديب والأسعار من السحاب
   useEffect(() => {
-    const scriptUrl = getSafeScriptUrl(settings.googleSheetsUrl);
-    if (isDbLoaded && currentUser && scriptUrl && scriptUrl !== "ضع_رابط_الاسكريبت_الخاص_بك_هنا") {
+    if (isDbLoaded && currentUser) {
       const timer = setTimeout(() => {
         handleUpdateData(true); // سحب صامت لدمج البيانات الجديدة دون مسح البيانات الحالية
       }, 1500);
       return () => clearTimeout(timer);
     }
-  }, [isDbLoaded, currentUser?.phone, settings.googleSheetsUrl]);
+  }, [isDbLoaded, currentUser?.phone]);
 
   const [showScrollTop, setShowScrollTop] = useState(false);
 
@@ -574,22 +583,20 @@ export default function App() {
           idbSet('last_auto_backup_sys', exportData);
           
           // إرسال النسخة الاحتياطية إلى Google Drive مباشرة بدلاً من تحميلها على الهاتف فقط
-          const scriptUrl = getSafeScriptUrl(settings.googleSheetsUrl);
-          if (scriptUrl && scriptUrl !== "ضع_رابط_الاسكريبت_الخاص_بك_هنا") {
-            fetch(scriptUrl.trim(), {
-              method: 'POST',
-              mode: 'no-cors',
-              headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-              body: JSON.stringify({
-                type: 'auto_backup',
-                syncPhone: currentUser.phone,
-                data: exportData
-              })
-            }).catch(e => console.error("Drive backup failed", e));
-            
-            localStorage.setItem('last_auto_backup_date_sys', today);
-            showToast('☁️ تم إرسال النسخة الاحتياطية التلقائية إلى مجلد Google Drive الخاص بك بنجاح.');
-          }
+          const scriptUrl = getSafeScriptUrl();
+          fetchWithTimeout(scriptUrl.trim(), {
+            method: 'POST',
+            mode: 'cors',
+            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+            body: JSON.stringify({
+              type: 'auto_backup',
+              syncPhone: currentUser.phone,
+              data: exportData
+            })
+          }, 15000).catch(e => console.error("Drive backup failed", e));
+          
+          localStorage.setItem('last_auto_backup_date_sys', today);
+          showToast('☁️ تم إرسال النسخة الاحتياطية التلقائية إلى مجلد Google Drive الخاص بك بنجاح.');
         } catch (e) {
           console.error("Auto backup failed", e);
         }
@@ -600,11 +607,10 @@ export default function App() {
 
   // التهيئة الصامتة (Silent Provisioning) من السيرفر للأجهزة الجديدة بدون تدخل المستخدم
   useEffect(() => {
-    const scriptUrl = getSafeScriptUrl(settings.googleSheetsUrl);
-    if (scriptUrl && usersList.length <= 1) {
+    if (usersList.length <= 1) {
       handleUpdateData(true); // جلب البيانات صامتاً في الخلفية
     }
-  }, [settings.googleSheetsUrl]);
+  }, []);
 
   const scrollToTop = () => {
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -628,6 +634,46 @@ export default function App() {
       }
     }
   }, [settings, isDbLoaded]);
+
+  // Startup Migration for Factory Payments
+  useEffect(() => {
+    if (!isDbLoaded) return;
+    const legacyPaymentsRaw = localStorage.getItem('factory_extra_payments_sys');
+    if (legacyPaymentsRaw) {
+      try {
+        const legacyPayments = JSON.parse(legacyPaymentsRaw);
+        if (Array.isArray(legacyPayments) && legacyPayments.length > 0) {
+          setExpenses(prev => {
+            const updated = [...prev];
+            legacyPayments.forEach((pay: any) => {
+              const exists = updated.some(e => e.id === pay.id || (e.amount === pay.amount && String(e.description).includes(pay.notes || '')));
+              if (!exists) {
+                updated.push({
+                  id: pay.id || `exp-factory-mig-${Date.now()}-${Math.random()}`,
+                  amount: pay.amount,
+                  category: 'سداد للمصنع',
+                  type: 'factory_payment',
+                  date: pay.date && pay.date.includes('-') ? pay.date : new Date().toISOString(),
+                  description: JSON.stringify({
+                    notes: pay.notes || 'تسديد مباشر',
+                    appliedToCarriedDebt: pay.appliedToCarriedDebt || 0
+                  }),
+                  delegateName: currentUser?.name || 'مجهول',
+                  delegatePhone: currentUser?.phone || ''
+                });
+              }
+            });
+            idbSet('expenses_sys', updated);
+            return updated;
+          });
+        }
+      } catch (e) {
+        console.error("Error migrating legacy factory payments:", e);
+      } finally {
+        localStorage.removeItem('factory_extra_payments_sys');
+      }
+    }
+  }, [isDbLoaded, currentUser]);
 
   const [hasShownInactiveAlert, setHasShownInactiveAlert] = useState(false);
   useEffect(() => {
@@ -677,7 +723,7 @@ export default function App() {
       } else {
         showToast(`⚠️ فشل الحفظ السحابي، تأكد من اتصالك بالإنترنت.`);
       }
-    }, 300);
+    }, 800);
   };
 
   const markAsDeleted = (id: string) => {
@@ -859,7 +905,12 @@ export default function App() {
           : c
       ));
     }
-    setInvoices(invoices.map(inv => inv.id === updated.id ? updated : inv));
+    const finalUpdated = {
+      ...updated,
+      delegateName: updated.delegateName || oldInv?.delegateName || getCleanDelegateName(currentUser),
+      delegatePhone: updated.delegatePhone || oldInv?.delegatePhone || currentUser?.phone || ''
+    };
+    setInvoices(invoices.map(inv => inv.id === updated.id ? finalUpdated : inv));
     promptForSync('تحديث فاتورة بيع');
   };
 
@@ -888,8 +939,8 @@ export default function App() {
     setExpenses(prev => [...prev, { 
       ...newExpense, 
       id,
-      delegateName: getCleanDelegateName(currentUser),
-      delegatePhone: currentUser?.phone || ''
+      delegateName: newExpense.delegateName || getCleanDelegateName(currentUser),
+      delegatePhone: newExpense.delegatePhone || currentUser?.phone || ''
     }]);
 
     promptForSync(newExpense.type === 'revenue' ? 'إضافة إيراد/تحصيل' : 'حفظ مصروف');
@@ -958,11 +1009,7 @@ export default function App() {
   };
 
   async function syncAllDataToGoogle(silent = false): Promise<boolean> {
-    const scriptUrl = getSafeScriptUrl(settings.googleSheetsUrl);
-    if (!scriptUrl || scriptUrl === "ضع_رابط_الاسكريبت_الخاص_بك_هنا") {
-      if (!silent) alert('تنبيه: لم يتم تضمين رابط مزامنة جوجل شيت في ملفات النظام.');
-      return false;
-    }
+    const scriptUrl = getSafeScriptUrl();
 
     try {
       setIsHeaderSyncing(true);
@@ -1195,14 +1242,34 @@ export default function App() {
         }))
       };
 
-      await fetch(scriptUrl.trim(), {
+      const response = await fetchWithTimeout(scriptUrl.trim(), {
         method: 'POST',
-        mode: 'no-cors',
+        mode: 'cors',
         headers: {
           'Content-Type': 'text/plain;charset=utf-8',
         },
         body: JSON.stringify(payload)
       });
+
+      if (!response.ok) {
+        throw new Error(`استجابة غير صالحة من السيرفر: ${response.status}`);
+      }
+
+      const responseText = await response.text();
+      let responseData;
+      try {
+        responseData = JSON.parse(responseText);
+      } catch (e) {
+        throw new Error('فشل في تحليل استجابة السيرفر كسلسلة JSON.');
+      }
+
+      if (responseData.error) {
+        throw new Error(responseData.error);
+      }
+
+      if (responseData.status !== 'success') {
+        throw new Error(responseData.message || 'فشلت عملية المزامنة السحابية.');
+      }
 
       setSyncLogs(prev => [{
         id: Date.now().toString() + Math.random(),
@@ -1434,16 +1501,7 @@ export default function App() {
   }
 
   async function handleUpdateData(isSilent = false) {
-    const scriptUrl = getSafeScriptUrl(settings.googleSheetsUrl);
-    if (!scriptUrl || scriptUrl === "ضع_رابط_الاسكريبت_الخاص_بك_هنا") {
-      if (!isSilent) {
-        showToast("تنبيه: لم يتم إعداد رابط جوجل شيت في ملفات النظام. جاري إعادة تشغيل عادية...");
-        setTimeout(() => {
-          window.location.reload();
-        }, 1500);
-      }
-      return;
-    }
+    const scriptUrl = getSafeScriptUrl();
 
     let shouldReplace = false;
     if (!isSilent) {
@@ -1459,7 +1517,7 @@ export default function App() {
       const urlSeparator = scriptUrl.includes('?') ? '&' : '?';
       const fetchUrl = scriptUrl + urlSeparator + 't=' + Date.now();
       
-      const response = await fetch(fetchUrl, {
+      const response = await fetchWithTimeout(fetchUrl, {
         method: 'GET',
         cache: 'no-store',
         redirect: 'follow'
@@ -1480,6 +1538,7 @@ export default function App() {
       let finalExpenses = expenses;
       let finalTrips = trips;
       let finalLoads = factoryLoads;
+      let updatedSettings = { ...settings };
 
       if (data && (data.users || data.products || data.customers)) {
         // 1. Update users permissions list (highly sensitive, managed by general manager)
@@ -1687,35 +1746,35 @@ export default function App() {
           setCustomers(finalCustomers);
 
           // تحديث تلقائي لـ workAreas من بيانات العملاء المسحوبة من الشيت (عملاء، عملاء مكتشفين، عملاء محتملين)
-          setSettings(prev => {
-            const existingPairs = new Set((prev.workAreas || []).map(w => `${w.governorate}||${w.area}`));
-            const newPairs: { governorate: string; area: string }[] = [];
+          const existingPairs = new Set((settings.workAreas || []).map(w => `${w.governorate}||${w.area}`));
+          const newPairs: { governorate: string; area: string }[] = [];
 
-            const addPair = (gov: string, area: string) => {
-              const cleanGov = (gov || 'أخرى').trim();
-              const cleanArea = (area || '').trim();
-              if (cleanArea && !existingPairs.has(`${cleanGov}||${cleanArea}`)) {
-                existingPairs.add(`${cleanGov}||${cleanArea}`);
-                newPairs.push({ governorate: cleanGov, area: cleanArea });
-              }
-            };
-
-            // 1. العملاء الفعليين
-            finalCustomers.forEach((c: any) => addPair(c.governorate, c.area));
-
-            // 2. العملاء المكتشفين
-            if (data.discoveredLeads && Array.isArray(data.discoveredLeads)) {
-              data.discoveredLeads.forEach((c: any) => addPair(c.governorate, c.area));
+          const addPair = (gov: string, area: string) => {
+            const cleanGov = (gov || 'أخرى').trim();
+            const cleanArea = (area || '').trim();
+            if (cleanArea && !existingPairs.has(`${cleanGov}||${cleanArea}`)) {
+              existingPairs.add(`${cleanGov}||${cleanArea}`);
+              newPairs.push({ governorate: cleanGov, area: cleanArea });
             }
+          };
 
-            // 3. العملاء المحتملين
-            if (data.potentialLeads && Array.isArray(data.potentialLeads)) {
-              data.potentialLeads.forEach((c: any) => addPair(c.governorate, c.area));
-            }
+          // 1. العملاء الفعليين
+          finalCustomers.forEach((c: any) => addPair(c.governorate, c.area));
 
-            if (newPairs.length === 0) return prev;
-            return { ...prev, workAreas: [...(prev.workAreas || []), ...newPairs] };
-          });
+          // 2. العملاء المكتشفين
+          if (data.discoveredLeads && Array.isArray(data.discoveredLeads)) {
+            data.discoveredLeads.forEach((c: any) => addPair(c.governorate, c.area));
+          }
+
+          // 3. العملاء المحتملين
+          if (data.potentialLeads && Array.isArray(data.potentialLeads)) {
+            data.potentialLeads.forEach((c: any) => addPair(c.governorate, c.area));
+          }
+
+          if (newPairs.length > 0) {
+            updatedSettings = { ...settings, workAreas: [...(settings.workAreas || []), ...newPairs] };
+            setSettings(updatedSettings);
+          }
         }
 
         // 4. Update operational tables (Invoices, Expenses, Trips, Factory loads)
@@ -1822,9 +1881,10 @@ export default function App() {
           const mappedExpenses = data.expenses.map((e: any) => {
             const isShifted = e.date === 'مصروف' || e.date === 'إيراد' || e.date === 'expense' || e.date === 'revenue' || !e.date || !String(e.date).includes('-');
             if (isShifted) {
+              const stableId = (e.id && String(e.id).includes('-')) ? e.id : `exp-fix-${e.amount}-${(e.category || 'other').trim()}-${(e.delegatePhone || 'sys').trim()}`;
               return {
-                id: `exp-fix-${Math.floor(Math.random() * 10000)}`,
-                date: (e.id && String(e.id).includes('-')) ? e.id : new Date().toISOString(),
+                id: stableId,
+                date: (e.id && String(e.id).includes('-') && !String(e.id).includes('fix')) ? e.id : new Date().toISOString(),
                 category: (e.category && e.category !== 'expense' && e.category !== 'revenue') ? e.category : (e.date !== 'مصروف' && e.date !== 'إيراد' && e.date ? e.date : 'أخرى'),
                 type: (e.type === 'revenue' || e.date === 'إيراد') ? 'revenue' : 'expense',
                 amount: Number(e.amount) || 0,
@@ -1923,7 +1983,7 @@ export default function App() {
           idbSet('expenses_sys', finalExpenses),
           idbSet('trips_sys', finalTrips),
           idbSet('factory_sys', finalLoads),
-          idbSet('settings_sys', settings)
+          idbSet('settings_sys', updatedSettings)
         ]);
 
         if (!isSilent) {
@@ -2273,6 +2333,7 @@ export default function App() {
             factoryLoads={filteredFactoryLoads}
             invoices={filteredInvoices}
             trips={filteredTrips}
+            expenses={filteredExpenses}
             onAddProduct={handleAddProduct}
             onEditProduct={handleEditProduct}
             onDeleteProduct={handleDeleteProduct}
@@ -2289,6 +2350,9 @@ export default function App() {
             onGoBack={() => setActiveTab('dashboard')}
             permittedSubTabs={effectiveUser.permittedSubTabs}
             canEditPrices={effectiveUser.canEditPrices !== false}
+            onAddExpense={handleAddExpense}
+            onDeleteExpense={handleDeleteExpense}
+            currentUser={effectiveUser}
           />
         )}
 
@@ -2502,6 +2566,9 @@ export default function App() {
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* 📿 الأذكار والأدعية الدورية */}
+      <Adduaa />
 
       </div>
     </APIProvider>

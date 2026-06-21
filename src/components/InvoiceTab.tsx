@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { confirmDialog } from '../utils/confirm';
+import { confirmDialog, duaConfirmDialog } from '../utils/confirm';
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -23,6 +23,7 @@ interface InvoiceTabProps {
   onDeleteInvoice: (id: string) => void;
   onGoBack: () => void;
   permittedSubTabs?: string[];
+  currentUser?: any;
 }
 
 const formatCartonsAndPieces = (rawQty: number, unitsPerCarton: number): string => {
@@ -48,7 +49,8 @@ export default function InvoiceTab({
   onUpdateInvoice,
   onDeleteInvoice,
   onGoBack,
-  permittedSubTabs
+  permittedSubTabs,
+  currentUser
 }: InvoiceTabProps) {
   const [activeSubTab, setActiveSubTab] = useState<'create' | 'archive' | 'debtors'>(() => {
     if (permittedSubTabs && permittedSubTabs.length > 0) {
@@ -85,6 +87,8 @@ export default function InvoiceTab({
   const [searchInvoice, setSearchInvoice] = useState('');
   const [dateFilter, setDateFilter] = useState<'all' | 'today' | 'week' | 'month'>('all');
   const [selectedInvoice, setSelectedInvoice] = useState<Invoice | null>(null);
+  const [filterGovernorateList, setFilterGovernorateList] = useState('');
+  const [filterAreaList, setFilterAreaList] = useState('');
   // Filter products and their weights matching active non-zero price condition
   const products = useMemo(() => {
     return rawProducts.map(p => {
@@ -113,6 +117,7 @@ export default function InvoiceTab({
     return now.toISOString().substring(0, 16);
   });
 
+  const [filterGovernorate, setFilterGovernorate] = useState(() => localStorage.getItem('invoice_draft_filterGovernorate') || '');
   const [filterArea, setFilterArea] = useState(() => localStorage.getItem('invoice_draft_filterArea') || '');
   const [justSavedInvoice, setJustSavedInvoice] = useState<any | null>(null);
   const [isSaving, setIsSaving] = useState(false);
@@ -171,6 +176,10 @@ export default function InvoiceTab({
   useEffect(() => {
     localStorage.setItem('invoice_draft_filterArea', filterArea);
   }, [filterArea]);
+
+  useEffect(() => {
+    localStorage.setItem('invoice_draft_filterGovernorate', filterGovernorate);
+  }, [filterGovernorate]);
 
   useEffect(() => {
     localStorage.setItem('invoice_draft_billItems', JSON.stringify(billItems));
@@ -240,17 +249,32 @@ export default function InvoiceTab({
     return customers.find(c => c.id === selectedCustomerId);
   }, [selectedCustomerId, customers]);
 
-  // Available geographical areas present in customers list
-  const availableAreas = useMemo(() => {
-    const areas = customers.map(c => c.area).filter(Boolean);
-    return Array.from(new Set(areas));
+  // Available governorates present in customers list
+  const availableGovernorates = useMemo(() => {
+    const govs = customers.map(c => c.governorate).filter(Boolean);
+    return Array.from(new Set(govs)).sort();
   }, [customers]);
 
-  // Filtered customer list by chosen area
+  // Available geographical areas based on chosen governorate
+  const availableAreas = useMemo(() => {
+    const filteredCustomers = filterGovernorate
+      ? customers.filter(c => c.governorate === filterGovernorate)
+      : customers;
+    const areas = filteredCustomers.map(c => c.area).filter(Boolean);
+    return Array.from(new Set(areas)).sort();
+  }, [customers, filterGovernorate]);
+
+  // Filtered customer list by chosen governorate and area
   const filteredCustomersByArea = useMemo(() => {
-    if (!filterArea) return customers;
-    return customers.filter(c => c.area === filterArea);
-  }, [customers, filterArea]);
+    let result = customers;
+    if (filterGovernorate) {
+      result = result.filter(c => c.governorate === filterGovernorate);
+    }
+    if (filterArea) {
+      result = result.filter(c => c.area === filterArea);
+    }
+    return result;
+  }, [customers, filterGovernorate, filterArea]);
 
   // List of product weight lines currently loaded in the car
   const loadedProductsList = useMemo(() => {
@@ -507,9 +531,10 @@ export default function InvoiceTab({
     setIsSaving(true); // 🚨 تفعيل القفل قبل نافذة التأكيد لمنع تراكم الطلبات (السبب الرئيسي لتكرار الفواتير)
 
     const customerObj = customers.find(c => c.id === selectedCustomerId);
-    const msg = `إصدار فاتورة بيع لـ ${customerObj?.name} بقيمة ${totals.after.toFixed(2)} ج.م؟`;
+    const msg = `تأكيد المعاملة: هل ترغب في إصدار فاتورة بيع لـ ${customerObj?.name} بقيمة ${totals.after.toFixed(2)} ج.م؟`;
+    const duaMsg = "اللهم إني أعوذ بك أن أضل أو أضل في عملي هذا ، أو أزل أو أزل في عملي هذا ، أو أظلم أو أظلم أحدا في عملي هذا، أو أجهل أو يجهل علي.";
 
-    const confirmed = await confirmDialog(msg);
+    const confirmed = await duaConfirmDialog(msg, duaMsg, "بسم الله الرحمن الرحيم");
     if (!confirmed) {
       setIsSaving(false);
       isSavingRef.current = false;
@@ -604,8 +629,8 @@ export default function InvoiceTab({
     // Retrieve settings
     const storedSetStr = localStorage.getItem('app_settings_sys');
     let invoiceAppName = 'فاتورة مبيعات معتمدة';
-    let invoiceRepName = inv.delegateName?.replace(/ \(.*?\)/g, '').trim() || '';
-    let invoiceRepPhone = inv.delegatePhone || '';
+    let invoiceRepName = inv.delegateName?.replace(/ \(.*?\)/g, '').trim() || currentUser?.name?.replace(/ \(.*?\)/g, '').trim() || '';
+    let invoiceRepPhone = inv.delegatePhone || currentUser?.phone || '';
     if (storedSetStr) {
       try {
         const parsed = JSON.parse(storedSetStr);
@@ -673,7 +698,7 @@ export default function InvoiceTab({
     
     ctx.font = '500 12px system-ui, sans-serif';
     ctx.fillStyle = '#475569';
-    ctx.fillText(`المنطقة: ${customerObj.area}   |   رقم الهاتف: ${customerObj.phone}`, canvas.width - 55, y + 38);
+    ctx.fillText(`المحافظة والمنطقة: ${customerObj.governorate ? `${customerObj.governorate} - ` : ''}${customerObj.area}   |   رقم الهاتف: ${customerObj.phone}`, canvas.width - 55, y + 38);
 
     // Table Header
     y += 100;
@@ -892,8 +917,8 @@ export default function InvoiceTab({
     // Retrieve settings
     const storedSetStr = localStorage.getItem('app_settings_sys');
     let invoiceAppName = 'سمن وزيت سوفانا الفاخر';
-    let invoiceRepName = inv.delegateName?.replace(/ \(.*?\)/g, '').trim() || '';
-    let invoiceRepPhone = '';
+    let invoiceRepName = inv.delegateName?.replace(/ \(.*?\)/g, '').trim() || currentUser?.name?.replace(/ \(.*?\)/g, '').trim() || '';
+    let invoiceRepPhone = inv.delegatePhone || currentUser?.phone || '';
     if (storedSetStr) {
       try {
         const parsed = JSON.parse(storedSetStr);
@@ -956,7 +981,7 @@ export default function InvoiceTab({
             <div class="details-col">
               <h3>تفاصيل والجهة المستلمة (العميل)</h3>
               <p>اسم المحل/العميل: <b>${customerObj?.name || 'غير معروف'}</b></p>
-              <p>منطقة التوزيع: <b>${customerObj?.area || 'المنطقة الافتراضية'}</b></p>
+              <p>المحافظة والمنطقة: <b>${customerObj?.governorate ? `${customerObj.governorate} - ` : ''}${customerObj?.area || 'المنطقة الافتراضية'}</b></p>
               <p>رقم تواصل الهاتف: <span style="font-family: monospace;">${customerObj?.phone || 'غير متوفر'}</span></p>
             </div>
             <div class="details-col" style="text-align: left;">
@@ -1069,7 +1094,7 @@ export default function InvoiceTab({
     msg += `--------------------------------\n`;
     msg += `*رقم الفاتورة:* ${inv.invoiceNumber}\n`;
     msg += `*العميل المحترم:* ${customerObj.name}\n`;
-    msg += `*المنطقة:* ${customerObj.area}\n`;
+    msg += `*المحافظة والمنطقة:* ${customerObj.governorate ? `${customerObj.governorate} - ` : ''}${customerObj.area}\n`;
     msg += `*تاريخ الفاتورة:* ${new Date(inv.date).toLocaleDateString('ar-EG')}\n`;
     msg += `--------------------------------\n`;
     
@@ -1114,6 +1139,30 @@ export default function InvoiceTab({
     window.location.href = `whatsapp://send?phone=${finalPhone}&text=${encodedText}`;
   };
 
+  // Available governorates in the invoices list (based on customers who have invoices)
+  const listGovernorates = useMemo(() => {
+    const govs = invoices.map(inv => {
+      const cust = customers.find(c => c.id === inv.customerId);
+      return cust?.governorate;
+    }).filter(Boolean);
+    return Array.from(new Set(govs)).sort();
+  }, [invoices, customers]);
+
+  // Available areas in the invoices list based on selected list governorate
+  const listAreas = useMemo(() => {
+    const filteredInvs = filterGovernorateList
+      ? invoices.filter(inv => {
+          const cust = customers.find(c => c.id === inv.customerId);
+          return cust?.governorate === filterGovernorateList;
+        })
+      : invoices;
+    const areas = filteredInvs.map(inv => {
+      const cust = customers.find(c => c.id === inv.customerId);
+      return cust?.area || inv.customerArea;
+    }).filter(Boolean);
+    return Array.from(new Set(areas)).sort();
+  }, [invoices, customers, filterGovernorateList]);
+
   const filteredInvoices = invoices.filter(inv => {
     // Only display delivered invoices OR invoices older than 48 hours (failsafe auto-archive)
     const dTime = new Date(inv.date).getTime();
@@ -1122,6 +1171,17 @@ export default function InvoiceTab({
     if (inv.isDelivered === false && !isOld) return false;
 
     const cust = customers.find(c => c.id === inv.customerId);
+    
+    // Filter by Governorate in the list
+    if (filterGovernorateList) {
+      if (!cust || cust.governorate !== filterGovernorateList) return false;
+    }
+    
+    // Filter by Area in the list
+    if (filterAreaList) {
+      if (!cust || cust.area !== filterAreaList) return false;
+    }
+
     const q = searchInvoice.toLowerCase();
     const textMatch = 
       inv.invoiceNumber.toLowerCase().includes(q) ||
@@ -1241,9 +1301,27 @@ export default function InvoiceTab({
 
             {/* Step 1: Customer Selection */}
             <div className="bg-[#FFFFFF] p-5 rounded-2xl border border-indigo-100 shadow-sm flex flex-col gap-3.5">
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3.5">
             <div>
-              <label className="block text-xs font-bold text-[#2B6CB0] mb-1">المنطقة (لتسهيل البحث)</label>
+              <label className="block text-xs font-bold text-[#2B6CB0] mb-1">المحافظة (لتسهيل البحث)</label>
+              <select
+                value={filterGovernorate}
+                onChange={(e) => {
+                  setFilterGovernorate(e.target.value);
+                  setFilterArea('');
+                  setSelectedCustomerId('');
+                }}
+                className="w-full bg-[#F7FAFC] border border-slate-200 rounded-lg p-2.5 text-sm font-semibold focus:ring-2 focus:ring-indigo-500 focus:outline-none text-[#1A365D]"
+              >
+                <option value="">كل المحافظات</option>
+                {availableGovernorates.map(gov => (
+                  <option key={gov} value={gov}>{gov}</option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-[#2B6CB0] mb-1">المنطقة</label>
               <select
                 value={filterArea}
                 onChange={(e) => {
@@ -1789,6 +1867,11 @@ export default function InvoiceTab({
                             onClick={() => {
                               setEditingInvoiceId(inv.id);
                               setSelectedCustomerId(inv.customerId);
+                              const cust = customers.find(c => c.id === inv.customerId);
+                              if (cust) {
+                                setFilterGovernorate(cust.governorate || '');
+                                setFilterArea(cust.area || '');
+                              }
                               let dStr = '';
                               const parsed = new Date(inv.date);
                               if (!isNaN(parsed.getTime())) {
@@ -1872,6 +1955,39 @@ export default function InvoiceTab({
                 </select>
               </div>
 
+              {/* Governorate and Area Filters for listing */}
+              <div className="grid grid-cols-2 gap-2 mt-1">
+                <div>
+                  <label className="block text-[10px] font-bold text-[#2B6CB0] mb-0.5">المحافظة (لتصفية الأرشيف)</label>
+                  <select
+                    value={filterGovernorateList}
+                    onChange={(e) => {
+                      setFilterGovernorateList(e.target.value);
+                      setFilterAreaList('');
+                    }}
+                    className="w-full bg-[#F7FAFC] border border-slate-200 rounded-lg p-2 text-xs font-semibold focus:outline-none text-[#1A365D]"
+                  >
+                    <option value="">كل المحافظات</option>
+                    {listGovernorates.map(gov => (
+                      <option key={gov} value={gov}>{gov}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-[#2B6CB0] mb-0.5">المنطقة (لتصفية الأرشيف)</label>
+                  <select
+                    value={filterAreaList}
+                    onChange={(e) => setFilterAreaList(e.target.value)}
+                    className="w-full bg-[#F7FAFC] border border-slate-200 rounded-lg p-2 text-xs font-semibold focus:outline-none text-[#1A365D]"
+                  >
+                    <option value="">كل المناطق</option>
+                    {listAreas.map(area => (
+                      <option key={area} value={area}>{area}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
               {/* Invoices List item */}
               <div className="max-h-96 overflow-y-auto custom-scroll flex flex-col gap-2.5 mt-1">
                 {(activeSubTab === 'archive' ? filteredArchiveList : filteredDebtorsList).length === 0 ? (
@@ -1899,7 +2015,7 @@ export default function InvoiceTab({
                           
                           <div className="flex flex-col gap-1 text-[#2B6CB0] font-medium mt-1">
                             <div className="flex flex-wrap gap-x-2.5">
-                              <span>المنطقة: <strong>{cust ? cust.area : 'مجهولة'}</strong></span>
+                              <span>المحافظة والمنطقة: <strong>{cust ? `${cust.governorate ? `${cust.governorate} - ` : ''}${cust.area}` : 'مجهولة'}</strong></span>
                               <span>•</span>
                               <span>التاريخ: {inv.date && !isNaN(new Date(inv.date).getTime()) ? new Date(inv.date).toLocaleDateString('ar-EG') : 'بدون تاريخ'}</span>
                             </div>

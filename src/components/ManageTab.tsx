@@ -77,14 +77,10 @@ class MapErrorBoundary extends React.Component<{children: React.ReactNode}, { ha
   }
 }
 
-const APP_SCRIPT_URL = import.meta.env.VITE_GOOGLE_SHEETS_URL || "https://script.google.com/macros/s/AKfycbyGO8Af8bOs75_F-ttOFqR8WjVj4l9IW1IJGgDqLEu1rGdbky3balgRpZUdo03r6Kla/exec";
+const APP_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyGO8Af8bOs75_F-ttOFqR8WjVj4l9IW1IJGgDqLEu1rGdbky3balgRpZUdo03r6Kla/exec";
 
-const getSafeScriptUrl = (savedUrl?: string) => {
-  const url = savedUrl?.trim();
-  if (!url || url === "ضع_رابط_الاسكريبت_الخاص_بك_هنا" || url.includes("AKfycbw64AiaMZkBBb2eJxUdCkRboejwIvWGxZoGo1Ub0LrqGtL8BeFim0qN_k02eaeasurU")) {
-    return APP_SCRIPT_URL;
-  }
-  return url;
+const getSafeScriptUrl = () => {
+  return APP_SCRIPT_URL;
 };
 
 const MAPS_LIBRARIES = ['places', 'geometry', 'marker'];
@@ -322,7 +318,6 @@ function doGet(e) {
     return ContentService.createTextOutput(JSON.stringify(result))
       .setMimeType(ContentService.MimeType.JSON);
   } catch(error) {
-    // 🚨 نظام تسجيل الأخطاء: عند حدوث أي خطأ، سيتم تسجيله هنا. يمكنك مراجعته من داخل محرر السكربت عبر قائمة "Executions".
     Logger.log('FATAL doGet ERROR: ' + error.toString() + ' Stack: ' + error.stack);
     return ContentService.createTextOutput(JSON.stringify({"error": error.toString(), "stack": error.stack}))
       .setMimeType(ContentService.MimeType.JSON);
@@ -331,6 +326,9 @@ function doGet(e) {
 
 // 2. استقبال طلب الصب والترحيل والنسخ الاحتياطي مع نظام الحماية (LockService)
 function doPost(e) {
+  try {
+    Logger.log("Incoming doPost request. Payload size: " + (e && e.postData && e.postData.contents ? e.postData.contents.length : 0) + " characters.");
+  } catch(logErr) {}
   var lock = LockService.getScriptLock();
   try {
     lock.waitLock(15000);
@@ -594,7 +592,6 @@ function doPost(e) {
       .setMimeType(ContentService.MimeType.JSON);
       
   } catch(error) {
-    // 🚨 نظام تسجيل الأخطاء: عند حدوث أي خطأ، سيتم تسجيله هنا. يمكنك مراجعته من داخل محرر السكربت عبر قائمة "Executions".
     Logger.log('FATAL doPost ERROR: ' + error.toString() + ' Stack: ' + error.stack);
     return ContentService.createTextOutput(JSON.stringify({"error": error.toString(), "stack": error.stack}))
       .setMimeType(ContentService.MimeType.JSON);
@@ -1098,7 +1095,7 @@ export default function ManageTab({
   const [aiName, setAiName] = useState(settings.aiName || 'المستشار الميداني');
   const [aiVoiceURI, setAiVoiceURI] = useState(settings.aiVoiceURI || '');
   const [googleMapsApiKey, setGoogleMapsApiKey] = useState(() => settings.googleMapsApiKey || localStorage.getItem('GMP_API_KEY_FALLBACK') || '');
-  const [googleSheetsUrl, setGoogleSheetsUrl] = useState(() => getSafeScriptUrl(settings.googleSheetsUrl));
+  const [googleSheetsUrl, _setGoogleSheetsUrl] = useState(() => APP_SCRIPT_URL);
   const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
 
   // Sync settings when they are loaded from IndexedDB asynchronously
@@ -1113,7 +1110,7 @@ export default function ManageTab({
       if (settings.aiName) setAiName(settings.aiName);
       if (settings.aiVoiceURI) setAiVoiceURI(settings.aiVoiceURI);
       if (settings.googleMapsApiKey) setGoogleMapsApiKey(settings.googleMapsApiKey);
-      if (settings.googleSheetsUrl) setGoogleSheetsUrl(getSafeScriptUrl(settings.googleSheetsUrl));
+      // googleSheetsUrl is fixed to APP_SCRIPT_URL, no need to sync from settings
     }
   }, [settings]);
 
@@ -1428,7 +1425,7 @@ export default function ManageTab({
     const isKeyChanged = googleMapsApiKey.trim() !== (settings.googleMapsApiKey || '').trim();
     onUpdateSettings({
       ...settings,
-      googleSheetsUrl: googleSheetsUrl.trim(),
+      // googleSheetsUrl: fixed to APP_SCRIPT_URL globally
       currency: currency.trim(),
       aiPitchGuidelines: pitchGuidelines.trim(),
       aiRetentionGuidelines: retentionGuidelines.trim(),
@@ -1481,7 +1478,7 @@ export default function ManageTab({
     };
   }, [invoices, expenses]);
   const handleBulkSyncToGoogleSheets = async () => {
-    if (!googleSheetsUrl || googleSheetsUrl === "ضع_رابط_الاسكريبت_الخاص_بك_هنا") {
+    if (false) {
       setSyncStatus('fail');
       showToast('⚠️ خطأ: لم يتم دمج رابط مزامنة جوجل في ملفات النظام.');
       return;
@@ -1646,12 +1643,28 @@ export default function ManageTab({
       };
       const resp = await fetch(googleSheetsUrl.trim(), {
         method: 'POST',
-        mode: 'no-cors',
+        mode: 'cors',
         headers: {
           'Content-Type': 'text/plain;charset=utf-8',
         },
         body: JSON.stringify(payload)
       });
+      if (!resp.ok) {
+        throw new Error("Server returned non-ok status: " + resp.status);
+      }
+      const respText = await resp.text();
+      let respData;
+      try {
+        respData = JSON.parse(respText);
+      } catch (e) {
+        throw new Error("Failed to parse server response as JSON.");
+      }
+      if (respData.error) {
+        throw new Error(respData.error);
+      }
+      if (respData.status !== 'success') {
+        throw new Error(respData.message || "Sync failed");
+      }
       setSyncStatus('done');
       showToast('✓ تم الحفظ والمزامنة السحابية بنجاح!');
       
@@ -3639,21 +3652,6 @@ export default function ManageTab({
                   </div>
                 ) : (
                   <div className="flex flex-col gap-3.5 text-right animate-fade-in">
-                    <div>
-                      <label className="block text-xs font-bold text-[#2B6CB0] mb-1">رابط تطبيق الويب لجوجل (Google Web App URL):</label>
-                      <input
-                        type="url"
-                        value={googleSheetsUrl}
-                        onChange={(e) => setGoogleSheetsUrl(e.target.value)}
-                        placeholder="أدخل رابط تطبيق الويب الخاص بك هنا..."
-                        className="w-full bg-[#FFFFFF] border border-slate-200 rounded-lg p-2.5 text-xs text-left font-mono text-slate-700 focus:ring-2 focus:ring-amber-500"
-                        style={{ direction: 'ltr' }}
-                      />
-                      <p className="text-[10px] text-slate-400 mt-1 leading-normal">
-                        * يرجى إدخال رابط الـ Web App الخاص بك بعد نشره من إسكريبت جوجل لتتمكن من ترحيل وحفظ البيانات سحابياً في الشيت الخاص بك.
-                      </p>
-                    </div>
-
                     <div className="border border-amber-100 rounded-xl p-3 bg-amber-50/20 mt-2 flex flex-col gap-2">
                       <div>
                         <label className="block text-xs font-black text-amber-950 mb-1.5 flex items-center gap-1.5">
@@ -3749,7 +3747,7 @@ export default function ManageTab({
                         <button
                           type="button"
                           onClick={handleBulkSyncToGoogleSheets}
-                          disabled={syncStatus === 'syncing' || !googleSheetsUrl || googleSheetsUrl === "ضع_رابط_الاسكريبت_الخاص_بك_هنا"}
+                          disabled={syncStatus === 'syncing'}
                           className="w-full bg-[#1A365D] text-white border-transparent border border-indigo-700 rounded-lg py-2.5 text-xs font-bold hover:bg-[#1A365D] active:scale-95 transition-all cursor-pointer disabled:opacity-50 flex items-center justify-center gap-2"
                         >
                           <Send className="h-4 w-4" />
@@ -3786,7 +3784,7 @@ export default function ManageTab({
                   </p>
                   <button
                     onClick={handleBulkSyncToGoogleSheets}
-                    disabled={syncStatus === 'syncing' || !googleSheetsUrl || googleSheetsUrl === "ضع_رابط_الاسكريبت_الخاص_بك_هنا"}
+                    disabled={syncStatus === 'syncing'}
                     className="whitespace-nowrap bg-[#1A365D] text-white border-transparent border border-indigo-700 rounded-lg py-2 px-4 text-xs font-bold hover:bg-indigo-900 active:scale-95 transition-all cursor-pointer disabled:opacity-50 flex items-center justify-center gap-1.5"
                   >
                     <Send className="h-4 w-4" />

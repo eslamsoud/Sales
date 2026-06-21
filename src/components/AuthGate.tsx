@@ -20,7 +20,7 @@ const decodePass = (p: string) => {
   } catch (e) { return p; } // إذا كانت محفوظة بالنظام القديم
 };
 
-export default function AuthGate({ usersList, customersList = [], onUpdateUsers, onSuccess }: AuthGateProps) {
+export default function AuthGate({ usersList, customersList = [], onUpdateUsers, onSuccess, onForceSync }: AuthGateProps) {
   const [phone, setPhone] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');

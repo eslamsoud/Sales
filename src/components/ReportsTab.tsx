@@ -190,15 +190,35 @@ function ReportsTabComponent({
       return true;
     };
 
-    const { carriedOverDebt, extraPayments } = (() => {
-      try {
-        const cod = parseFloat(localStorage.getItem('factory_carried_debt_sys') || '0');
-        const ep = JSON.parse(localStorage.getItem('factory_extra_payments_sys') || '[]');
-        return { carriedOverDebt: isNaN(cod) ? 0 : cod, extraPayments: Array.isArray(ep) ? ep : [] };
-      } catch {
-        return { carriedOverDebt: 0, extraPayments: [] as any[] };
-      }
-    })();
+    const currentDelegateKey = isManager 
+      ? (delegateFilter === 'all' ? 'default' : delegateFilter) 
+      : (currentUser?.phone || 'default');
+
+    let carriedOverDebt = parseFloat(localStorage.getItem(`factory_carried_debt_sys_${currentDelegateKey}`) || 'NaN');
+    if (isNaN(carriedOverDebt)) {
+      carriedOverDebt = parseFloat(localStorage.getItem('factory_carried_debt_sys') || '0');
+    }
+
+    const extraPayments = delFilteredExpenses
+      .filter(e => e.category === 'سداد للمصنع' || e.type === 'factory_payment')
+      .map(e => {
+        let notes = e.description;
+        let appliedToCarriedDebt = 0;
+        if (e.description && e.description.startsWith('{')) {
+          try {
+            const parsed = JSON.parse(e.description);
+            notes = parsed.notes || '';
+            appliedToCarriedDebt = parsed.appliedToCarriedDebt || 0;
+          } catch (err) {}
+        }
+        return {
+          id: e.id,
+          amount: e.amount,
+          date: e.date,
+          notes,
+          appliedToCarriedDebt
+        };
+      });
 
     return {
       invoices: delFilteredInvoices.filter(i => isWithinPeriod(i.date)),
@@ -209,7 +229,7 @@ function ReportsTabComponent({
       allExtraPayments: extraPayments || [], // for cumulative calculation
       carriedOverDebt
     };
-  }, [delFilteredInvoices, delFilteredExpenses, delFilteredTrips, delFilteredFactoryLoads, periodFilter]);
+  }, [delFilteredInvoices, delFilteredExpenses, delFilteredTrips, delFilteredFactoryLoads, periodFilter, delegateFilter, isManager, currentUser]);
 
   // 1. Calculations based on period filter
   const salesStats = React.useMemo(() => {
