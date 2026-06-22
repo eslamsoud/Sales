@@ -3,5 +3,8 @@
   "rewrites": [
     { "source": "/api/(.*)", "destination": "/api/index.ts" },
     { "source": "/(.*)", "destination": "/index.html" }
-  ]
+  ],
+  "env": {
+    "VITE_GOOGLE_SHEETS_URL": "https://script.google.com/macros/s/AKfycbyGO8Af8bOs75_F-ttOFqR8WjVj4l9IW1IJGgDqLEu1rGdbky3balgRpZUdo03r6Kla/exec"
+  }
 }

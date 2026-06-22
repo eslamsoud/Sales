@@ -7,7 +7,7 @@ import { Product, Customer, Invoice, Expense, FactoryLoad, AppSettings } from '.
 
 export const DEFAULT_SETTINGS: AppSettings = {
   defaultDiscounts: [1, 1.25, 1.5],
-  googleSheetsUrl: 'https://script.google.com/macros/s/AKfycbyGO8Af8bOs75_F-ttOFqR8WjVj4l9IW1IJGgDqLEu1rGdbky3balgRpZUdo03r6Kla/exec',
+  googleSheetsUrl: '',
   currency: 'ج.م',
   aiPitchGuidelines: '',
   workAreas: []

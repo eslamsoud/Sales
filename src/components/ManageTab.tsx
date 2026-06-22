@@ -33,7 +33,8 @@ import {
   Printer,
   Download,
   Cloud,
-  FileText
+  FileText,
+  Link
 } from 'lucide-react';
 import { showToast } from '../utils/toast';
 import html2canvas from 'html2canvas';
@@ -79,7 +80,14 @@ class MapErrorBoundary extends React.Component<{children: React.ReactNode}, { ha
 
 const APP_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyGO8Af8bOs75_F-ttOFqR8WjVj4l9IW1IJGgDqLEu1rGdbky3balgRpZUdo03r6Kla/exec";
 
-const getSafeScriptUrl = () => {
+const getSafeScriptUrl = (overrideUrl?: string) => {
+  try {
+    if (overrideUrl && overrideUrl.trim().startsWith('http')) return overrideUrl.trim();
+  } catch(e) {}
+  try {
+    const envUrl = import.meta.env.VITE_GOOGLE_SHEETS_URL?.trim();
+    if (envUrl && envUrl.startsWith('http')) return envUrl;
+  } catch(e) {}
   return APP_SCRIPT_URL;
 };
 
@@ -141,10 +149,12 @@ function getSafePhone(val) {
   return p;
 }
 
-// 1. استقبال طلب الجلب والتحديث الميداني ثنائي الاتجاه
+// 1. استقبال طلب الجلب والتحديث الميداني ثنائي الاتجاه مع نظام التخزين المؤقت (Cache)
 function doGet(e) {
   try {
-    // 🔗 إذا لم تظهر الشيتات، ضع رابط ملف الإكسيل (جوجل شيت) الخاص بك بين علامتي التنصيص بالأسفل:
+    // 🚨 مهم جداً: هذا السكربت يجب أن يكون مرفقاً (مثبّتاً) في ملف Google Sheets نفسه
+    // إذا أردت استخدام ملف شيت مختلف، ضع رابط الملف بين علامتي التنصيص بالأسفل بدلاً من "":
+    // مثال: var SHEET_URL = "https://docs.google.com/spreadsheets/d/1ABCxyz...";
     var SHEET_URL = ""; 
     var ss;
     try {
@@ -152,6 +162,16 @@ function doGet(e) {
     } catch(err) {
       ss = SpreadsheetApp.getActiveSpreadsheet();
     }
+
+    // ☁️ نظام التخزين المؤقت (Cache) لتقليل استهلاك quota وتسريع القراءة
+    var cache = CacheService.getScriptCache();
+    var cacheKey = "doGet_result_" + ss.getId();
+    var cached = cache.get(cacheKey);
+    if (cached) {
+      return ContentService.createTextOutput(cached)
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+
     var result = {};
     
     // دالة مساعدة وأكثر أماناً لجلب البيانات وتخطي الأخطاء
@@ -315,6 +335,13 @@ function doGet(e) {
       };
     });
 
+    // تخزين مؤقت في الذاكرة لمدة 15 ثانية (ما عدا لو أرسل المستخدم t=cache-bust)
+    var tParam = e && e.parameter && e.parameter.t ? String(e.parameter.t) : '';
+    var shouldCache = !tParam;
+    if (shouldCache) {
+      try { cache.put(cacheKey, JSON.stringify(result), 15); } catch(ce) {}
+    }
+
     return ContentService.createTextOutput(JSON.stringify(result))
       .setMimeType(ContentService.MimeType.JSON);
   } catch(error) {
@@ -331,9 +358,10 @@ function doPost(e) {
   } catch(logErr) {}
   var lock = LockService.getScriptLock();
   try {
-    lock.waitLock(15000);
+    lock.waitLock(45000);
     
-    // 🔗 إذا لم تظهر الشيتات، ضع رابط ملف الإكسيل (جوجل شيت) الخاص بك بين علامتي التنصيص بالأسفل:
+    // 🚨 مهم جداً: هذا السكربت يجب أن يكون مرفقاً بملف Google Sheets نفسه
+    // مثال: var SHEET_URL = "https://docs.google.com/spreadsheets/d/1ABCxyz...";
     var SHEET_URL = ""; 
     var ss;
     try {
@@ -446,6 +474,7 @@ function doPost(e) {
 
       sheet.clearContents();
       sheet.getRange(1, 1, finalData.length, headers.length).setValues(finalData);
+      SpreadsheetApp.flush(); // 🚨 ضمان كتابة البيانات فوراً قبل أي عملية تالية
       sheet.getRange(1, 1, 1, headers.length).setFontWeight("bold").setBackground(headerColor || "#cfe2f3");
       
       if (sheet.getFilter() === null) {
@@ -583,6 +612,9 @@ function doPost(e) {
         [data.metadata ? data.metadata.syncedAt : new Date().toISOString(), data.metadata ? (Number(data.metadata.totalSales) || 0) : 0, data.metadata ? (Number(data.metadata.totalExpenses) || 0) : 0, data.metadata ? (Number(data.metadata.netProfit) || 0) : 0]
       ]);
       summarySheet.getRange(1, 1, 1, 4).setFontWeight("bold").setBackground("#d9ead3");
+      
+      // مسح الذاكرة المؤقتة (Cache) لضمان قراءة أحدث البيانات في المرة القادمة
+      try { CacheService.getScriptCache().remove("doGet_result_" + ss.getId()); } catch(ce) {}
       
       return ContentService.createTextOutput(JSON.stringify({"status": "success"}))
         .setMimeType(ContentService.MimeType.JSON);
@@ -1095,7 +1127,7 @@ export default function ManageTab({
   const [aiName, setAiName] = useState(settings.aiName || 'المستشار الميداني');
   const [aiVoiceURI, setAiVoiceURI] = useState(settings.aiVoiceURI || '');
   const [googleMapsApiKey, setGoogleMapsApiKey] = useState(() => settings.googleMapsApiKey || localStorage.getItem('GMP_API_KEY_FALLBACK') || '');
-  const [googleSheetsUrl, _setGoogleSheetsUrl] = useState(() => APP_SCRIPT_URL);
+  const [googleSheetsUrl, setGoogleSheetsUrl] = useState(() => settings.googleSheetsUrl || '');
   const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
 
   // Sync settings when they are loaded from IndexedDB asynchronously
@@ -1110,7 +1142,7 @@ export default function ManageTab({
       if (settings.aiName) setAiName(settings.aiName);
       if (settings.aiVoiceURI) setAiVoiceURI(settings.aiVoiceURI);
       if (settings.googleMapsApiKey) setGoogleMapsApiKey(settings.googleMapsApiKey);
-      // googleSheetsUrl is fixed to APP_SCRIPT_URL, no need to sync from settings
+      if (settings.googleSheetsUrl) setGoogleSheetsUrl(settings.googleSheetsUrl);
     }
   }, [settings]);
 
@@ -1464,6 +1496,16 @@ export default function ManageTab({
       }, 1500);
     }, 500);
   };
+  const handleSaveSheetsUrl = () => {
+    onUpdateSettings({
+      ...settings,
+      googleSheetsUrl: googleSheetsUrl.trim()
+    });
+    showToast('✓ تم حفظ رابط Google Sheets!');
+    setTimeout(() => {
+      onTriggerSync?.('تحديث رابط الشيت');
+    }, 500);
+  };
   const salesStats = React.useMemo(() => {
     const totalSales = invoices.reduce((sum, inv) => sum + inv.totalAfterDiscount, 0);
     const totalSpent = (expenses || []).filter(e => e.type !== 'revenue').reduce((sum, exp) => sum + exp.amount, 0);
@@ -1483,6 +1525,7 @@ export default function ManageTab({
       showToast('⚠️ خطأ: لم يتم دمج رابط مزامنة جوجل في ملفات النظام.');
       return;
     }
+    const startTime = performance.now();
     setSyncStatus('syncing');
     showToast('☁️ جاري الرفع والمزامنة السحابية...');
     try {
@@ -1641,7 +1684,7 @@ export default function ManageTab({
           dateAdded: l.dateAdded || ''
         }))
       };
-      const resp = await fetch(googleSheetsUrl.trim(), {
+      const resp = await fetch(getSafeScriptUrl(googleSheetsUrl), {
         method: 'POST',
         mode: 'cors',
         headers: {
@@ -1665,9 +1708,16 @@ export default function ManageTab({
       if (respData.status !== 'success') {
         throw new Error(respData.message || "Sync failed");
       }
+      const elapsed = Math.round(performance.now() - startTime);
+
       setSyncStatus('done');
       showToast('✓ تم الحفظ والمزامنة السحابية بنجاح!');
       
+      try {
+        localStorage.setItem('last_sync_timestamp_sys', new Date().toISOString());
+        localStorage.setItem('last_sync_duration_ms_sys', String(elapsed));
+      } catch(e) {}
+
       try {
         const currentDeleted = JSON.parse(localStorage.getItem('deleted_records_sys') || '[]');
         const remainingDeleted = currentDeleted.filter((id: string) => !deletedIds.includes(id));
@@ -1681,9 +1731,11 @@ export default function ManageTab({
       onAddSyncLog({
         delegateName: currentUser?.name || 'مجهول',
         status: 'success',
-        actionDesc: 'مزامنة شاملة من مدير النظام'
+        actionDesc: 'مزامنة شاملة من مدير النظام',
+        durationMs: elapsed
       });
     } catch (err: any) {
+      const elapsed = Math.round(performance.now() - startTime);
       setSyncStatus('fail');
       showToast("⚠️ فشل الحفظ: تأكد من الاتصال بالإنترنت.");
       
@@ -1691,7 +1743,8 @@ export default function ManageTab({
         delegateName: currentUser?.name || 'مجهول',
         status: 'fail',
         actionDesc: 'فشل مزامنة شاملة من المدير',
-        details: err.message || 'خطأ غير معروف'
+        details: err.message || 'خطأ غير معروف',
+        durationMs: elapsed
       });
     }
   };
@@ -3651,7 +3704,71 @@ export default function ManageTab({
                     </button>
                   </div>
                 ) : (
-                  <div className="flex flex-col gap-3.5 text-right animate-fade-in">
+                    <div className="flex flex-col gap-3.5 text-right animate-fade-in">
+                    <div className="border border-amber-100 rounded-xl p-3 bg-amber-50/20 flex flex-col gap-2">
+                      <div>
+                        <label className="block text-xs font-black text-amber-950 mb-1.5 flex items-center gap-1.5">
+                          <Link className="h-4 w-4 text-[#DD6B20]" />
+                          رابط Google Sheets (اختياري - اتركه فارغاً لاستخدام الرابط الافتراضي):
+                        </label>
+                        <input
+                          type="text"
+                          placeholder="https://script.google.com/macros/s/.../exec"
+                          value={googleSheetsUrl}
+                          onChange={(e) => setGoogleSheetsUrl(e.target.value)}
+                          className="w-full bg-[#FFFFFF] border border-slate-200 rounded-lg p-2.5 text-xs font-semibold focus:ring-2 focus:ring-amber-500 ltr text-left"
+                          dir="ltr"
+                        />
+                        <p className="text-[10px] text-slate-400 mt-1 leading-normal">
+                          * إذا تركته فارغاً، سيعمل التطبيق بالرابط المسجل في متغيّرات البيئة (Vercel) أو الرابط الثابت تلقائياً.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleSaveSheetsUrl}
+                        className="bg-amber-100 hover:bg-amber-200 text-amber-900 border border-amber-200 rounded-lg py-1.5 px-3 text-xs font-black transition-all cursor-pointer self-start"
+                      >
+                        حفظ رابط Google Sheets 💾
+                      </button>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        showToast('🔍 جاري اختبار الاتصال...');
+                        const testUrl = getSafeScriptUrl(googleSheetsUrl);
+                        const startTest = performance.now();
+                        try {
+                          const resp = await fetch(testUrl + '?t=' + Date.now(), {
+                            method: 'GET',
+                            cache: 'no-store',
+                            mode: 'cors',
+                            redirect: 'follow'
+                          });
+                          const elapsed = Math.round(performance.now() - startTest);
+                          if (!resp.ok) {
+                            showToast(`❌ فشل الاتصال: ${resp.status} (${elapsed}ms)`);
+                            return;
+                          }
+                          const text = await resp.text();
+                          let data;
+                          try { data = JSON.parse(text); } catch(e) { data = null; }
+                          if (data && data.error) {
+                            showToast(`❌ خطأ من السيرفر: ${data.error} (${elapsed}ms)`);
+                          } else if (data && (data.users || data.products || data.customers)) {
+                            showToast(`✅ اتصال ناجح! تم استلام البيانات (${elapsed}ms)`);
+                          } else {
+                            showToast(`⚠️ تم الاتصال لكن استجابة غير متوقعة (${elapsed}ms)`);
+                          }
+                        } catch(err: any) {
+                          const elapsed = Math.round(performance.now() - startTest);
+                          showToast(`❌ فشل الاتصال: ${err.message?.substring(0, 80) || 'خطأ غير معروف'} (${elapsed}ms)`);
+                        }
+                      }}
+                      className="bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 rounded-lg py-1.5 px-3 text-xs font-black transition-all cursor-pointer self-start"
+                    >
+                      اختبار الاتصال 🔍
+                    </button>
+
                     <div className="border border-amber-100 rounded-xl p-3 bg-amber-50/20 mt-2 flex flex-col gap-2">
                       <div>
                         <label className="block text-xs font-black text-amber-950 mb-1.5 flex items-center gap-1.5">

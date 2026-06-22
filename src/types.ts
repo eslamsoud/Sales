@@ -109,6 +109,7 @@ export interface SyncLog {
   status: 'success' | 'fail';
   actionDesc: string;
   details?: string;
+  durationMs?: number;
 }
 
 export interface Trip {

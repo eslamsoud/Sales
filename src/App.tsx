@@ -37,11 +37,18 @@ import { Lock, Fingerprint, Key, ShieldAlert, CheckCircle, RefreshCw, Save, LogO
 import { confirmDialog } from './utils/confirm';
 import { idbGet, idbSet } from './utils/idb';
 
-const getSafeScriptUrl = () => {
+const getSafeScriptUrl = (overrideUrl?: string) => {
+  try {
+    if (overrideUrl && overrideUrl.trim().startsWith('http')) return overrideUrl.trim();
+  } catch(e) {}
+  try {
+    const envUrl = import.meta.env.VITE_GOOGLE_SHEETS_URL?.trim();
+    if (envUrl && envUrl.startsWith('http')) return envUrl;
+  } catch(e) {}
   return "https://script.google.com/macros/s/AKfycbyGO8Af8bOs75_F-ttOFqR8WjVj4l9IW1IJGgDqLEu1rGdbky3balgRpZUdo03r6Kla/exec";
 };
 
-async function fetchWithTimeout(resource: string, options: any = {}, timeout = 12000) {
+async function fetchWithTimeout(resource: string, options: any = {}, timeout = 35000) {
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), timeout);
   try {
@@ -94,6 +101,8 @@ export default function App() {
   const [lockError, setLockError] = useState('');
   const [lockFailedAttempts, setLockFailedAttempts] = useState(0);
   const [isHeaderSyncing, setIsHeaderSyncing] = useState(false);
+  const [lastSyncInfo, setLastSyncInfo] = useState<string>('');
+  const [lastSyncFailed, setLastSyncFailed] = useState(false);
 
   const handleUnlockWithPassword = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
@@ -583,7 +592,7 @@ export default function App() {
           idbSet('last_auto_backup_sys', exportData);
           
           // إرسال النسخة الاحتياطية إلى Google Drive مباشرة بدلاً من تحميلها على الهاتف فقط
-          const scriptUrl = getSafeScriptUrl();
+          const scriptUrl = getSafeScriptUrl(settings.googleSheetsUrl);
           fetchWithTimeout(scriptUrl.trim(), {
             method: 'POST',
             mode: 'cors',
@@ -605,12 +614,69 @@ export default function App() {
     }
   }, [isDbLoaded, currentUser, products, customers, invoices, expenses, trips, factoryLoads, settings, usersList, syncLogs]);
 
-  // التهيئة الصامتة (Silent Provisioning) من السيرفر للأجهزة الجديدة بدون تدخل المستخدم
+  // السحب الصامت من السحابة عند بدء التشغيل لضمان حصول الجميع على آخر البيانات
   useEffect(() => {
-    if (usersList.length <= 1) {
+    if (isDbLoaded) {
       handleUpdateData(true); // جلب البيانات صامتاً في الخلفية
     }
-  }, []);
+  }, [isDbLoaded]);
+
+  // ⏱️ سحب دوري صامت كل 5 دقائق للتأكد من حصول المناديب على آخر التحديثات من الشيت
+  useEffect(() => {
+    if (!isDbLoaded || !currentUser) return;
+    const interval = setInterval(() => {
+      handleUpdateData(true);
+    }, 5 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, [isDbLoaded, currentUser?.phone]);
+
+  // 🔄 إعادة محاولة تلقائية للمزامنة الفاشلة (إذا فشلت المزامنة، نعيد المحاولة بعد 30 ثانية)
+  useEffect(() => {
+    if (!isDbLoaded || !currentUser) return;
+    const checkAndRetry = () => {
+      try {
+        const failTime = localStorage.getItem('last_sync_fail_time_sys');
+        if (failTime) {
+          const elapsed = Date.now() - Number(failTime);
+          if (elapsed > 30000 && elapsed < 120000) {
+            syncAllDataToGoogle(true);
+          }
+        }
+        const pullFailTime = localStorage.getItem('last_pull_fail_time_sys');
+        if (pullFailTime) {
+          const elapsed = Date.now() - Number(pullFailTime);
+          if (elapsed > 60000 && elapsed < 180000) {
+            handleUpdateData(true);
+          }
+        }
+      } catch(e) {}
+    };
+    const retryInterval = setInterval(checkAndRetry, 30000);
+    return () => clearInterval(retryInterval);
+  }, [isDbLoaded, currentUser?.phone]);
+
+  // تحديث مؤشر آخر مزامنة من localStorage كل 15 ثانية
+  useEffect(() => {
+    const updateSyncInfo = () => {
+      try {
+        const lastSync = localStorage.getItem('last_sync_timestamp_sys');
+        const lastPull = localStorage.getItem('last_pull_timestamp_sys');
+        const latest = lastSync && lastPull ? (lastSync > lastPull ? lastSync : lastPull) : (lastSync || lastPull || '');
+        if (latest) {
+          const diffMs = Date.now() - new Date(latest).getTime();
+          const diffMin = Math.floor(diffMs / 60000);
+          if (diffMin < 1) setLastSyncInfo('الآن');
+          else if (diffMin < 60) setLastSyncInfo(`منذ ${diffMin} د`);
+          else setLastSyncInfo(`منذ ${Math.floor(diffMin / 60)} س`);
+        } else {
+          setLastSyncInfo('');
+        }
+      } catch(e) {}
+    };
+    updateSyncInfo();
+    const syncInfoInterval = setInterval(updateSyncInfo, 15000);
+    return () => clearInterval(syncInfoInterval);
+  }, [isDbLoaded]);
 
   const scrollToTop = () => {
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -1009,7 +1075,9 @@ export default function App() {
   };
 
   async function syncAllDataToGoogle(silent = false): Promise<boolean> {
-    const scriptUrl = getSafeScriptUrl();
+    const scriptUrl = getSafeScriptUrl(settings.googleSheetsUrl);
+    const requestId = `sync-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
+    const startTime = performance.now();
 
     try {
       setIsHeaderSyncing(true);
@@ -1249,7 +1317,7 @@ export default function App() {
           'Content-Type': 'text/plain;charset=utf-8',
         },
         body: JSON.stringify(payload)
-      });
+      }, 60000);
 
       if (!response.ok) {
         throw new Error(`استجابة غير صالحة من السيرفر: ${response.status}`);
@@ -1271,13 +1339,26 @@ export default function App() {
         throw new Error(responseData.message || 'فشلت عملية المزامنة السحابية.');
       }
 
+      const elapsed = Math.round(performance.now() - startTime);
+
       setSyncLogs(prev => [{
         id: Date.now().toString() + Math.random(),
         timestamp: new Date().toISOString(),
         delegateName: currentUser?.name || 'مجهول',
         status: 'success',
-        actionDesc: 'مزامنة شاملة للبيانات'
+        actionDesc: 'مزامنة شاملة للبيانات',
+        durationMs: elapsed
       }, ...prev]);
+
+      // تحديث وقت آخر مزامنة ناجحة
+      setLastSyncFailed(false);
+      const syncTimestamp = new Date().toISOString();
+      const diffMin = Math.floor((Date.now() - new Date(syncTimestamp).getTime()) / 60000);
+      setLastSyncInfo('الآن');
+      try {
+        localStorage.setItem('last_sync_timestamp_sys', syncTimestamp);
+        localStorage.setItem('last_sync_duration_ms_sys', String(elapsed));
+      } catch(e) {}
 
       // 🚨 إزالة المحذوفات التي تم رفعها بنجاح فقط لتجنب ضياع الحذوفات التي تمت أثناء الرفع (منع التعارض)
       try {
@@ -1295,14 +1376,25 @@ export default function App() {
     } catch (err: any) {
       console.error('Error syncing to Google Sheets from header:', err);
       
+      const elapsed = Math.round(performance.now() - startTime);
+
+      setLastSyncFailed(true);
+      setLastSyncInfo('فشل');
+
       setSyncLogs(prev => [{
         id: Date.now().toString() + Math.random(),
         timestamp: new Date().toISOString(),
         delegateName: currentUser?.name || 'مجهول',
         status: 'fail',
         actionDesc: 'فشل مزامنة شاملة',
-        details: err.message
+        details: err.message,
+        durationMs: elapsed
       }, ...prev]);
+
+      // تخزين وقت الفشل للمحاولة لاحقاً
+      try {
+        localStorage.setItem('last_sync_fail_time_sys', Date.now().toString());
+      } catch(e) {}
 
       setIsHeaderSyncing(false);
       return false;
@@ -1501,7 +1593,8 @@ export default function App() {
   }
 
   async function handleUpdateData(isSilent = false) {
-    const scriptUrl = getSafeScriptUrl();
+    const scriptUrl = getSafeScriptUrl(settings.googleSheetsUrl);
+    const startTime = performance.now();
 
     let shouldReplace = false;
     if (!isSilent) {
@@ -1992,6 +2085,13 @@ export default function App() {
             window.location.reload();
           }, 1500);
         }
+
+        // تخزين وقت آخر سحب ناجح
+        const elapsed = Math.round(performance.now() - startTime);
+        try {
+          localStorage.setItem('last_pull_timestamp_sys', new Date().toISOString());
+          localStorage.setItem('last_pull_duration_ms_sys', String(elapsed));
+        } catch(e) {}
       } else {
         if (!isSilent) {
           showToast("تنبيه: تم إرجاع بيانات فارغة ومخالفة للنموذج. جاري التحميل العادي...");
@@ -2001,7 +2101,14 @@ export default function App() {
         }
       }
     } catch (err: any) {
-      console.error("Refresh GET error from Google Sheets App:", err);
+      const elapsed = Math.round(performance.now() - startTime);
+      setLastSyncFailed(true);
+      setLastSyncInfo('فشل');
+      console.error("Refresh GET error from Google Sheets App after " + elapsed + "ms:", err);
+      try {
+        localStorage.setItem('last_pull_fail_time_sys', Date.now().toString());
+        localStorage.setItem('last_pull_duration_ms_sys', String(elapsed));
+      } catch(e) {}
       if (!isSilent) {
         showToast("تعذر جلب البيانات السحابية. تعمل الآن على الذاكرة المحلية للتطبيق ✓");
         setTimeout(() => {
@@ -2052,6 +2159,19 @@ export default function App() {
                 >
                   <span>المدير العام</span>
                 </button>
+                {lastSyncInfo && (
+                  <span className="text-[10px] text-cyan-300 font-bold" title="آخر مزامنة مع السحابة">
+                    ☁️ {lastSyncInfo}
+                  </span>
+                )}
+                {isHeaderSyncing && (
+                  <span className="text-[10px] text-amber-300 font-bold animate-pulse">جاري المزامنة...</span>
+                )}
+                {lastSyncFailed && !isHeaderSyncing && (
+                  <span className="text-[10px] text-red-400 mr-2 font-bold" title="فشلت المزامنة - سيتم إعادة المحاولة تلقائياً">
+                    ⚠️ فشل
+                  </span>
+                )}
                 {simulatedDelegate && (
                   <span className="bg-amber-500/15 text-amber-300 text-[10.5px] font-black px-2 py-1 rounded-xl border border-amber-500/30">
                     مراقبة حية: {simulatedDelegate.name} 👀
@@ -2062,6 +2182,19 @@ export default function App() {
               <span>
                 {currentUser.phone === '01281391552' ? 'نائب المدير: ' : 'المندوب: '}
                 <span className="text-amber-200">{currentUser.name}</span>
+                {lastSyncInfo && (
+                  <span className="text-[10px] text-cyan-300 mr-2 font-bold" title="آخر مزامنة مع السحابة">
+                    ☁️ {lastSyncInfo}
+                  </span>
+                )}
+                {isHeaderSyncing && (
+                  <span className="text-[10px] text-amber-300 mr-2 font-bold animate-pulse">جاري المزامنة...</span>
+                )}
+                {lastSyncFailed && !isHeaderSyncing && (
+                  <span className="text-[10px] text-red-400 mr-2 font-bold" title="فشلت المزامنة - سيتم إعادة المحاولة تلقائياً">
+                    ⚠️ فشل
+                  </span>
+                )}
               </span>
             )}
           </span>
@@ -2083,7 +2216,7 @@ export default function App() {
           )}
 
           <button
-            onClick={handleUpdateData}
+            onClick={() => handleUpdateData(false)}
             title="جلب وتحديث البيانات من السحابة ⬇️"
             className="flex items-center justify-center bg-white/10 hover:bg-white/20 active:scale-95 transition-all text-white p-2 rounded-xl border border-white/5 cursor-pointer shadow-sm"
             style={{ width: '36px', height: '33px' }}
