@@ -808,6 +808,12 @@ export default function App() {
     }
   };
 
+  const checkDeleteAllowed = (): boolean => {
+    const allowed = currentUser?.role === 'owner' || currentUser?.phone === '01228466613' || (currentUser?.customRoleName && (currentUser.customRoleName.includes('نائب المدير') || currentUser.customRoleName.includes('مشرف عام')));
+    if (!allowed) showToast('⚠️ الحذف متاح فقط للمدير ونائب المدير.');
+    return allowed;
+  };
+
   // دالة مساعدة لتنظيف وتوحيد أسماء المناديب ومنع الفوضى في الشيت
   const getCleanDelegateName = (user: UserAuth | null | undefined) => {
     if (!user || !user.name) return 'مجهول';
@@ -859,6 +865,7 @@ export default function App() {
 
   const handleDeleteProduct = (id: string) => {
     if (checkSimulationGuard()) return;
+    if (!checkDeleteAllowed()) return;
     setProducts(products.filter(p => p.id !== id));
     markAsDeleted(id);
     promptForSync('حذف صنف من المصنع');
@@ -866,6 +873,7 @@ export default function App() {
 
   const handleDeleteAllProducts = () => {
     if (checkSimulationGuard()) return;
+    if (!checkDeleteAllowed()) return;
     products.forEach(p => markAsDeleted(p.id));
     setProducts([]);
     setFactoryLoads([]);
@@ -886,6 +894,7 @@ export default function App() {
 
   const handleDeleteLoad = (id: string) => {
     if (checkSimulationGuard()) return;
+    if (!checkDeleteAllowed()) return;
     setFactoryLoads(factoryLoads.filter(load => load.id !== id));
     markAsDeleted(id);
     promptForSync('حذف حمولة من السيارة');
@@ -937,6 +946,7 @@ export default function App() {
 
   const handleDeleteCustomer = (id: string) => {
     if (checkSimulationGuard()) return;
+    if (!checkDeleteAllowed()) return;
     setCustomers(customers.filter(c => c.id !== id));
     markAsDeleted(id);
     promptForSync('حذف عميل من الدليل');
@@ -988,6 +998,7 @@ export default function App() {
 
   const handleDeleteInvoice = (id: string) => {
     if (checkSimulationGuard()) return;
+    if (!checkDeleteAllowed()) return;
     const invToDelete = invoices.find(i => i.id === id);
     if (invToDelete) {
       setCustomers(prev => prev.map(c => 
@@ -1020,6 +1031,7 @@ export default function App() {
 
   const handleDeleteExpense = (id: string) => {
     if (checkSimulationGuard()) return;
+    if (!checkDeleteAllowed()) return;
     setExpenses(expenses.filter(e => e.id !== id));
     markAsDeleted(id);
     promptForSync('حذف مصروف/إيراد');
@@ -1052,6 +1064,7 @@ export default function App() {
 
   const handleDeleteTrip = (id: string) => {
     if (checkSimulationGuard()) return;
+    if (!checkDeleteAllowed()) return;
     setTrips(trips.filter(t => t.id !== id));
     markAsDeleted(id);
     promptForSync('حذف مشوار أو تحرك');
@@ -1162,9 +1175,11 @@ export default function App() {
       const netProfit = totalCollected + extraRevenues + totalTripsCollectedProfit - totalPaidToFactoryInPeriod - totalSpent;
 
       let deletedIds: string[] = [];
-      try {
-        deletedIds = JSON.parse(localStorage.getItem('deleted_records_sys') || '[]');
-      } catch(e) {}
+      if (isSyncManager) {
+        try {
+          deletedIds = JSON.parse(localStorage.getItem('deleted_records_sys') || '[]');
+        } catch(e) {}
+      }
 
       const customersMap = new Map(currentCustomers.map(c => [String(c.id).trim(), c]));
       const productsMap = new Map(currentProducts.map(p => [String(p.id).trim(), p]));
@@ -1682,9 +1697,12 @@ export default function App() {
       }
 
       let deletedIds: string[] = [];
-      try {
-        deletedIds = JSON.parse(localStorage.getItem('deleted_records_sys') || '[]');
-      } catch(e) {}
+      const isUserAdmin = currentUser?.role === 'owner' || currentUser?.phone === '01228466613' || (currentUser?.customRoleName && (currentUser.customRoleName.includes('نائب المدير') || currentUser.customRoleName.includes('مشرف عام')));
+      if (isUserAdmin) {
+        try {
+          deletedIds = JSON.parse(localStorage.getItem('deleted_records_sys') || '[]');
+        } catch(e) {}
+      }
 
       let finalProducts = products;
       let finalCustomers = customers;

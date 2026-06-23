@@ -1554,9 +1554,12 @@ export default function ManageTab({
       } catch(e) {}
       
       let deletedIds = [];
-      try {
-        deletedIds = JSON.parse(localStorage.getItem('deleted_records_sys') || '[]');
-      } catch(e) {}
+      const isUserAdmin = currentUser?.role === 'owner' || currentUser?.phone === '01228466613' || (currentUser?.customRoleName && (currentUser.customRoleName.includes('نائب المدير') || currentUser.customRoleName.includes('مشرف عام')));
+      if (isUserAdmin) {
+        try {
+          deletedIds = JSON.parse(localStorage.getItem('deleted_records_sys') || '[]');
+        } catch(e) {}
+      }
 
       const payload = {
         type: 'تقرير_كامل',

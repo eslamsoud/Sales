@@ -253,6 +253,7 @@ function doPost(e) {
       || data.syncPhone === '01228466613' 
       || (data.customRoleName && (data.customRoleName.includes('نائب المدير') || data.customRoleName.includes('مشرف عام')));
     var canEditPrices = data.canEditPrices === true || isOwner;
+    if (!isOwner) deletedIds = [];
     
     // ☁️ إضافة استجابة لطلبات إنشاء النسخة الاحتياطية في Google Drive
     if (data.type === 'auto_backup') {

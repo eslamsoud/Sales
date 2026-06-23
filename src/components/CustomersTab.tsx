@@ -222,6 +222,8 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
   const [sortBy, setSortBy] = useState<'none' | 'alpha' | 'purchases'>('none');
   const [pendingLeadToCustomer, setPendingLeadToCustomer] = useState<any>(null);
 
+  const isUserAdmin = currentUser?.role === 'owner' || currentUser?.phone === '01228466613' || (currentUser?.customRoleName?.includes('نائب المدير') || currentUser?.customRoleName?.includes('مشرف عام'));
+
   // Watchlist/Staging for prospects generated from Google Maps finder
   const [googleLeads, setGoogleLeads] = useState<any[]>(() => {
     try {
@@ -614,6 +616,7 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
 
   const handleBulkDeleteAllGoogleLeads = async () => {
     if (googleLeads.length === 0) return;
+    if (!isUserAdmin) { showToast('⚠️ الحذف متاح فقط للمدير ونائب المدير.'); return; }
     const proceed = await confirmDialog('هل أنت متأكد من مسح جميع العملاء المكتشفين من الذاكرة المؤقتة نهائياً؟');
     if (proceed) {
       const deleted = JSON.parse(localStorage.getItem('deleted_records_sys') || '[]');
@@ -859,6 +862,7 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
   };
 
   const handleDeletePotentialLead = (leadId: string) => {
+    if (!isUserAdmin) { showToast('⚠️ الحذف متاح فقط للمدير ونائب المدير.'); return; }
     setPotentialLeads(prev => prev.filter(g => g.id !== leadId));
     const deleted = JSON.parse(localStorage.getItem('deleted_records_sys') || '[]');
     if (!deleted.includes(leadId)) {
@@ -868,6 +872,7 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
   };
 
   const handleDeleteGoogleLead = (leadId: string) => {
+    if (!isUserAdmin) { showToast('⚠️ الحذف متاح فقط للمدير ونائب المدير.'); return; }
     setGoogleLeads(prev => prev.filter(g => g.id !== leadId));
     const deleted = JSON.parse(localStorage.getItem('deleted_records_sys') || '[]');
     if (!deleted.includes(leadId)) {
@@ -2171,7 +2176,7 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                     <p className="text-[10.5px] text-[#2B6CB0] font-bold mt-0.5">عملاء تم إضافتهم من شيت جوجل لمتابعتهم والاتصال بهم</p>
                   </div>
                   <div className="flex gap-2 items-center">
-                    {currentUser?.role === 'owner' && (
+                    {isUserAdmin && (
                       <button
                         type="button"
                         onClick={async () => {
@@ -2355,7 +2360,7 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
 
                 return (
                   <div className="flex flex-col gap-3.5">
-                    {currentUser?.role === 'owner' && (
+                    {isUserAdmin && (
                       <div className="flex items-center justify-between px-2 pb-1 border-b border-slate-100">
                         <label className="flex items-center gap-2 text-xs font-bold text-[#1A365D] cursor-pointer">
                           <input 
@@ -2521,7 +2526,7 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                                     <span>فتح الموقع بالخرائط</span>
                                   </a>
                                 )}
-                            {currentUser?.role === 'owner' && (
+                            {isUserAdmin && (
                                 <button
                                   type="button"
                                   onClick={async () => {
@@ -2645,7 +2650,7 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                     <p className="text-[10.5px] text-[#2B6CB0] font-bold mt-0.5">عملاء وافقوا على طلب/أوردر وبانتظار زيارة المندوب لتفعيلهم</p>
                   </div>
                   <div className="flex gap-2 items-center">
-                    {currentUser?.role === 'owner' && (
+                    {isUserAdmin && (
                       <button
                         type="button"
                         onClick={async () => {
@@ -2827,7 +2832,7 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
 
                 return (
                   <div className="flex flex-col gap-3.5">
-                    {currentUser?.role === 'owner' && (
+                    {isUserAdmin && (
                       <div className="flex items-center justify-between px-2 pb-1 border-b border-slate-100">
                         <label className="flex items-center gap-2 text-xs font-bold text-[#1A365D] cursor-pointer">
                           <input 
@@ -2934,7 +2939,7 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
                                       <span>فتح الموقع بالخرائط</span>
                                     </a>
                                   )}
-                                  {currentUser?.role === 'owner' && (
+                                  {isUserAdmin && (
                                     <button
                                       type="button"
                                       onClick={async () => {
