@@ -120,6 +120,23 @@ function ReportsTabComponent({
   // Filter states
   const [periodFilter, setPeriodFilter] = useState<'all' | 'today' | 'week' | 'month'>('all');
   const [inventoryMatchFilter, setInventoryMatchFilter] = useState<'daily' | 'weekly' | 'monthly'>('daily');
+  const [expandedGroups, setExpandedGroups] = React.useState<Set<string>>(new Set());
+  const [expandedDetails, setExpandedDetails] = React.useState<Set<string>>(new Set());
+  const toggleGroup = (gKey: string) => {
+    setExpandedGroups(prev => {
+      const next = new Set(prev);
+      if (next.has(gKey)) next.delete(gKey); else next.add(gKey);
+      return next;
+    });
+  };
+  const toggleDetail = (productId: string, weightId: string) => {
+    const key = `${productId}-${weightId}`;
+    setExpandedDetails(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  };
   const [delegateFilter, setDelegateFilter] = useState<string>('all');
 
   // Activity filter states
@@ -379,6 +396,179 @@ function ReportsTabComponent({
     if (!txt) txt = '0 عبوة';
     return isNeg ? `-(${txt})` : txt;
   };
+
+  // Helper functions for inventory matching section
+  const getNormalizedDateKey = (dateStr: string): string => {
+    if (!dateStr || typeof dateStr !== 'string') return 'تاريخ غير محدد';
+    try {
+      const parts = dateStr.split(/[ T]/);
+      if (parts[0]) {
+        const dateOnly = parts[0];
+        if (/^\d{4}-\d{2}-\d{2}$/.test(dateOnly)) {
+          return dateOnly;
+        }
+        const d = new Date(dateStr);
+        if (!isNaN(d.getTime())) {
+          const dd = String(d.getDate()).padStart(2, '0');
+          const mm = String(d.getMonth() + 1).padStart(2, '0');
+          const yyyy = d.getFullYear();
+          return `${yyyy}-${mm}-${dd}`;
+        }
+      }
+      return dateStr;
+    } catch (e) {
+      return dateStr;
+    }
+  };
+
+  const getArabicDayName = (date: Date) => {
+    const days = ['الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
+    const day = date.getDay();
+    return isNaN(day) ? 'يوم غير محدد' : days[day];
+  };
+
+  const formatDateString = (dateStr: string) => {
+    try {
+      const d = new Date(dateStr);
+      if (isNaN(d.getTime())) return dateStr;
+      const dayName = getArabicDayName(d);
+      const day = String(d.getDate()).padStart(2, '0');
+      const month = String(d.getMonth() + 1).padStart(2, '0');
+      const year = d.getFullYear();
+      return `${dayName} - ${year}/${month}/${day}`;
+    } catch (e) {
+      return dateStr;
+    }
+  };
+
+  const getWeekRangeLabel = (dateStr: string): string => {
+    try {
+      const d = new Date(dateStr);
+      if (isNaN(d.getTime())) return 'أسبوع غير محدد';
+      const dayOfWeek = d.getDay();
+      const diffToSaturday = dayOfWeek === 6 ? 0 : -(dayOfWeek + 1);
+      const satDate = new Date(d.getTime() + diffToSaturday * 24 * 60 * 60 * 1000);
+      const friDate = new Date(satDate.getTime() + 6 * 24 * 60 * 60 * 1000);
+      const formatDate = (date: Date) => {
+        const dd = String(date.getDate()).padStart(2, '0');
+        const mm = String(date.getMonth() + 1).padStart(2, '0');
+        const yyyy = date.getFullYear();
+        return `${yyyy}/${mm}/${dd}`;
+      };
+      return `الأسبوع: من ${formatDate(satDate)} إلى ${formatDate(friDate)}`;
+    } catch (e) {
+      return 'أسبوع غير محدد';
+    }
+  };
+
+  const getMonthLabel = (dateStr: string): string => {
+    try {
+      const d = new Date(dateStr);
+      if (isNaN(d.getTime())) return 'شهر غير محدد';
+      const months = [
+        'يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو',
+        'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر'
+      ];
+      return `شهر ${months[d.getMonth()]} ${d.getFullYear()}`;
+    } catch (e) {
+      return 'شهر غير محدد';
+    }
+  };
+
+  const getGroupKey = (dateStr: string): string => {
+    const norm = getNormalizedDateKey(dateStr);
+    if (norm === 'تاريخ غير محدد') return norm;
+    if (inventoryMatchFilter === 'daily') {
+      return norm;
+    } else if (inventoryMatchFilter === 'weekly') {
+      return getWeekRangeLabel(norm);
+    } else {
+      return getMonthLabel(norm);
+    }
+  };
+
+  // Pre-compute inventory matching data to prevent UI freeze
+  const inventoryData = React.useMemo(() => {
+    const allDates = new Set<string>();
+    delFilteredFactoryLoads.forEach(l => {
+      if (l && l.date) allDates.add(getNormalizedDateKey(l.date));
+    });
+    delFilteredInvoices.forEach(inv => {
+      if (inv && inv.date) allDates.add(getNormalizedDateKey(inv.date));
+    });
+
+    const groupsMap: Record<string, {
+      loads: FactoryLoad[];
+      invItems: { productId: string; weightId?: string; quantity: number }[];
+    }> = {};
+
+    allDates.forEach(dStr => {
+      const gKey = getGroupKey(dStr);
+      if (!groupsMap[gKey]) {
+        groupsMap[gKey] = { loads: [], invItems: [] };
+      }
+    });
+
+    delFilteredFactoryLoads.forEach(l => {
+      if (!l.date) return;
+      const gKey = getGroupKey(l.date);
+      if (groupsMap[gKey]) {
+        groupsMap[gKey].loads.push(l);
+      }
+    });
+
+    delFilteredInvoices.forEach(inv => {
+      if (!inv.date) return;
+      const gKey = getGroupKey(inv.date);
+      if (groupsMap[gKey]) {
+        if (Array.isArray(inv.items)) {
+          inv.items.forEach(item => {
+            if (item) groupsMap[gKey].invItems.push({
+              productId: item.productId,
+              weightId: item.weightId,
+              quantity: item.quantity
+            });
+          });
+        }
+      }
+    });
+
+    const sortedGroupKeys = Object.keys(groupsMap).sort((a, b) => b.localeCompare(a));
+
+    const productsMap = new Map(products.map(p => [String(p.id).trim(), p]));
+
+    const processedGroups = sortedGroupKeys.map(gKey => {
+      const groupData = groupsMap[gKey];
+      const activeCombinations: { productId: string; weightId?: string }[] = [];
+      const seen = new Set<string>();
+
+      groupData.loads.forEach(l => {
+        const comboKey = `${l.productId}-${l.weightId || ''}`;
+        if (!seen.has(comboKey)) {
+          seen.add(comboKey);
+          activeCombinations.push({ productId: l.productId, weightId: l.weightId });
+        }
+      });
+
+      groupData.invItems.forEach(item => {
+        const comboKey = `${item.productId}-${item.weightId || ''}`;
+        if (!seen.has(comboKey)) {
+          seen.add(comboKey);
+          activeCombinations.push({ productId: item.productId, weightId: item.weightId });
+        }
+      });
+
+      const visibleCombinations = activeCombinations.filter(combo =>
+        productsMap.has(String(combo.productId).trim())
+      );
+
+      const groupHeaderLabel = inventoryMatchFilter === 'daily' ? formatDateString(gKey) : gKey;
+
+      return { gKey, groupData, activeCombinations: visibleCombinations, groupHeaderLabel };
+    });
+
+    return { processedGroups, productsMap };
+  }, [delFilteredFactoryLoads, delFilteredInvoices, inventoryMatchFilter, products]);
 
   const delegateDebtBreakdown = React.useMemo(() => {
     const map: Record<string, number> = {};
@@ -1953,238 +2143,73 @@ function ReportsTabComponent({
 
 
 
-        {activeSubTab === "inventory" && (() => {
-          // Helper lists and functions for date calculation
-          const getNormalizedDateKey = (dateStr: string): string => {
-            if (!dateStr || typeof dateStr !== 'string') return 'تاريخ غير محدد';
-            try {
-              const parts = dateStr.split(/[ T]/);
-              if (parts[0]) {
-                const dateOnly = parts[0];
-                if (/^\d{4}-\d{2}-\d{2}$/.test(dateOnly)) {
-                  return dateOnly;
-                }
-                const d = new Date(dateStr);
-                if (!isNaN(d.getTime())) {
-                  const dd = String(d.getDate()).padStart(2, '0');
-                  const mm = String(d.getMonth() + 1).padStart(2, '0');
-                  const yyyy = d.getFullYear();
-                  return `${yyyy}-${mm}-${dd}`;
-                }
-              }
-              return dateStr;
-            } catch (e) {
-              return dateStr;
-            }
-          };
-
-          const getArabicDayName = (date: Date) => {
-            const days = ['الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
-            const day = date.getDay();
-            return isNaN(day) ? 'يوم غير محدد' : days[day];
-          };
-
-          const formatDateString = (dateStr: string) => {
-            try {
-              const d = new Date(dateStr);
-              if (isNaN(d.getTime())) return dateStr;
-              const dayName = getArabicDayName(d);
-              const day = String(d.getDate()).padStart(2, '0');
-              const month = String(d.getMonth() + 1).padStart(2, '0');
-              const year = d.getFullYear();
-              return `${dayName} - ${year}/${month}/${day}`;
-            } catch (e) {
-              return dateStr;
-            }
-          };
-
-          const getWeekRangeLabel = (dateStr: string): string => {
-            try {
-              const d = new Date(dateStr);
-              if (isNaN(d.getTime())) return 'أسبوع غير محدد';
-              const dayOfWeek = d.getDay(); // 0 is Sunday, 6 is Saturday
-              const diffToSaturday = dayOfWeek === 6 ? 0 : -(dayOfWeek + 1);
-              const satDate = new Date(d.getTime() + diffToSaturday * 24 * 60 * 60 * 1000);
-              const friDate = new Date(satDate.getTime() + 6 * 24 * 60 * 60 * 1000);
-              
-              const formatDate = (date: Date) => {
-                const dd = String(date.getDate()).padStart(2, '0');
-                const mm = String(date.getMonth() + 1).padStart(2, '0');
-                const yyyy = date.getFullYear();
-                return `${yyyy}/${mm}/${dd}`;
-              };
-              return `الأسبوع: من ${formatDate(satDate)} إلى ${formatDate(friDate)}`;
-            } catch (e) {
-              return 'أسبوع غير محدد';
-            }
-          };
-
-          const getMonthLabel = (dateStr: string): string => {
-            try {
-              const d = new Date(dateStr);
-              if (isNaN(d.getTime())) return 'شهر غير محدد';
-              const months = [
-                'يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو',
-                'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر'
-              ];
-              return `شهر ${months[d.getMonth()]} ${d.getFullYear()}`;
-            } catch (e) {
-              return 'شهر غير محدد';
-            }
-          };
-
-          const getGroupKey = (dateStr: string): string => {
-            const norm = getNormalizedDateKey(dateStr);
-            if (norm === 'تاريخ غير محدد') return norm;
-            
-            if (inventoryMatchFilter === 'daily') {
-              return norm;
-            } else if (inventoryMatchFilter === 'weekly') {
-              return getWeekRangeLabel(norm);
-            } else {
-              return getMonthLabel(norm);
-            }
-          };
-
-          // 1. Gather all activity dates
-          const allDates = new Set<string>();
-          delFilteredFactoryLoads.forEach(l => {
-            if (l && l.date) allDates.add(getNormalizedDateKey(l.date));
-          });
-          delFilteredInvoices.forEach(inv => {
-            if (inv && inv.date) allDates.add(getNormalizedDateKey(inv.date));
-          });
-
-          // 2. Map group values
-          const groupsMap: Record<string, {
-            loads: FactoryLoad[];
-            invItems: { productId: string; weightId?: string; quantity: number }[];
-          }> = {};
-
-          allDates.forEach(dStr => {
-            const gKey = getGroupKey(dStr);
-            if (!groupsMap[gKey]) {
-              groupsMap[gKey] = { loads: [], invItems: [] };
-            }
-          });
-
-          delFilteredFactoryLoads.forEach(l => {
-            if (!l.date) return;
-            const gKey = getGroupKey(l.date);
-            if (groupsMap[gKey]) {
-              groupsMap[gKey].loads.push(l);
-            }
-          });
-
-          delFilteredInvoices.forEach(inv => {
-            if (!inv.date) return;
-            const gKey = getGroupKey(inv.date);
-            if (groupsMap[gKey]) {
-              if (Array.isArray(inv.items)) {
-                inv.items.forEach(item => {
-                  if (item) groupsMap[gKey].invItems.push({
-                    productId: item.productId,
-                    weightId: item.weightId,
-                    quantity: item.quantity
-                  });
-                });
-              }
-            }
-          });
-
-          // Sort descending newest first
-          const sortedGroupKeys = Object.keys(groupsMap).sort((a, b) => {
-            return b.localeCompare(a);
-          });
-
-          return (
-            <div className="flex flex-col gap-4 animate-fade-in text-right" dir="rtl">
-              {/* Header card */}
-              <div className="bg-[#FFFFFF] p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col gap-3">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
-                  <div className="flex items-center gap-2">
-                    <Check className="h-5 w-5 text-indigo-600" />
-                    <h3 className="font-black text-[#1A365D] text-sm">
-                      مراجعة ومطابقة المخزون مع المندوب
-                    </h3>
-                  </div>
-
-                  {/* Switch filter */}
-                  <div className="flex bg-[#F1F5F9] p-1 rounded-xl self-start sm:self-auto select-none">
-                    <button
-                      onClick={() => setInventoryMatchFilter('daily')}
-                      className={`px-4 py-1.5 text-xs font-black rounded-lg transition-all cursor-pointer ${inventoryMatchFilter === 'daily' ? 'bg-white text-indigo-900 shadow-xs' : 'text-slate-500 hover:text-slate-800'}`}
-                    >
-                      يومي
-                    </button>
-                    <button
-                      onClick={() => setInventoryMatchFilter('weekly')}
-                      className={`px-4 py-1.5 text-xs font-black rounded-lg transition-all cursor-pointer ${inventoryMatchFilter === 'weekly' ? 'bg-white text-indigo-900 shadow-xs' : 'text-slate-500 hover:text-slate-800'}`}
-                    >
-                      أسبوعي
-                    </button>
-                    <button
-                      onClick={() => setInventoryMatchFilter('monthly')}
-                      className={`px-4 py-1.5 text-xs font-black rounded-lg transition-all cursor-pointer ${inventoryMatchFilter === 'monthly' ? 'bg-white text-indigo-900 shadow-xs' : 'text-slate-500 hover:text-slate-800'}`}
-                    >
-                      شهري
-                    </button>
-                  </div>
+        {activeSubTab === "inventory" && (
+          <div className="flex flex-col gap-4 animate-fade-in text-right" dir="rtl">
+            {/* Header card */}
+            <div className="bg-[#FFFFFF] p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col gap-3">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
+                <div className="flex items-center gap-2">
+                  <Check className="h-5 w-5 text-indigo-600" />
+                  <h3 className="font-black text-[#1A365D] text-sm">
+                    مراجعة ومطابقة المخزون مع المندوب
+                  </h3>
                 </div>
 
-                {/* Subtitle / label */}
-                <div className="text-xs text-[#2B6CB0] font-black bg-indigo-50/50 p-2.5 rounded-xl border border-indigo-100/50 flex items-center gap-1.5 self-start">
-                  <Activity className="h-4 w-4 text-indigo-600 shrink-0" />
-                  <span>طريقة العرض الحالية للمطابقة: {inventoryMatchFilter === 'daily' ? 'المطابقة اليومية التفصيلية' : inventoryMatchFilter === 'weekly' ? 'المطابقة الأسبوعية المجمعة' : 'المطابقة الشهرية الشاملة'}</span>
+                {/* Switch filter */}
+                <div className="flex bg-[#F1F5F9] p-1 rounded-xl self-start sm:self-auto select-none">
+                  <button
+                    onClick={() => setInventoryMatchFilter('daily')}
+                    className={`px-4 py-1.5 text-xs font-black rounded-lg transition-all cursor-pointer ${inventoryMatchFilter === 'daily' ? 'bg-white text-indigo-900 shadow-xs' : 'text-slate-500 hover:text-slate-800'}`}
+                  >
+                    يومي
+                  </button>
+                  <button
+                    onClick={() => setInventoryMatchFilter('weekly')}
+                    className={`px-4 py-1.5 text-xs font-black rounded-lg transition-all cursor-pointer ${inventoryMatchFilter === 'weekly' ? 'bg-white text-indigo-900 shadow-xs' : 'text-slate-500 hover:text-slate-800'}`}
+                  >
+                    أسبوعي
+                  </button>
+                  <button
+                    onClick={() => setInventoryMatchFilter('monthly')}
+                    className={`px-4 py-1.5 text-xs font-black rounded-lg transition-all cursor-pointer ${inventoryMatchFilter === 'monthly' ? 'bg-white text-indigo-900 shadow-xs' : 'text-slate-500 hover:text-slate-800'}`}
+                  >
+                    شهري
+                  </button>
                 </div>
+              </div>
 
-                <div className="flex flex-col gap-6 max-h-[75vh] overflow-y-auto pr-1 mt-2">
-                  {sortedGroupKeys.length === 0 ? (
-                    <div className="text-center text-slate-400 py-12 text-xs">لا توجد أي حمولات أو مبيعات مسجلة في النظام بعد.</div>
-                  ) : (
-                    sortedGroupKeys.map(gKey => {
-                      const groupData = groupsMap[gKey];
-                      
-                      // 1. Gather all product+weight combinations in this group
-                      const activeCombinations: { productId: string; weightId?: string }[] = [];
-                      const seen = new Set<string>();
+              {/* Subtitle / label */}
+              <div className="text-xs text-[#2B6CB0] font-black bg-indigo-50/50 p-2.5 rounded-xl border border-indigo-100/50 flex items-center gap-1.5 self-start">
+                <Activity className="h-4 w-4 text-indigo-600 shrink-0" />
+                <span>طريقة العرض الحالية للمطابقة: {inventoryMatchFilter === 'daily' ? 'المطابقة اليومية التفصيلية' : inventoryMatchFilter === 'weekly' ? 'المطابقة الأسبوعية المجمعة' : 'المطابقة الشهرية الشاملة'}</span>
+              </div>
 
-                      groupData.loads.forEach(l => {
-                        const comboKey = `${l.productId}-${l.weightId || ''}`;
-                        if (!seen.has(comboKey)) {
-                          seen.add(comboKey);
-                          activeCombinations.push({ productId: l.productId, weightId: l.weightId });
-                        }
-                      });
+              <div className="flex flex-col gap-6 max-h-[75vh] overflow-y-auto pr-1 mt-2">
+                {inventoryData.processedGroups.length === 0 ? (
+                  <div className="text-center text-slate-400 py-12 text-xs">لا توجد أي حمولات أو مبيعات مسجلة في النظام بعد.</div>
+                ) : (
+                  inventoryData.processedGroups.map(({ gKey, groupData, activeCombinations, groupHeaderLabel }) => {
+                    if (activeCombinations.length === 0) return null;
 
-                      groupData.invItems.forEach(item => {
-                        const comboKey = `${item.productId}-${item.weightId || ''}`;
-                        if (!seen.has(comboKey)) {
-                          seen.add(comboKey);
-                          activeCombinations.push({ productId: item.productId, weightId: item.weightId });
-                        }
-                      });
+                    return (
+                      <div key={gKey} className="border border-slate-200 rounded-2xl overflow-hidden shadow-sm bg-white">
+                        {/* Group header bar — clickable to toggle */}
+                        <button
+                          onClick={() => toggleGroup(gKey)}
+                          className="w-full bg-slate-100 px-4 py-2.5 border-b border-slate-200 text-slate-800 flex justify-between items-center cursor-pointer hover:bg-slate-200 transition-colors"
+                        >
+                          <span className="font-extrabold text-xs text-[#1A365D] flex items-center gap-2">
+                            {expandedGroups.has(gKey) ? '🔽' : '▶️'} {groupHeaderLabel}
+                          </span>
+                          <span className="bg-[#1A365D] text-white text-[9px] font-black px-2 py-0.5 rounded-full">
+                            {activeCombinations.length} أصناف نشطة
+                          </span>
+                        </button>
 
-                      if (activeCombinations.length === 0) return null;
-
-                      // Display header
-                      const groupHeaderLabel = inventoryMatchFilter === 'daily' ? formatDateString(gKey) : gKey;
-
-                      return (
-                        <div key={gKey} className="border border-slate-200 rounded-2xl overflow-hidden shadow-sm bg-white">
-                          {/* Group header bar */}
-                          <div className="bg-slate-100 dark:bg-slate-700 px-4 py-2.5 border-b border-slate-200 text-slate-800 dark:text-slate-100 flex justify-between items-center">
-                            <span className="font-extrabold text-xs text-[#1A365D] dark:text-indigo-300">
-                              {groupHeaderLabel}
-                            </span>
-                            <span className="bg-[#1A365D] text-white text-[9px] font-black px-2 py-0.5 rounded-full">
-                              {activeCombinations.length} أصناف نشطة
-                            </span>
-                          </div>
-
+                        {expandedGroups.has(gKey) && (
                           <div className="p-3 flex flex-col gap-4 bg-slate-50/50">
                             {activeCombinations.map(combo => {
-                              const product = products.find(p => String(p.id).trim() === String(combo.productId).trim());
+                              const product = inventoryData.productsMap.get(String(combo.productId).trim());
                               if (!product) return null;
 
                               const activeWeights = getProductWeightsFallback(product);
@@ -2203,80 +2228,134 @@ function ReportsTabComponent({
                               const remainingUnits = groupLoaded - groupSold;
                               const unitsPerCarton = weight.unitsPerCarton || 12;
 
+                              const detailKey = `${product.id}-${weight.id}`;
+                              const isDetailOpen = expandedDetails.has(detailKey);
+
+                              // Filtered loads/invoices for this combo
+                              const detailLoads = groupData.loads.filter(l =>
+                                String(l.productId).trim() === String(product.id).trim() &&
+                                String(l.weightId).trim() === String(weight.id).trim()
+                              );
+                              const detailInvItems = groupData.invItems.filter(item =>
+                                String(item.productId).trim() === String(product.id).trim() &&
+                                String(item.weightId).trim() === String(weight.id).trim()
+                              );
+
                               return (
-                                <div key={`${product.id}-${weight.id}`} className="p-3 bg-white border border-slate-200 rounded-xl flex flex-col gap-2.5 transition-all shadow-xs hover:border-slate-350">
-                                  {/* Item metadata with custom color */}
-                                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-1.5">
-                                    <div className="flex items-center gap-1.5">
-                                      <span className="font-extrabold text-emerald-800 text-xs">
-                                        {product.name}
-                                      </span>
-                                      <span className="bg-emerald-50 text-emerald-800 px-2.5 py-0.5 rounded-md text-[9px] font-black border border-emerald-100 whitespace-nowrap">
-                                        {weight.size}
-                                      </span>
+                                <div key={detailKey}>
+                                  <div
+                                    onClick={() => toggleDetail(product.id, weight.id)}
+                                    className="p-3 bg-white border border-slate-200 rounded-xl flex flex-col gap-2.5 transition-all shadow-xs hover:border-slate-350 cursor-pointer"
+                                  >
+                                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-1.5">
+                                      <div className="flex items-center gap-1.5">
+                                        <span className="font-extrabold text-emerald-800 text-xs">
+                                          {isDetailOpen ? '🔽' : '▶️'} {product.name}
+                                        </span>
+                                        <span className="bg-emerald-50 text-emerald-800 px-2.5 py-0.5 rounded-md text-[9px] font-black border border-emerald-100 whitespace-nowrap">
+                                          {weight.size}
+                                        </span>
+                                      </div>
+                                      
+                                      <div className={`px-2.5 py-1 rounded-lg text-[10px] font-black border flex items-center justify-center gap-1 flex-wrap text-center ${
+                                        remainingUnits < 0 
+                                          ? 'bg-rose-50 text-rose-700 border-rose-200' 
+                                          : remainingUnits === 0
+                                            ? 'bg-slate-100 text-slate-700 border-slate-200'
+                                            : 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                                      }`}>
+                                        <span>الرصيد المتبقي:</span>
+                                        <span dir="rtl" className="font-bold">
+                                          {formatCartonsAr(remainingUnits, unitsPerCarton)}
+                                        </span>
+                                      </div>
                                     </div>
-                                    
-                                    <div className={`px-2.5 py-1 rounded-lg text-[10px] font-black border flex items-center justify-center gap-1 flex-wrap text-center ${
-                                      remainingUnits < 0 
-                                        ? 'bg-rose-50 text-rose-700 border-rose-200' 
-                                        : remainingUnits === 0
-                                          ? 'bg-slate-100 text-slate-700 border-slate-200'
-                                          : 'bg-emerald-50 text-emerald-800 border-emerald-200'
-                                    }`}>
-                                      <span>الرصيد المتبقي:</span>
-                                      <span dir="rtl" className="font-bold">
-                                        {formatCartonsAr(remainingUnits, unitsPerCarton)}
-                                      </span>
-                                    </div>
-                                  </div>
 
-                                  {/* Quantities columns */}
-                                  <div className="grid grid-cols-3 gap-2 text-center text-[10px]">
-                                    <div className="bg-indigo-50/50 border border-indigo-100 rounded-lg py-1.5 px-2 flex flex-col gap-0.5">
-                                      <span className="font-semibold text-indigo-900">المحمل</span>
-                                      <span className="font-black text-indigo-700 font-mono text-xs" dir="rtl">
-                                        {formatCartonsAr(groupLoaded, unitsPerCarton)}
-                                      </span>
+                                    <div className="grid grid-cols-3 gap-2 text-center text-[10px]">
+                                      <div className="bg-indigo-50/50 border border-indigo-100 rounded-lg py-1.5 px-2 flex flex-col gap-0.5">
+                                        <span className="font-semibold text-indigo-900">المحمل</span>
+                                        <span className="font-black text-indigo-700 font-mono text-xs" dir="rtl">
+                                          {formatCartonsAr(groupLoaded, unitsPerCarton)}
+                                        </span>
+                                      </div>
+                                      <div className="bg-teal-50/50 border border-teal-100 rounded-lg py-1.5 px-2 flex flex-col gap-0.5">
+                                        <span className="font-semibold text-teal-900">المبيعات</span>
+                                        <span className="font-black text-teal-700 font-mono text-xs" dir="rtl">
+                                          {formatCartonsAr(groupSold, unitsPerCarton)}
+                                        </span>
+                                      </div>
+                                      <div className={`rounded-lg py-1.5 px-2 flex flex-col gap-0.5 border ${
+                                        remainingUnits < 0 
+                                          ? 'bg-rose-50 border-rose-200 text-rose-800' 
+                                          : remainingUnits === 0
+                                            ? 'bg-slate-100 border-slate-200 text-slate-700'
+                                            : 'bg-emerald-50 border-emerald-100 text-emerald-800'
+                                      }`}>
+                                        <span className="font-semibold">المتبقي</span>
+                                        <span className="font-black font-mono text-xs" dir="rtl">
+                                          {formatCartonsAr(remainingUnits, unitsPerCarton)}
+                                        </span>
+                                      </div>
                                     </div>
-                                    <div className="bg-teal-50/50 border border-teal-100 rounded-lg py-1.5 px-2 flex flex-col gap-0.5">
-                                      <span className="font-semibold text-teal-900">المبيعات</span>
-                                      <span className="font-black text-teal-700 font-mono text-xs" dir="rtl">
-                                        {formatCartonsAr(groupSold, unitsPerCarton)}
-                                      </span>
-                                    </div>
-                                    <div className={`rounded-lg py-1.5 px-2 flex flex-col gap-0.5 border ${
-                                      remainingUnits < 0 
-                                        ? 'bg-rose-50 border-rose-200 text-rose-800' 
-                                        : remainingUnits === 0
-                                          ? 'bg-slate-100 border-slate-200 text-slate-700'
-                                          : 'bg-emerald-50 border-emerald-100 text-emerald-800'
-                                    }`}>
-                                      <span className="font-semibold">المتبقي</span>
-                                      <span className="font-black font-mono text-xs" dir="rtl">
-                                        {formatCartonsAr(remainingUnits, unitsPerCarton)}
-                                      </span>
-                                    </div>
-                                  </div>
 
-                                  {remainingUnits < 0 && (
-                                    <div className="flex items-center justify-center gap-1.5 p-1 bg-rose-50 text-rose-700 rounded-lg border border-rose-100 text-[9px] font-black">
-                                      <ShieldAlert className="h-3.5 w-3.5 shrink-0" />
-                                      <span>عجز: المبيعات المسجلة تتجاوز الرصيد المحُمل للمندوب!</span>
-                                    </div>
-                                  )}
+                                    {remainingUnits < 0 && (
+                                      <div className="flex items-center justify-center gap-1.5 p-1 bg-rose-50 text-rose-700 rounded-lg border border-rose-100 text-[9px] font-black">
+                                        <ShieldAlert className="h-3.5 w-3.5 shrink-0" />
+                                        <span>عجز: المبيعات المسجلة تتجاوز الرصيد المحُمل للمندوب!</span>
+                                      </div>
+                                    )}
+
+                                    {/* Expanded Details */}
+                                    {isDetailOpen && (
+                                      <div className="border-t border-slate-200 pt-2.5 mt-1 flex flex-col gap-2">
+                                        {/* Loads details */}
+                                        <span className="text-[10px] font-black text-indigo-700 flex items-center gap-1">
+                                          📦 التحميلات ({detailLoads.length})
+                                        </span>
+                                        <div className="flex flex-col gap-1 max-h-32 overflow-y-auto">
+                                          {detailLoads.length === 0 ? (
+                                            <span className="text-[9px] text-slate-400 px-1">لا توجد تحميلات</span>
+                                          ) : (
+                                            detailLoads.map((l, li) => (
+                                              <div key={li} className="bg-indigo-50 p-1.5 rounded text-[9px] flex justify-between items-center">
+                                                <span className="text-slate-600">{new Date(l.date).toLocaleDateString('ar-EG')}</span>
+                                                <span className="font-bold text-indigo-800">{formatCartonsAr(l.quantity || 0, unitsPerCarton)}</span>
+                                              </div>
+                                            ))
+                                          )}
+                                        </div>
+
+                                        {/* Invoice details */}
+                                        <span className="text-[10px] font-black text-teal-700 flex items-center gap-1 mt-1">
+                                          🧾 المبيعات ({detailInvItems.length})
+                                        </span>
+                                        <div className="flex flex-col gap-1 max-h-32 overflow-y-auto">
+                                          {detailInvItems.length === 0 ? (
+                                            <span className="text-[9px] text-slate-400 px-1">لا توجد مبيعات</span>
+                                          ) : (
+                                            detailInvItems.map((item, ii) => (
+                                              <div key={ii} className="bg-teal-50 p-1.5 rounded text-[9px] flex justify-between items-center">
+                                                <span className="font-bold text-teal-800">{formatCartonsAr(item.quantity || 0, unitsPerCarton)}</span>
+                                              </div>
+                                            ))
+                                          )}
+                                        </div>
+                                      </div>
+                                    )}
+                                  </div>
                                 </div>
                               );
                             })}
                           </div>
-                        </div>
-                      );
-                    })
-                  )}
-                </div>
+                        )}
+                      </div>
+                    );
+                  })
+                )}
               </div>
             </div>
-          );
-        })()}
+          </div>
+        )}
 
 
 

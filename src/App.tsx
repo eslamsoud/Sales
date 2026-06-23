@@ -30,6 +30,7 @@ import ExpensesTab from './components/ExpensesTab';
 import ManageTab from './components/ManageTab';
 import ReportsTab from './components/ReportsTab';
 import InvoiceTab from './components/InvoiceTab';
+import DelegateDashboard from './components/DelegateDashboard';
 import AuthGate from './components/AuthGate';
 import AiChatAssistant from './components/AiChatAssistant';
 import Adduaa from './components/Adduaa';
@@ -250,6 +251,7 @@ export default function App() {
   const [simulatedDelegate, setSimulatedDelegate] = useState<UserAuth | null>(null);
   const [isDelegateSelectorOpen, setIsDelegateSelectorOpen] = useState<boolean>(false);
   const [simulationSearchQuery, setSimulationSearchQuery] = useState<string>('');
+  const [delegateMonitorTab, setDelegateMonitorTab] = useState<string | null>(null);
 
   const checkSimulationGuard = (): boolean => {
     if (simulatedDelegate) {
@@ -852,8 +854,6 @@ export default function App() {
   const handleDeleteProduct = (id: string) => {
     if (checkSimulationGuard()) return;
     setProducts(products.filter(p => p.id !== id));
-    // Also delete loads corresponding to it to preserve data honesty
-    setFactoryLoads(factoryLoads.filter(load => load.productId !== id));
     markAsDeleted(id);
     promptForSync('حذف صنف من المصنع');
   };
@@ -872,8 +872,8 @@ export default function App() {
     setFactoryLoads(prev => [...prev, { 
       ...newLoad, 
       id,
-      delegateName: getCleanDelegateName(currentUser),
-      delegatePhone: currentUser?.phone || ''
+      delegateName: newLoad.delegateName || getCleanDelegateName(currentUser),
+      delegatePhone: newLoad.delegatePhone || currentUser?.phone || ''
     }]);
     promptForSync('سحب/تنزيل حمولة مصنع');
   };
@@ -942,8 +942,8 @@ export default function App() {
     setInvoices(prev => [...prev, { 
       ...newInvoice, 
       id,
-      delegateName: getCleanDelegateName(currentUser),
-      delegatePhone: currentUser?.phone || ''
+      delegateName: newInvoice.delegateName || getCleanDelegateName(currentUser),
+      delegatePhone: newInvoice.delegatePhone || currentUser?.phone || ''
     }]);
 
     setCustomers(prev => prev.map(c => 
@@ -1025,8 +1025,8 @@ export default function App() {
     setTrips(prev => [...prev, { 
       ...newTrip, 
       id,
-      delegateName: getCleanDelegateName(currentUser),
-      delegatePhone: currentUser?.phone || ''
+      delegateName: newTrip.delegateName || getCleanDelegateName(currentUser),
+      delegatePhone: newTrip.delegatePhone || currentUser?.phone || ''
     }]);
 
     promptForSync('تسجيل مشوار/نقلية');
@@ -2120,10 +2120,10 @@ export default function App() {
 
   // Data Isolation Logic (عزل بيانات المناديب ما لم يكن المدير العام)
   const isManager = effectiveUser?.role === 'owner' || effectiveUser?.phone === '01228466613';
-  const filteredFactoryLoads = isManager ? factoryLoads : factoryLoads.filter(l => l.delegatePhone === effectiveUser?.phone || (l.delegateName && effectiveUser?.name && l.delegateName.includes(effectiveUser.name.replace(/ \(.*?\)/, '').trim())));
-  const filteredInvoices = isManager ? invoices : invoices.filter(i => i.delegatePhone === effectiveUser?.phone || (i.delegateName && effectiveUser?.name && i.delegateName.includes(effectiveUser.name.replace(/ \(.*?\)/, '').trim())));
-  const filteredExpenses = isManager ? expenses : expenses.filter(e => e.delegatePhone === effectiveUser?.phone || (e.delegateName && effectiveUser?.name && e.delegateName.includes(effectiveUser.name.replace(/ \(.*?\)/, '').trim())));
-  const filteredTrips = isManager ? trips : trips.filter(t => t.delegatePhone === effectiveUser?.phone || (t.delegateName && effectiveUser?.name && t.delegateName.includes(effectiveUser.name.replace(/ \(.*?\)/, '').trim())));
+  const filteredFactoryLoads = isManager ? factoryLoads : factoryLoads.filter(l => l.delegatePhone === effectiveUser?.phone || (l.delegateName && effectiveUser?.name && l.delegateName.includes(effectiveUser.name.replace(/\s*\(.*?\)/g, '').trim())));
+  const filteredInvoices = isManager ? invoices : invoices.filter(i => i.delegatePhone === effectiveUser?.phone || (i.delegateName && effectiveUser?.name && i.delegateName.includes(effectiveUser.name.replace(/\s*\(.*?\)/g, '').trim())));
+  const filteredExpenses = isManager ? expenses : expenses.filter(e => e.delegatePhone === effectiveUser?.phone || (e.delegateName && effectiveUser?.name && e.delegateName.includes(effectiveUser.name.replace(/\s*\(.*?\)/g, '').trim())));
+  const filteredTrips = isManager ? trips : trips.filter(t => t.delegatePhone === effectiveUser?.phone || (t.delegateName && effectiveUser?.name && t.delegateName.includes(effectiveUser.name.replace(/\s*\(.*?\)/g, '').trim())));
 
   const MAPS_LIBRARIES: any[] = ['places', 'geocoding', 'geometry'];
 
@@ -2284,6 +2284,7 @@ export default function App() {
             <button
               onClick={() => {
                 setSimulatedDelegate(null);
+                setDelegateMonitorTab(null);
                 showToast("تم الخروج والرجوع لصلاحيات المدير العام.");
               }}
               className="bg-[#1A365D] hover:bg-[#142A4A] text-white font-black text-[11px] px-3 py-1.5 rounded-xl transition-all shadow-md active:scale-95 cursor-pointer flex items-center gap-1"
@@ -2413,6 +2414,7 @@ export default function App() {
                               type="button"
                               onClick={() => {
                                 setSimulatedDelegate(null);
+                                setDelegateMonitorTab(null);
                                 showToast("تم الخروج والرجوع لصلاحيات المدير العام.");
                               }}
                               className="bg-red-600 hover:bg-red-700 text-white font-black text-[10px] px-3.5 py-1.5 rounded-xl transition-all shadow-sm cursor-pointer flex items-center gap-1 active:scale-95"
@@ -2448,7 +2450,133 @@ export default function App() {
       </AnimatePresence>
 
       <main className="flex-grow w-full">
-        {activeTab === 'dashboard' && effectiveUser && (
+        {/* Monitoring Mode: Delegate Dashboard or sub-tabs */}
+        {simulatedDelegate && !delegateMonitorTab && (
+          <DelegateDashboard
+            delegate={simulatedDelegate}
+            factoryLoads={filteredFactoryLoads}
+            invoices={filteredInvoices}
+            expenses={filteredExpenses}
+            trips={filteredTrips}
+            onNavigate={setActiveTab}
+            onExit={() => {
+              setSimulatedDelegate(null);
+              setDelegateMonitorTab(null);
+              showToast("تم الخروج والرجوع لصلاحيات المدير العام.");
+            }}
+            onViewLoads={() => setDelegateMonitorTab('loads')}
+            onViewInvoices={() => setDelegateMonitorTab('invoices')}
+            onViewExpenses={() => setDelegateMonitorTab('expenses')}
+            onViewTrips={() => setDelegateMonitorTab('trips')}
+            onViewCustomers={() => setDelegateMonitorTab('customers')}
+          />
+        )}
+
+        {simulatedDelegate && delegateMonitorTab === 'loads' && (
+          <FactoryTab
+            products={products}
+            factoryLoads={filteredFactoryLoads}
+            invoices={filteredInvoices}
+            trips={filteredTrips}
+            expenses={filteredExpenses}
+            onAddProduct={handleAddProduct}
+            onEditProduct={handleEditProduct}
+            onDeleteProduct={handleDeleteProduct}
+            onDeleteAllProducts={handleDeleteAllProducts}
+            onAddLoad={handleAddLoad}
+            onDeleteLoad={handleDeleteLoad}
+            onAddTrip={handleAddTrip}
+            onEditTrip={handleEditTrip}
+            onToggleTripCollected={handleToggleCollected}
+            onDeleteTrip={handleDeleteTrip}
+            onClearAllData={() => { handleResetDatabase(false); }}
+            onGoBack={() => setDelegateMonitorTab(null)}
+            permittedSubTabs={effectiveUser.permittedSubTabs}
+            canEditPrices={effectiveUser.canEditPrices !== false}
+            onAddExpense={handleAddExpense}
+            onDeleteExpense={handleDeleteExpense}
+            currentUser={effectiveUser}
+          />
+        )}
+
+        {simulatedDelegate && delegateMonitorTab === 'invoices' && (
+          <InvoiceTab
+            customers={customers}
+            products={products}
+            factoryLoads={filteredFactoryLoads}
+            invoices={filteredInvoices}
+            onAddInvoice={handleAddInvoice}
+            onUpdateInvoice={handleUpdateInvoice}
+            onDeleteInvoice={handleDeleteInvoice}
+            onGoBack={() => setDelegateMonitorTab(null)}
+            permittedSubTabs={effectiveUser.permittedSubTabs}
+            currentUser={effectiveUser}
+            usersList={usersList}
+            initialSubTab="archive"
+          />
+        )}
+
+        {simulatedDelegate && delegateMonitorTab === 'expenses' && (
+          <ExpensesTab
+            expenses={filteredExpenses}
+            onAddExpense={handleAddExpense}
+            onDeleteExpense={handleDeleteExpense}
+            onGoBack={() => setDelegateMonitorTab(null)}
+            initialSubTab="revenue"
+            summaryData={{
+              totalInvoiceAmount: filteredInvoices.reduce((s, i) => s + (i.totalAfterDiscount || 0), 0),
+              totalPaidAmount: filteredInvoices.reduce((s, i) => s + (i.paidAmount || 0), 0),
+              totalLoadCost: filteredFactoryLoads.reduce((s, l) => s + ((l.unitPrice || 0) * (l.quantity || 0)) + ((l.cartonPrice || 0) * (l.cartonsCount || 0)), 0),
+              totalExpenseAmount: filteredExpenses.filter(e => e.type !== 'revenue').reduce((s, e) => s + (e.amount || 0), 0),
+              totalRevenueAmount: filteredExpenses.filter(e => e.type === 'revenue').reduce((s, e) => s + (e.amount || 0), 0),
+              totalTripAmount: filteredTrips.reduce((s, t) => s + (t.price || 0), 0),
+            }}
+          />
+        )}
+
+        {simulatedDelegate && delegateMonitorTab === 'trips' && (
+          <FactoryTab
+            products={products}
+            factoryLoads={filteredFactoryLoads}
+            invoices={filteredInvoices}
+            trips={filteredTrips}
+            expenses={filteredExpenses}
+            onAddProduct={handleAddProduct}
+            onEditProduct={handleEditProduct}
+            onDeleteProduct={handleDeleteProduct}
+            onDeleteAllProducts={handleDeleteAllProducts}
+            onAddLoad={handleAddLoad}
+            onDeleteLoad={handleDeleteLoad}
+            onAddTrip={handleAddTrip}
+            onEditTrip={handleEditTrip}
+            onToggleTripCollected={handleToggleCollected}
+            onDeleteTrip={handleDeleteTrip}
+            onClearAllData={() => { handleResetDatabase(false); }}
+            onGoBack={() => setDelegateMonitorTab(null)}
+            permittedSubTabs={effectiveUser.permittedSubTabs}
+            canEditPrices={effectiveUser.canEditPrices !== false}
+            onAddExpense={handleAddExpense}
+            onDeleteExpense={handleDeleteExpense}
+            currentUser={effectiveUser}
+          />
+        )}
+
+        {simulatedDelegate && delegateMonitorTab === 'customers' && (
+          <CustomersTab
+            customers={customers}
+            onAddCustomer={handleAddCustomer}
+            onEditCustomer={handleEditCustomer}
+            onDeleteCustomer={handleDeleteCustomer}
+            onGoBack={() => setDelegateMonitorTab(null)}
+            settings={settings}
+            permittedSubTabs={effectiveUser.permittedSubTabs}
+            currentUser={effectiveUser}
+            googleMapsApiKey={activeKey}
+          />
+        )}
+
+        {/* Regular mode: existing tabs */}
+        {!simulatedDelegate && activeTab === 'dashboard' && effectiveUser && (
           <Dashboard
             products={products}
             factoryLoads={filteredFactoryLoads}
@@ -2460,7 +2588,7 @@ export default function App() {
           />
         )}
 
-        {activeTab === 'factory' && effectiveUser && effectiveUser.permittedTabs.includes('factory') && (
+        {!simulatedDelegate && activeTab === 'factory' && effectiveUser && effectiveUser.permittedTabs.includes('factory') && (
           <FactoryTab
             products={products}
             factoryLoads={filteredFactoryLoads}
@@ -2489,7 +2617,7 @@ export default function App() {
           />
         )}
 
-        {activeTab === 'customers' && effectiveUser && effectiveUser.permittedTabs.includes('customers') && (
+        {!simulatedDelegate && activeTab === 'customers' && effectiveUser && effectiveUser.permittedTabs.includes('customers') && (
           <CustomersTab
             customers={customers}
             onAddCustomer={handleAddCustomer}
@@ -2503,7 +2631,7 @@ export default function App() {
           />
         )}
 
-        {activeTab === 'invoice' && effectiveUser && effectiveUser.permittedTabs.includes('invoice') && (
+        {!simulatedDelegate && activeTab === 'invoice' && effectiveUser && effectiveUser.permittedTabs.includes('invoice') && (
           <InvoiceTab
             customers={customers}
             products={products}
@@ -2515,10 +2643,11 @@ export default function App() {
             onGoBack={() => setActiveTab('dashboard')}
             permittedSubTabs={effectiveUser.permittedSubTabs}
             currentUser={effectiveUser}
+            usersList={usersList}
           />
         )}
 
-        {activeTab === 'prices' && effectiveUser && effectiveUser.permittedTabs.includes('prices') && (
+        {!simulatedDelegate && activeTab === 'prices' && effectiveUser && effectiveUser.permittedTabs.includes('prices') && (
           <PricesTab
             products={products}
             onGoBack={() => setActiveTab('dashboard')}
@@ -2526,7 +2655,7 @@ export default function App() {
           />
         )}
 
-        {activeTab === 'expenses' && effectiveUser && effectiveUser.permittedTabs.includes('expenses') && (
+        {!simulatedDelegate && activeTab === 'expenses' && effectiveUser && effectiveUser.permittedTabs.includes('expenses') && (
           <ExpensesTab
             expenses={filteredExpenses}
             onAddExpense={handleAddExpense}
@@ -2535,7 +2664,7 @@ export default function App() {
           />
         )}
 
-        {activeTab === 'administrative' && effectiveUser && effectiveUser.permittedTabs.includes('administrative') && (
+        {!simulatedDelegate && activeTab === 'administrative' && effectiveUser && effectiveUser.permittedTabs.includes('administrative') && (
           <ManageTab
             products={products}
             customers={customers}
@@ -2572,7 +2701,7 @@ export default function App() {
           />
         )}
 
-        {activeTab === 'reports' && effectiveUser && effectiveUser.permittedTabs.includes('reports') && (
+        {!simulatedDelegate && activeTab === 'reports' && effectiveUser && effectiveUser.permittedTabs.includes('reports') && (
           <ReportsTab
             invoices={filteredInvoices}
             expenses={filteredExpenses}
@@ -2589,7 +2718,7 @@ export default function App() {
           />
         )}
 
-        {activeTab === 'personal_settings' && (
+        {!simulatedDelegate && activeTab === 'personal_settings' && (
           <PersonalSettingsTab
             onGoBack={() => setActiveTab('dashboard')}
           />

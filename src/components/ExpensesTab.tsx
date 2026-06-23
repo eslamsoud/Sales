@@ -9,17 +9,28 @@ import React, { useState } from 'react';
 import { Expense } from '../types';
 import { Wallet, Plus, Trash2, ArrowRight, HelpCircle, BadgeAlert, Printer } from 'lucide-react';
 
+interface FinancialSummary {
+  totalInvoiceAmount: number;
+  totalPaidAmount: number;
+  totalLoadCost: number;
+  totalExpenseAmount: number;
+  totalRevenueAmount: number;
+  totalTripAmount: number;
+}
+
 interface ExpensesTabProps {
   expenses: Expense[];
   onAddExpense: (expense: Omit<Expense, 'id'>) => void;
   onDeleteExpense: (id: string) => void;
   onGoBack: () => void;
+  initialSubTab?: 'expense' | 'revenue';
+  summaryData?: FinancialSummary;
 }
 
 const EXPENSE_CATEGORIES = ['وقود ومركبة', 'طعام وضيافة', 'أعطال وصيانة', 'رسوم ومصاريف نثرية', 'عمولات وهدايا', 'أخرى'];
 
-export default function ExpensesTab({ expenses, onAddExpense, onDeleteExpense, onGoBack }: ExpensesTabProps) {
-  const [activeSubTab, setActiveSubTab] = useState<'expense' | 'revenue'>('expense');
+export default function ExpensesTab({ expenses, onAddExpense, onDeleteExpense, onGoBack, initialSubTab, summaryData }: ExpensesTabProps) {
+  const [activeSubTab, setActiveSubTab] = useState<'expense' | 'revenue'>(initialSubTab || 'expense');
   const [amount, setAmount] = useState('');
   const [description, setDescription] = useState('');
 
@@ -197,7 +208,47 @@ export default function ExpensesTab({ expenses, onAddExpense, onDeleteExpense, o
       </div>
 
       <div className="max-w-xl mx-auto p-4 flex flex-col gap-5">
-        
+
+        {summaryData && (
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+            <div className="bg-gradient-to-l from-[#1A365D] to-[#2B6CB0] text-white px-4 py-3">
+              <h3 className="text-xs font-black">ملخص المالية</h3>
+            </div>
+            <div className="p-3 grid grid-cols-2 gap-2 text-xs">
+              <div className="bg-emerald-50 rounded-xl p-2.5 border border-emerald-100">
+                <span className="text-emerald-600 font-bold block">المحصل</span>
+                <span className="text-emerald-800 font-black text-sm">{summaryData.totalPaidAmount.toLocaleString()} ج</span>
+              </div>
+              <div className="bg-sky-50 rounded-xl p-2.5 border border-sky-100">
+                <span className="text-sky-600 font-bold block">المبيعات</span>
+                <span className="text-sky-800 font-black text-sm">{summaryData.totalInvoiceAmount.toLocaleString()} ج</span>
+              </div>
+              <div className="bg-amber-50 rounded-xl p-2.5 border border-amber-100">
+                <span className="text-amber-600 font-bold block">المديونية</span>
+                <span className="text-amber-800 font-black text-sm">{(summaryData.totalInvoiceAmount - summaryData.totalPaidAmount).toLocaleString()} ج</span>
+              </div>
+              <div className="bg-indigo-50 rounded-xl p-2.5 border border-indigo-100">
+                <span className="text-indigo-600 font-bold block">هامش الربح</span>
+                <span className="text-indigo-800 font-black text-sm">
+                  {(() => {
+                    const profit = summaryData.totalInvoiceAmount - summaryData.totalLoadCost;
+                    const pct = summaryData.totalInvoiceAmount > 0 ? (profit / summaryData.totalInvoiceAmount * 100) : 0;
+                    return `${profit.toLocaleString()} ج (${pct.toFixed(1)}%)`;
+                  })()}
+                </span>
+              </div>
+              <div className="bg-rose-50 rounded-xl p-2.5 border border-rose-100">
+                <span className="text-rose-600 font-bold block">المصروفات</span>
+                <span className="text-rose-800 font-black text-sm">{summaryData.totalExpenseAmount.toLocaleString()} ج</span>
+              </div>
+              <div className="bg-teal-50 rounded-xl p-2.5 border border-teal-100">
+                <span className="text-teal-600 font-bold block">الإيرادات</span>
+                <span className="text-teal-800 font-black text-sm">{summaryData.totalRevenueAmount.toLocaleString()} ج</span>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Subtabs toggle */}
         <div className="flex bg-slate-200/50 p-1 rounded-xl">
           <button

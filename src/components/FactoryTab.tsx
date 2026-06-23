@@ -160,6 +160,7 @@ export default function FactoryTab({
   const [tripPrice, setTripPrice] = useState('');
   const [tripDate, setTripDate] = useState(() => new Date().toISOString().substring(0, 10));
   const [tripFilter, setTripFilter] = useState<'all' | 'collected' | 'pending'>('all');
+  const [tripDelegatePhone, setTripDelegatePhone] = useState('');
 
   const isManager = currentUser?.role === 'owner' || currentUser?.phone === '01228466613';
 
@@ -427,6 +428,7 @@ export default function FactoryTab({
   const [warehouseKeeper, setWarehouseKeeper] = useState('');
   const [advanceAmount, setAdvanceAmount] = useState('');
   const [showAdvanceInput, setShowAdvanceInput] = useState(false);
+  const [loadDelegatePhone, setLoadDelegatePhone] = useState<string>('');
 
   // Quantities recorded per-weight of the currently selected loadProductId
   // Record<weightId, { cartons: string, units: string }>
@@ -668,6 +670,10 @@ export default function FactoryTab({
     const confirmed = await duaConfirmDialog("تأكيد تسجيل الحمولة: هل ترغب في ترحيل وحفظ حمولة السيارة المؤقتة الحالية؟", duaMsg, "توكلت على الله");
     if (!confirmed) return;
 
+    const selectedDelegate = isManager && loadDelegatePhone
+      ? archiveDelegates.find(d => d.phone === loadDelegatePhone)
+      : null;
+
     let hasAddedAny = false;
 
     groupedDraftItems.forEach(group => {
@@ -687,7 +693,9 @@ export default function FactoryTab({
             notes: loadNotes.trim() || `شحنة محملة [${group.product.name} - وزن ${item.weight.size}]`,
             warehouseKeeper: warehouseKeeper.trim() || undefined,
             advanceAmount: showAdvanceInput ? (parseFloat(advanceAmount) || undefined) : undefined,
-            date: new Date(loadDate).toISOString()
+            date: new Date(loadDate).toISOString(),
+            delegateName: selectedDelegate?.name || currentUser?.name || '',
+            delegatePhone: selectedDelegate?.phone || currentUser?.phone || ''
           });
           hasAddedAny = true;
         }
@@ -707,6 +715,7 @@ export default function FactoryTab({
     setWarehouseKeeper('');
     setAdvanceAmount('');
     setShowAdvanceInput(false);
+    if (isManager) setLoadDelegatePhone('');
   };
 
   // Compute live cumulative totals of the current total factory load invoice (حساب المصنع والكميات المحملة)
@@ -1387,15 +1396,13 @@ export default function FactoryTab({
       const prod = products.find(p => String(p.id).trim() === String(load.productId).trim());
       const weights = prod ? getProductWeightsFallback(prod) : [];
       const weight = weights.find(w => String(w.id).trim() === String(load.weightId).trim()) || weights[0];
-      if (weight) {
-        const unitsPerCarton = weight.unitsPerCarton || 12;
-        const cartons = load.cartonsCount !== undefined ? load.cartonsCount : Math.floor(load.quantity / unitsPerCarton);
-        const loose = load.looseUnitsCount !== undefined ? load.looseUnitsCount : (load.quantity % unitsPerCarton);
-        const cartonPrice = load.cartonPrice !== undefined ? Number(load.cartonPrice) : (Number(weight.cartonPriceFromFactory) || (prod ? Number(prod.price) * unitsPerCarton : 0) || 0);
-        const unitPrice = load.unitPrice !== undefined ? Number(load.unitPrice) : (Number(weight.factoryPricePerUnit) || (prod ? Number(prod.price) : 0) || 0);
-        const subtotal = (cartons * cartonPrice) + (loose * unitPrice);
-        rawLoadedValue += subtotal;
-      }
+      const unitsPerCarton = weight?.unitsPerCarton || 12;
+      const cartons = load.cartonsCount !== undefined ? load.cartonsCount : Math.floor(load.quantity / unitsPerCarton);
+      const loose = load.looseUnitsCount !== undefined ? load.looseUnitsCount : (load.quantity % unitsPerCarton);
+      const cartonPrice = load.cartonPrice !== undefined ? Number(load.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) * unitsPerCarton : 0) || 0);
+      const unitPrice = load.unitPrice !== undefined ? Number(load.unitPrice) : (Number(weight?.factoryPricePerUnit) || (prod ? Number(prod.price) : 0) || 0);
+      const subtotal = (cartons * cartonPrice) + (loose * unitPrice);
+      rawLoadedValue += subtotal;
       currentAdvances += load.advanceAmount ?? 0;
     });
 
@@ -1474,17 +1481,18 @@ export default function FactoryTab({
       const weights = prod ? getProductWeightsFallback(prod) : [];
       const weight = weights.find(w => String(w.id).trim() === String(load.weightId).trim()) || weights[0];
 
-      const cartons = load.cartonsCount !== undefined ? load.cartonsCount : Math.floor(load.quantity / (weight?.unitsPerCarton || 12));
-      const loose = load.looseUnitsCount !== undefined ? load.looseUnitsCount : (load.quantity % (weight?.unitsPerCarton || 12));
-      const cartonPrice = load.cartonPrice !== undefined ? Number(load.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) * (weight?.unitsPerCarton || 12) : 0) || 0);
-      const factoryPricePerUnit = load.unitPrice !== undefined ? Number(load.unitPrice) : (Number(weight?.factoryPricePerUnit) || (prod ? Number(prod.price) : 0) || 0);
+      const unitsPerCarton = weight?.unitsPerCarton || 12;
+      const cartons = load.cartonsCount !== undefined ? load.cartonsCount : Math.floor(load.quantity / unitsPerCarton);
+      const loose = load.looseUnitsCount !== undefined ? load.looseUnitsCount : (load.quantity % unitsPerCarton);
+      const cartonPrice = load.cartonPrice !== undefined ? Number(load.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) * unitsPerCarton : 0) || 0);
+      const unitPrice = load.unitPrice !== undefined ? Number(load.unitPrice) : (Number(weight?.factoryPricePerUnit) || (prod ? Number(prod.price) : 0) || 0);
 
-      const subtotal = (cartons * cartonPrice) + (loose * factoryPricePerUnit);
+      const subtotal = (cartons * cartonPrice) + (loose * unitPrice);
 
       return {
         id: load.id,
-        productName: prod ? prod.name : ((load as any).productName || 'صنف مجهول'),
-        size: weight ? weight.size : ((load as any).weightSize || 'حجم عادي'),
+        productName: prod ? prod.name : (load.productName || 'صنف محذوف'),
+        size: weight ? weight.size : (load.weightSize || 'محتوى موجود'),
         cartons,
         loose,
         cartonPrice,
@@ -2125,6 +2133,22 @@ export default function FactoryTab({
                     ))}
                   </select>
                 </div>
+
+                {isManager && (
+                  <div>
+                    <label className="inline-block bg-violet-100 text-violet-950 border border-violet-200 text-xs font-black px-2.5 py-1 rounded-md mb-2 shadow-sm">المندوب</label>
+                    <select
+                      value={loadDelegatePhone}
+                      onChange={(e) => setLoadDelegatePhone(e.target.value)}
+                      className="w-full bg-[#F7FAFC] border border-slate-200 rounded-lg p-2.5 text-sm font-semibold focus:ring-2 focus:ring-indigo-500 focus:outline-none text-[#1A365D]"
+                    >
+                      <option value="">-- اختر المندوب المستلم --</option>
+                      {archiveDelegates.filter(d => d.phone !== 'مجهول').map(d => (
+                        <option key={d.phone} value={d.phone}>{d.name} ({d.phone})</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
 
                 {/* Weights selection & input via dropdown as requested */}
                 {loadProductId && (
@@ -3705,9 +3729,20 @@ export default function FactoryTab({
                 const parsedPrice = tripPrice ? parseFloat(tripPrice) : 0;
                 if (!tripDescription.trim()) return showToast('⚠️ يرجى إدخال وصف المشوار!');
                 if (tripPrice && (isNaN(parsedPrice) || parsedPrice < 0)) return showToast('⚠️ يرجى إدخال سعر صحيح للمشوار!');
-                onAddTrip({ description: tripDescription.trim(), price: parsedPrice, date: tripDate, collected: false });
+                const selectedTripDel = isManager && tripDelegatePhone
+                  ? archiveDelegates.find(d => d.phone === tripDelegatePhone)
+                  : null;
+                onAddTrip({
+                  description: tripDescription.trim(),
+                  price: parsedPrice,
+                  date: tripDate,
+                  collected: false,
+                  delegateName: selectedTripDel?.name || currentUser?.name || '',
+                  delegatePhone: selectedTripDel?.phone || currentUser?.phone || ''
+                });
                 setTripDescription('');
                 setTripPrice('');
+                if (isManager) setTripDelegatePhone('');
                 showToast('✓ تم تسجيل المشوار بنجاح!');
               }}
               className="bg-[#FFFFFF] p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col gap-3.5"
@@ -3731,6 +3766,21 @@ export default function FactoryTab({
                     <input type="date" required value={tripDate} onChange={(e) => setTripDate(e.target.value)} className="w-full bg-[#F7FAFC] border border-slate-200 rounded-lg p-2.5 text-xs font-bold text-center text-[#1A365D]" />
                   </div>
                 </div>
+                {isManager && (
+                  <div>
+                    <label className="block text-[11px] font-bold text-violet-700 mb-1">المندوب</label>
+                    <select
+                      value={tripDelegatePhone}
+                      onChange={(e) => setTripDelegatePhone(e.target.value)}
+                      className="w-full bg-[#F7FAFC] border border-slate-200 rounded-lg p-2.5 text-xs font-bold text-[#1A365D]"
+                    >
+                      <option value="">-- اختر المندوب --</option>
+                      {archiveDelegates.filter(d => d.phone !== 'مجهول').map(d => (
+                        <option key={d.phone} value={d.phone}>{d.name} ({d.phone})</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
                 <button type="submit" className="bg-[#1A365D] text-white border-transparent hover:bg-[#1A365D] text-white border-transparent text-white text-xs font-bold py-2.5 rounded-xl cursor-pointer">
                   تسجيل المشوار بالسيستم
                 </button>

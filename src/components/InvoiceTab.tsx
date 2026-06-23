@@ -24,6 +24,8 @@ interface InvoiceTabProps {
   onGoBack: () => void;
   permittedSubTabs?: string[];
   currentUser?: any;
+  usersList?: any[];
+  initialSubTab?: 'create' | 'archive' | 'debtors';
 }
 
 const formatCartonsAndPieces = (rawQty: number, unitsPerCarton: number): string => {
@@ -50,9 +52,12 @@ export default function InvoiceTab({
   onDeleteInvoice,
   onGoBack,
   permittedSubTabs,
-  currentUser
+  currentUser,
+  usersList,
+  initialSubTab
 }: InvoiceTabProps) {
   const [activeSubTab, setActiveSubTab] = useState<'create' | 'archive' | 'debtors'>(() => {
+    if (initialSubTab) return initialSubTab;
     if (permittedSubTabs && permittedSubTabs.length > 0) {
       if (permittedSubTabs.includes('invoice_create')) return 'create';
       if (permittedSubTabs.includes('invoice_balance')) return 'archive';
@@ -150,6 +155,21 @@ export default function InvoiceTab({
   const [isScanningBarcode, setIsScanningBarcode] = useState(false);
   const [isDuplicating, setIsDuplicating] = useState(false);
   const [isPrinting, setIsPrinting] = useState(false);
+
+  const isManager = currentUser?.role === 'owner' || currentUser?.phone === '01228466613';
+  const invoiceDelegates = React.useMemo(() => {
+    const map = new Map<string, { phone: string; name: string }>();
+    const addDel = (phone: string, name: string) => {
+      const cleanPhone = phone ? phone.trim() : '';
+      const cleanName = name ? name.replace(/\s*\(.*?\)/g, '').trim() : 'مجهول';
+      if (!cleanPhone && cleanName === 'مجهول') return;
+      const key = cleanPhone || cleanName;
+      if (!map.has(key)) map.set(key, { phone: cleanPhone || 'مجهول', name: cleanName });
+    };
+    (usersList || []).forEach(u => addDel(u.phone, u.name));
+    return Array.from(map.values());
+  }, [usersList]);
+  const [invoiceDelegatePhone, setInvoiceDelegatePhone] = useState('');
   const [isAddingItem, setIsAddingItem] = useState(false);
   const isDuplicatingRef = useRef(false);
   const isPrintingRef = useRef(false);
@@ -553,6 +573,10 @@ export default function InvoiceTab({
       // Create a copy of billItems to save immediately
       const itemsToSave = [...billItems];
 
+      const selectedInvoiceDelegate = isManager && invoiceDelegatePhone
+        ? invoiceDelegates.find(d => d.phone === invoiceDelegatePhone)
+        : null;
+
       const invoiceData = {
         invoiceNumber: nextInvNum,
         customerId: selectedCustomerId,
@@ -564,7 +588,9 @@ export default function InvoiceTab({
         totalAfterDiscount: Number(totals.after.toFixed(2)),
         paidAmount: Number(paidValue.toFixed(2)),
         notes: finalNotes,
-        isDelivered: false // remains in-transit till specifically delivered
+        isDelivered: false,
+        delegateName: selectedInvoiceDelegate?.name || currentUser?.name || '',
+        delegatePhone: selectedInvoiceDelegate?.phone || currentUser?.phone || ''
       };
 
       // Reset whole components fields PRE-EMPTIVELY to block duplicate clicks
@@ -600,6 +626,7 @@ export default function InvoiceTab({
       setShowPwd(false);
       setDiscountPwd('');
       setCustomPaidAmount('');
+      if (isManager) setInvoiceDelegatePhone('');
 
       // Clear draft localStorage keys explicitly
       localStorage.removeItem('invoice_draft_customerId');
@@ -1352,6 +1379,21 @@ export default function InvoiceTab({
               </select>
             </div>
 
+            {isManager && (
+              <div>
+                <label className="block text-xs font-bold text-[#2B6CB0] mb-1">المندوب</label>
+                <select
+                  value={invoiceDelegatePhone}
+                  onChange={(e) => setInvoiceDelegatePhone(e.target.value)}
+                  className="w-full bg-[#F7FAFC] border border-slate-200 rounded-lg p-2.5 text-sm font-semibold focus:ring-2 focus:ring-indigo-500 focus:outline-none text-[#1A365D]"
+                >
+                  <option value="">-- اختر المندوب --</option>
+                  {invoiceDelegates.filter(d => d.phone !== 'مجهول' && d.phone !== currentUser?.phone).map(d => (
+                    <option key={d.phone} value={d.phone}>{d.name} ({d.phone})</option>
+                  ))}
+                </select>
+              </div>
+            )}
             <div>
               <label className="block text-xs font-bold text-[#2B6CB0] mb-1">التاريخ</label>
               <input
