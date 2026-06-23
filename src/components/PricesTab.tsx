@@ -670,7 +670,9 @@ export default function PricesTab({ products: rawProducts, onGoBack, permittedSu
   const productPriceDetails = useMemo(() => {
     return products.map(p => {
       const weights = getProductWeightsFallback(p);
-      const weightDetails = weights.map(w => {
+      const weightDetails = weights
+        .filter(w => w.cartonPriceFromFactory > 0 && (w.addedValue || 0) > 0)
+        .map(w => {
         // Carton price includes added value
         const retailCarton = w.cartonPriceFromFactory + (w.addedValue || 0);
         const units = w.unitsPerCarton || 12;
@@ -705,7 +707,7 @@ export default function PricesTab({ products: rawProducts, onGoBack, permittedSu
         ...p,
         weights: weightDetails
       };
-    });
+    }).filter(p => p.weights && p.weights.length > 0);
   }, [products]);
 
   // Selected product and weights for calc

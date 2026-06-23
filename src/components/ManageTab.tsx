@@ -1008,6 +1008,7 @@ interface ManageTabProps {
   onEditMultipleProducts?: (products: Product[]) => void;
   onUpdateSettings: (settings: AppSettings) => void;
   onResetDatabase: (demoMode: boolean) => void;
+  onFullReset?: () => void;
   onGoBack: () => void;
   onTriggerSync?: (desc: string) => void;
   onRefreshData?: () => void;
@@ -1029,6 +1030,7 @@ export default function ManageTab({
   onEditMultipleProducts,
   onUpdateSettings,
   onResetDatabase,
+  onFullReset,
   onGoBack,
   onTriggerSync,
   onRefreshData,
@@ -4046,6 +4048,19 @@ export default function ManageTab({
                     <Database className="h-5 w-5 text-rose-500" />
                     <span>تهيئة ومسح شامل للبيانات</span>
                   </button>
+                  {onFullReset && (
+                    <button
+                      onClick={async () => { if (await confirmDialog('⚠️ تحذير: تهيئة كاملة للنظام!\n\nسيتم مسح جميع البيانات من التطبيق والشيت بالكامل.\nجميع المستخدمين سيبدأون من الصفر بعد السحب.\n\nهل أنت متأكد؟')) {
+                          onFullReset();
+                          showToast('✓ جاري تطبيق التهيئة الكاملة ونشر التغيير للجميع...');
+                        }
+                      }}
+                      className="bg-red-600 hover:bg-red-700 active:scale-95 border border-red-700 text-white p-3.5 rounded-xl text-center text-xs font-bold transition-all cursor-pointer flex flex-col items-center justify-center gap-1.5"
+                    >
+                      <AlertTriangle className="h-5 w-5 text-white" />
+                      <span>تهيئة كاملة للكل (مسح + شيت)</span>
+                    </button>
+                  )}
                 </div>
               </div>
             )}

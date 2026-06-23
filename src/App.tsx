@@ -341,6 +341,12 @@ export default function App() {
   const [trips, setTrips] = useState<Trip[]>([]);
   const [syncLogs, setSyncLogs] = useState<SyncLog[]>([]);
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
+  const [dbVersion, setDbVersion] = useState<number>(() => {
+    try {
+      const stored = localStorage.getItem('app_db_version_sys');
+      return stored ? parseInt(stored, 10) : 0;
+    } catch (e) { return 0; }
+  });
 
   const [showSimulatedInventory, setShowSimulatedInventory] = useState(false);
   const simulatedInventory = React.useMemo(() => {
@@ -1074,10 +1080,54 @@ export default function App() {
     setActiveTab('dashboard');
   };
 
+  const handleFullReset = async () => {
+    if (checkSimulationGuard()) return;
+    if (!await confirmDialog('⚠️ تحذير: تهيئة كاملة!\n\nسيتم مسح جميع البيانات (المنتجات، الفواتير، العملاء، المصروفات، المشاوير، الحمولات) من التطبيق والشيت بالكامل.\n\nجميع المستخدمين (المدير والمندوبين) ستبدأ من الصفر بعد السحب.\n\nهل أنت متأكد؟')) return;
+
+    setProducts([]);
+    setFactoryLoads([]);
+    setCustomers([]);
+    setInvoices([]);
+    setExpenses([]);
+    setTrips([]);
+
+    const newVersion = Date.now();
+    setDbVersion(newVersion);
+    localStorage.setItem('app_db_version_sys', newVersion.toString());
+
+    showToast('☁️ جاري دفع التهيئة إلى الشيت...');
+    setTimeout(async () => {
+      const success = await syncAllDataToGoogle(true);
+      if (success) {
+        showToast('✓ تمت التهيئة الكاملة! الشيت فارغ والجميع سيتلقى التحديث عند السحب.');
+      } else {
+        showToast('⚠️ التهيئة المحلية تمت لكن فشل الحفظ في الشيت. حاول المزامنة يدوياً.');
+      }
+    }, 500);
+  };
+
   async function syncAllDataToGoogle(silent = false): Promise<boolean> {
     const scriptUrl = getSafeScriptUrl(settings.googleSheetsUrl);
     const requestId = `sync-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
     const startTime = performance.now();
+
+    // Pre-push guard: check if sheet has a newer dbVersion (reset happened)
+    try {
+      const checkUrl = scriptUrl + (scriptUrl.includes('?') ? '&' : '?') + 't=' + Date.now();
+      const checkResp = await fetchWithTimeout(checkUrl, { method: 'GET', cache: 'no-store', redirect: 'follow' }, 8000);
+      if (checkResp.ok) {
+        const checkData = await checkResp.json();
+        if (checkData && checkData.dbVersion && typeof checkData.dbVersion === 'number' && checkData.dbVersion > dbVersion) {
+          if (!silent) {
+            showToast('⚠️ تم تهيئة النظام من المدير. يرجى سحب البيانات أولاً قبل الرفع.');
+          }
+          setIsHeaderSyncing(false);
+          return false;
+        }
+      }
+    } catch (e) {
+      // If check fails, proceed anyway (network issue)
+    }
 
     try {
       setIsHeaderSyncing(true);
@@ -1150,6 +1200,7 @@ export default function App() {
         syncRole: currentUser?.role || 'owner',
         customRoleName: currentUser?.customRoleName || '',
         canEditPrices: currentUser?.canEditPrices !== false,
+        dbVersion: dbVersion,
         deletedIds: deletedIds,
         metadata: {
           syncedAt: new Date().toISOString(),
@@ -1619,6 +1670,16 @@ export default function App() {
         throw new Error(`استجابة غير صالحة من السيرفر: ${response.status}`);
       }
       const data = await response.json();
+
+      // Check for dbVersion — if sheet has a newer version, force full replace
+      if (data && data.dbVersion && typeof data.dbVersion === 'number' && data.dbVersion > dbVersion) {
+        shouldReplace = true;
+        setDbVersion(data.dbVersion);
+        localStorage.setItem('app_db_version_sys', data.dbVersion.toString());
+        if (!isSilent) {
+          showToast('⚠️ تم اكتشاف تهيئة للنظام — جاري استبدال البيانات المحلية ببيانات الشيت.');
+        }
+      }
 
       let deletedIds: string[] = [];
       try {
@@ -2695,6 +2756,7 @@ export default function App() {
             }}
             onUpdateSettings={setSettings}
             onResetDatabase={handleResetDatabase}
+            onFullReset={handleFullReset}
             onGoBack={() => setActiveTab('dashboard')}
             onTriggerSync={promptForSync}
             onRefreshData={() => handleUpdateData(true)}
