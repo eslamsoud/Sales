@@ -1103,6 +1103,8 @@ export default function App() {
     setInvoices([]);
     setExpenses([]);
     setTrips([]);
+    localStorage.removeItem('google_leads_staging_sys');
+    localStorage.removeItem('potential_leads_sys');
 
     const newVersion = Date.now();
     setDbVersion(newVersion);
