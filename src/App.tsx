@@ -341,6 +341,16 @@ export default function App() {
   const [trips, setTrips] = useState<Trip[]>([]);
   const [syncLogs, setSyncLogs] = useState<SyncLog[]>([]);
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
+  const [googleLeads, setGoogleLeads] = useState<any[]>([]);
+  const [potentialLeads, setPotentialLeads] = useState<any[]>([]);
+
+  useEffect(() => {
+    localStorage.setItem('google_leads_staging_sys', JSON.stringify(googleLeads));
+  }, [googleLeads]);
+
+  useEffect(() => {
+    localStorage.setItem('potential_leads_sys', JSON.stringify(potentialLeads));
+  }, [potentialLeads]);
   const [dbVersion, setDbVersion] = useState<number>(() => {
     try {
       const stored = localStorage.getItem('app_db_version_sys');
@@ -405,10 +415,10 @@ export default function App() {
   }, [simulatedDelegate, factoryLoads, invoices, products]);
 
   // مرجع لتخزين أحدث حالة للبيانات لمنع مشكلة (Stale Closure) أثناء المزامنة التلقائية
-  const latestDataRef = useRef({ products, factoryLoads, customers, invoices, expenses, trips, usersList });
+  const latestDataRef = useRef({ products, factoryLoads, customers, invoices, expenses, trips, usersList, googleLeads, potentialLeads });
   useEffect(() => {
-    latestDataRef.current = { products, factoryLoads, customers, invoices, expenses, trips, usersList };
-  }, [products, factoryLoads, customers, invoices, expenses, trips, usersList]);
+    latestDataRef.current = { products, factoryLoads, customers, invoices, expenses, trips, usersList, googleLeads, potentialLeads };
+  }, [products, factoryLoads, customers, invoices, expenses, trips, usersList, googleLeads, potentialLeads]);
 
   // ☁️ مزامنة تلقائية صامتة عند بدء تشغيل التطبيق لضمان سحب أحدث بيانات المناديب والأسعار من السحاب
   useEffect(() => {
@@ -577,6 +587,8 @@ export default function App() {
         loadedGoogleLeads.forEach((c: any) => addPair(c.governorate, c.area));
         loadedPotentialLeads.forEach((c: any) => addPair(c.governorate, c.area));
 
+        setGoogleLeads(loadedGoogleLeads);
+        setPotentialLeads(loadedPotentialLeads);
         setSettings({ ...loadedSettings, workAreas: derivedWorkAreas });
       } catch (e) { console.error("DB Load Error", e); } finally { setIsDbLoaded(true); }
     }
@@ -1103,8 +1115,8 @@ export default function App() {
     setInvoices([]);
     setExpenses([]);
     setTrips([]);
-    localStorage.removeItem('google_leads_staging_sys');
-    localStorage.removeItem('potential_leads_sys');
+    setGoogleLeads([]);
+    setPotentialLeads([]);
 
     const newVersion = Date.now();
     setDbVersion(newVersion);
@@ -1155,7 +1167,9 @@ export default function App() {
         trips: currentTrips, 
         products: currentProducts, 
         customers: currentCustomers, 
-        usersList: currentUsers 
+        usersList: currentUsers,
+        googleLeads: currentGoogleLeads,
+        potentialLeads: currentPotentialLeads
       } = latestDataRef.current;
 
       // 🚨 تعريف متغير مدير المزامنة الذي كان مفقوداً ويسبب انهيار صامت أثناء الرفع
@@ -1186,17 +1200,8 @@ export default function App() {
       const customersMap = new Map(currentCustomers.map(c => [String(c.id).trim(), c]));
       const productsMap = new Map(currentProducts.map(p => [String(p.id).trim(), p]));
 
-      let discoveredLeads: any[] = [];
-      try {
-        const googleLeadsRaw = localStorage.getItem('google_leads_staging_sys');
-        discoveredLeads = googleLeadsRaw ? JSON.parse(googleLeadsRaw) : [];
-      } catch (e) {}
-
-      let potentialLeads: any[] = [];
-      try {
-        const potentialLeadsRaw = localStorage.getItem('potential_leads_sys');
-        potentialLeads = potentialLeadsRaw ? JSON.parse(potentialLeadsRaw) : [];
-      } catch (e) {}
+      const discoveredLeads = currentGoogleLeads || [];
+      const potentialLeads = currentPotentialLeads || [];
 
       const invoicesByCustomer = new Map();
       currentInvoices.forEach(inv => {
@@ -2009,19 +2014,19 @@ export default function App() {
             type: l.type || '',
             dateAdded: l.dateAdded || ''
           }));
-          let localLeadsRaw = localStorage.getItem('google_leads_staging_sys');
-          let localLeads = localLeadsRaw ? JSON.parse(localLeadsRaw) : [];
-          if (shouldReplace) {
-            localStorage.setItem('google_leads_staging_sys', JSON.stringify(mappedLeads));
-          } else {
-            const merged = [...localLeads];
-            mappedLeads.forEach((nl: any) => {
-              const idx = merged.findIndex((l: any) => l.id === nl.id);
-              if (idx > -1) merged[idx] = nl;
-              else merged.push(nl);
-            });
-            localStorage.setItem('google_leads_staging_sys', JSON.stringify(merged));
-          }
+          setGoogleLeads(prev => {
+            if (shouldReplace) {
+              return mappedLeads;
+            } else {
+              const merged = [...prev];
+              mappedLeads.forEach((nl: any) => {
+                const idx = merged.findIndex((l: any) => l.id === nl.id);
+                if (idx > -1) merged[idx] = nl;
+                else merged.push(nl);
+              });
+              return merged;
+            }
+          });
         }
 
         if (data.potentialLeads && Array.isArray(data.potentialLeads)) {
@@ -2036,19 +2041,19 @@ export default function App() {
             type: l.type || '',
             dateAdded: l.dateAdded || ''
           }));
-          let localPotentialRaw = localStorage.getItem('potential_leads_sys');
-          let localPotential = localPotentialRaw ? JSON.parse(localPotentialRaw) : [];
-          if (shouldReplace) {
-            localStorage.setItem('potential_leads_sys', JSON.stringify(mappedPotential));
-          } else {
-            const merged = [...localPotential];
-            mappedPotential.forEach((nl: any) => {
-              const idx = merged.findIndex((l: any) => l.id === nl.id);
-              if (idx > -1) merged[idx] = nl;
-              else merged.push(nl);
-            });
-            localStorage.setItem('potential_leads_sys', JSON.stringify(merged));
-          }
+          setPotentialLeads(prev => {
+            if (shouldReplace) {
+              return mappedPotential;
+            } else {
+              const merged = [...prev];
+              mappedPotential.forEach((nl: any) => {
+                const idx = merged.findIndex((l: any) => l.id === nl.id);
+                if (idx > -1) merged[idx] = nl;
+                else merged.push(nl);
+              });
+              return merged;
+            }
+          });
         }
 
         if (data.expenses && Array.isArray(data.expenses)) {
@@ -2653,6 +2658,10 @@ export default function App() {
             permittedSubTabs={effectiveUser.permittedSubTabs}
             currentUser={effectiveUser}
             googleMapsApiKey={activeKey}
+            googleLeads={googleLeads}
+            setGoogleLeads={setGoogleLeads}
+            potentialLeads={potentialLeads}
+            setPotentialLeads={setPotentialLeads}
           />
         )}
 
@@ -2709,6 +2718,10 @@ export default function App() {
             permittedSubTabs={effectiveUser.permittedSubTabs}
             currentUser={effectiveUser}
             googleMapsApiKey={activeKey}
+            googleLeads={googleLeads}
+            setGoogleLeads={setGoogleLeads}
+            potentialLeads={potentialLeads}
+            setPotentialLeads={setPotentialLeads}
           />
         )}
 

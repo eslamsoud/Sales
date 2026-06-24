@@ -182,9 +182,27 @@ interface CustomersTabProps {
   permittedSubTabs?: string[];
   currentUser?: UserAuth | null;
   googleMapsApiKey?: string; // يُمرّر من App.tsx
+  googleLeads: any[];
+  setGoogleLeads: React.Dispatch<React.SetStateAction<any[]>>;
+  potentialLeads: any[];
+  setPotentialLeads: React.Dispatch<React.SetStateAction<any[]>>;
 }
 
-export default function CustomersTab({ customers, onAddCustomer, onEditCustomer, onDeleteCustomer, onGoBack, settings, permittedSubTabs, currentUser, googleMapsApiKey }: CustomersTabProps) {
+export default function CustomersTab({
+  customers,
+  onAddCustomer,
+  onEditCustomer,
+  onDeleteCustomer,
+  onGoBack,
+  settings,
+  permittedSubTabs,
+  currentUser,
+  googleMapsApiKey,
+  googleLeads,
+  setGoogleLeads,
+  potentialLeads,
+  setPotentialLeads
+}: CustomersTabProps) {
   const [activeTab, setActiveTab] = useState<'list' | 'google_leads' | 'potential_leads'>(() => {
     if (permittedSubTabs && permittedSubTabs.length > 0) {
       if (permittedSubTabs.includes('customers_list')) return 'list';
@@ -224,28 +242,7 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
 
   const isUserAdmin = currentUser?.role === 'owner' || currentUser?.phone === '01228466613' || (currentUser?.customRoleName?.includes('نائب المدير') || currentUser?.customRoleName?.includes('مشرف عام'));
 
-  // Watchlist/Staging for prospects generated from Google Maps finder
-  const [googleLeads, setGoogleLeads] = useState<any[]>(() => {
-    try {
-      const saved = localStorage.getItem('google_leads_staging_sys');
-      return saved ? JSON.parse(saved) : [];
-    } catch(e) { return []; }
-  });
-
   const [expandedStagedLeads, setExpandedStagedLeads] = useState<Record<string, boolean>>({});
-
-  // Automatically save googleLeads inside localStorage on change
-  React.useEffect(() => {
-    localStorage.setItem('google_leads_staging_sys', JSON.stringify(googleLeads));
-  }, [googleLeads]);
-
-  // Potential leads state
-  const [potentialLeads, setPotentialLeads] = useState<any[]>(() => {
-    try {
-      const saved = localStorage.getItem('potential_leads_sys');
-      return saved ? JSON.parse(saved) : [];
-    } catch(e) { return []; }
-  });
 
   const [expandedPotentialLeads, setExpandedPotentialLeads] = useState<Record<string, boolean>>({});
   const [pendingPotentialLead, setPendingPotentialLead] = useState<any>(null);
@@ -254,11 +251,6 @@ export default function CustomersTab({ customers, onAddCustomer, onEditCustomer,
   const [potentialAreasFilter, setPotentialAreasFilter] = useState<string[]>([]);
   const [potentialTypesFilter, setPotentialTypesFilter] = useState<string[]>([]);
   const [potentialSearchQuery, setPotentialSearchQuery] = useState('');
-
-  // Automatically save potentialLeads inside localStorage on change
-  React.useEffect(() => {
-    localStorage.setItem('potential_leads_sys', JSON.stringify(potentialLeads));
-  }, [potentialLeads]);
 
   React.useEffect(() => {
     window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
