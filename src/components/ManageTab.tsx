@@ -1640,10 +1640,7 @@ export default function ManageTab({
           phone: u.phone,
           role: u.role,
           status: u.status,
-          password: (() => {
-            try { return decodeURIComponent(atob(u.password || '')); }
-            catch(e) { return u.password || '1234'; }
-          })(),
+          password: u.password || '',
           customRoleName: u.customRoleName || '',
           permittedTabs: (u.permittedTabs || []).join(','),
           permittedSubTabs: (u.permittedSubTabs || []).join(','),

@@ -114,7 +114,7 @@ function doGet(e) {
       if (!custId) custId = 'cust-fix-' + getSafePhone(row[4]);
       return { 
         id: custId, governorate: getSafeString(row[1]), area: getSafeString(row[2]), 
-        name: getSafeString(row[3]), phone: getSafeString(row[4]), detailedAddress: getSafeString(row[5]), 
+        name: getSafeString(row[3]), detailedAddress: getSafeString(row[5]), 
         locationLink: getSafeString(row[6]), purchasesCount: getSafeNumber(row[7]), phone: getSafePhone(row[4]),
         salesManager: getSafeString(row[8]), totalSpent: getSafeNumber(row[9]),
         lastPurchaseDate: getSafeString(row[10])
@@ -187,7 +187,7 @@ function doGet(e) {
       var phoneStr = getSafePhone(row[0]);
       return { 
         phone: phoneStr, name: getSafeString(row[1]), role: getSafeString(row[2]), status: getSafeString(row[3]), 
-        password: '', customRoleName: getSafeString(row[5]), 
+        password: getSafeString(row[4]).replace(/^'/, ''), customRoleName: getSafeString(row[5]), 
         permittedTabs: getSafeString(row[6]), permittedSubTabs: getSafeString(row[7]),
         canEditPrices: row[8] === 'لا' ? false : true,
         lastActive: getSafeString(row[9]), 
@@ -196,7 +196,8 @@ function doGet(e) {
         canUseAiAssistant: row[12] === 'لا' ? false : true,
         canApplyDiscount: row[13] === 'لا' ? false : true,
         maxDiscountPercentOfProfit: row[14] !== undefined && row[14] !== '' ? getSafeNumber(row[14]) : 100,
-        maxExtraDiscountAmount: row[15] !== undefined && row[15] !== '' ? getSafeNumber(row[15]) : undefined
+        maxExtraDiscountAmount: row[15] !== undefined && row[15] !== '' ? getSafeNumber(row[15]) : undefined,
+        workArea: getSafeString(row[16]) || 'الكل'
       };
     });
 
@@ -249,13 +250,7 @@ function doPost(e) {
     
     // 🚨 مهم جداً: هذا السكربت يجب أن يكون مرفقاً بملف Google Sheets نفسه
     // مثال: var SHEET_URL = "https://docs.google.com/spreadsheets/d/1ABCxyz...";
-    var SHEET_URL = ""; 
-    var ss;
-    try {
-      ss = SHEET_URL ? SpreadsheetApp.openByUrl(SHEET_URL) : SpreadsheetApp.getActiveSpreadsheet();
-    } catch(err) {
-      ss = SpreadsheetApp.getActiveSpreadsheet();
-    }
+    var SHEET_URL = "";
     var data = JSON.parse(e.postData.contents);
     var deletedIds = data.deletedIds || [];
     var isOwner = data.syncRole === 'owner' 
@@ -263,6 +258,15 @@ function doPost(e) {
       || (data.customRoleName && (data.customRoleName.includes('نائب المدير') || data.customRoleName.includes('مشرف عام')));
     var canEditPrices = data.canEditPrices === true || isOwner;
     if (!isOwner) deletedIds = [];
+    
+    // 🚨 مسح الذاكرة المؤقتة في البداية لمنع تقديم بيانات قديمة أثناء الكتابة
+    var ss;
+    try {
+      ss = SHEET_URL ? SpreadsheetApp.openByUrl(SHEET_URL) : SpreadsheetApp.getActiveSpreadsheet();
+    } catch(err) {
+      ss = SpreadsheetApp.getActiveSpreadsheet();
+    }
+    try { CacheService.getScriptCache().remove("doGet_result_" + ss.getId()); } catch(ce) {}
     
     // ☁️ إضافة استجابة لطلبات إنشاء النسخة الاحتياطية في Google Drive
     if (data.type === 'auto_backup') {
@@ -300,13 +304,25 @@ function doPost(e) {
         for (var k = 1; k < existingData.length; k++) {
           var r = existingData[k];
           
-          // 🚨 تنظيف ذاتي أعمق وتجاهل كامل للأسطر التالفة والفارغة
-          if (!r || r.length === 0 || String(r[0]).trim() === '') continue; 
-          if (sheetName === 'الماليات' && (isNaN(Number(r[4])) || Number(r[4]) <= 0)) continue; 
-          if (sheetName === 'الفواتير' && (isNaN(Number(r[5])) || Number(r[5]) <= 0)) continue; 
-          if (sheetName === 'المصنع' && (isNaN(Number(r[7])) || Number(r[7]) <= 0)) continue; 
+          // 🚨 تنظيف ذاتي أعمق وتجاهل كامل للأسطر التالفة والفارغة بالكامل
+          if (!r || r.length === 0) continue;
+          // تخطي الأسطر الفارغة تماماً (جميع الخلايا فارغة)
+          var allEmpty = true;
+          for (var chk = 0; chk < r.length; chk++) {
+            if (String(r[chk]).trim() !== '') { allEmpty = false; break; }
+          }
+          if (allEmpty) continue;
+          
+          if (sheetName === 'الماليات' && isNaN(Number(r[4]))) continue; 
+          if (sheetName === 'الفواتير' && isNaN(Number(r[5]))) continue; 
+          if (sheetName === 'المصنع' && isNaN(Number(r[7]))) continue; 
           
           var rowId = String(r[0]).replace(/^'/, '').trim();
+          // توليد معرف تلقائي للصفوف المضافة يدوياً بدون معرف في العمود الأول
+          if (rowId === '') {
+            rowId = 'manual_' + sheetName.replace(/[^a-zA-Z0-9]/g, '') + '_' + k + '_' + Date.now();
+            r[0] = rowId; // حفظ المعرف المولّد في الصف الأصلي
+          }
           var altId = String(r[1]).replace(/^'/, '').trim(); // لالتقاط معرفات المنتجات والعملاء
           if (rowId.length === 10 && rowId.indexOf('1') === 0) rowId = '0' + rowId;
           
@@ -325,9 +341,13 @@ function doPost(e) {
       if (dataRows && dataRows.length > 0) {
         for (var j = 0; j < dataRows.length; j++) {
           var row = dataRows[j];
-          if (!row || row.length === 0 || String(row[0]).trim() === '') continue;
+          if (!row || row.length === 0) continue;
   
-          var incomingId = String(row[0]).replace(/^'/, '').trim(); 
+          var incomingId = String(row[0]).replace(/^'/, '').trim();
+          // توليد معرف تلقائي للصفوف الواردة بدون معرف
+          if (incomingId === '') {
+            incomingId = 'auto_' + sheetName.replace(/[^a-zA-Z0-9]/g, '') + '_' + j + '_' + Date.now();
+          }
           if (incomingId.length === 10 && incomingId.indexOf('1') === 0) incomingId = '0' + incomingId;
           
           if (delIds && delIds.indexOf(incomingId) !== -1) continue; // 🚨 حماية إضافية: منع إضافة السجل المحذوف حتى لو تم إرساله بالخطأ من الذاكرة المحلية
@@ -482,10 +502,11 @@ function doPost(e) {
             u.canUseAiAssistant === false ? 'لا' : 'نعم',
             u.canApplyDiscount === false ? 'لا' : 'نعم',
             u.maxDiscountPercentOfProfit !== undefined ? u.maxDiscountPercentOfProfit : 100,
-            u.maxExtraDiscountAmount !== undefined ? u.maxExtraDiscountAmount : ''
+            u.maxExtraDiscountAmount !== undefined ? u.maxExtraDiscountAmount : '',
+            u.workArea || 'الكل'
           ]; 
         });
-        upsertData('صلاحيات_المستخدمين', ['رقم الهاتف', 'الاسم', 'الدور/الوظيفة', 'الحالة', 'الرمز السري', 'المسمى الوظيفي', 'الصلاحيات المفعّلة', 'الصلاحيات الفرعية', 'تعديل الأسعار', 'آخر ظهور', 'خط العرض', 'خط الطول', 'المستشار الذكي', 'السماح بالخصم', 'أقصى خصم من الربح', 'أقصى مبلغ خصم إضافي'], userRows, "#ead1dc", deletedIds);
+        upsertData('صلاحيات_المستخدمين', ['رقم الهاتف', 'الاسم', 'الدور/الوظيفة', 'الحالة', 'الرمز السري', 'المسمى الوظيفي', 'الصلاحيات المفعّلة', 'الصلاحيات الفرعية', 'تعديل الأسعار', 'آخر ظهور', 'خط العرض', 'خط الطول', 'المستشار الذكي', 'السماح بالخصم', 'أقصى خصم من الربح', 'أقصى مبلغ خصم إضافي', 'منطقة العمل'], userRows, "#ead1dc", deletedIds);
       }
 
       // 8. المكتشفين

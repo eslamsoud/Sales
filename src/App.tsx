@@ -270,6 +270,8 @@ export default function App() {
   );
 
   const handleUpdateUsersList = (newUsers: UserAuth[]) => {
+    const removedUsers = usersList.filter(u => !newUsers.find(nu => nu.phone === u.phone));
+    removedUsers.forEach(u => markAsDeleted(`user_${u.phone}`));
     setUsersList(newUsers);
     localStorage.setItem('users_permissions_sys', JSON.stringify(newUsers));
     
@@ -415,10 +417,10 @@ export default function App() {
   }, [simulatedDelegate, factoryLoads, invoices, products]);
 
   // مرجع لتخزين أحدث حالة للبيانات لمنع مشكلة (Stale Closure) أثناء المزامنة التلقائية
-  const latestDataRef = useRef({ products, factoryLoads, customers, invoices, expenses, trips, usersList, googleLeads, potentialLeads });
+  const latestDataRef = useRef({ products, factoryLoads, customers, invoices, expenses, trips, usersList, googleLeads, potentialLeads, settings, dbVersion, currentUser });
   useEffect(() => {
-    latestDataRef.current = { products, factoryLoads, customers, invoices, expenses, trips, usersList, googleLeads, potentialLeads };
-  }, [products, factoryLoads, customers, invoices, expenses, trips, usersList, googleLeads, potentialLeads]);
+    latestDataRef.current = { products, factoryLoads, customers, invoices, expenses, trips, usersList, googleLeads, potentialLeads, settings, dbVersion, currentUser };
+  }, [products, factoryLoads, customers, invoices, expenses, trips, usersList, googleLeads, potentialLeads, settings, dbVersion, currentUser]);
 
   // ☁️ مزامنة تلقائية صامتة عند بدء تشغيل التطبيق لضمان سحب أحدث بيانات المناديب والأسعار من السحاب
   useEffect(() => {
@@ -663,7 +665,7 @@ export default function App() {
     };
     window.addEventListener('beforeunload', handleBeforeUnload);
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
-  }, []);
+  }, [syncAllDataToGoogle]);
 
   // 🔄 إعادة محاولة تلقائية للمزامنة الفاشلة (إذا فشلت المزامنة، نعيد المحاولة بعد 30 ثانية)
   useEffect(() => {
@@ -688,7 +690,7 @@ export default function App() {
     };
     const retryInterval = setInterval(checkAndRetry, 30000);
     return () => clearInterval(retryInterval);
-  }, [isDbLoaded, currentUser?.phone]);
+  }, [isDbLoaded, currentUser?.phone, syncAllDataToGoogle, handleUpdateData]);
 
   // تحديث مؤشر آخر مزامنة من localStorage كل 15 ثانية
   useEffect(() => {
@@ -906,6 +908,7 @@ export default function App() {
     const confirmed = await confirmDialog("هل أنت متأكد من حذف جميع الأصناف نهائياً؟ هذا الإجراء لا يمكن التراجع عنه.", true);
     if (!confirmed) return;
     products.forEach(p => markAsDeleted(p.id));
+    factoryLoads.forEach(fl => markAsDeleted(fl.id));
     setProducts([]);
     setFactoryLoads([]);
     promptForSync('مسح جميع الأصناف');
@@ -1122,14 +1125,21 @@ export default function App() {
       setTrips([]);
       setSettings(DEFAULT_SETTINGS);
     } else {
+      products.forEach(p => markAsDeleted(p.id));
+      factoryLoads.forEach(fl => markAsDeleted(fl.id));
+      customers.forEach(c => markAsDeleted(c.id));
+      invoices.forEach(inv => markAsDeleted(inv.id));
+      expenses.forEach(e => markAsDeleted(e.id));
+      trips.forEach(t => markAsDeleted(t.id));
       setProducts([]);
       setFactoryLoads([]);
       setCustomers([]);
       setInvoices([]);
       setExpenses([]);
       setTrips([]);
-      // keep settings intact when resetting to start from scratch unless we want to reset URLs too.
-      // But user wants to keep the Google Web App URL, so we don't clear settings here.
+      const newVersion = Date.now();
+      setDbVersion(newVersion);
+      localStorage.setItem('app_db_version_sys', newVersion.toString());
     }
     setActiveTab('dashboard');
   };
@@ -1163,7 +1173,8 @@ export default function App() {
   };
 
   async function syncAllDataToGoogle(silent = false): Promise<boolean> {
-    const scriptUrl = getSafeScriptUrl(settings.googleSheetsUrl);
+    const ref = latestDataRef.current;
+    const scriptUrl = getSafeScriptUrl(ref.settings.googleSheetsUrl);
     const requestId = `sync-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
     const startTime = performance.now();
 
@@ -1173,7 +1184,7 @@ export default function App() {
       const checkResp = await fetchWithTimeout(checkUrl, { method: 'GET', cache: 'no-store', redirect: 'follow' }, 8000);
       if (checkResp.ok) {
         const checkData = await checkResp.json();
-        if (checkData && checkData.dbVersion && typeof checkData.dbVersion === 'number' && checkData.dbVersion > dbVersion) {
+        if (checkData && checkData.dbVersion && typeof checkData.dbVersion === 'number' && checkData.dbVersion > ref.dbVersion) {
           if (!silent) {
             showToast('⚠️ تم تهيئة النظام من المدير. يرجى سحب البيانات أولاً قبل الرفع.');
           }
@@ -1202,9 +1213,9 @@ export default function App() {
       } = latestDataRef.current;
 
       // 🚨 تعريف متغير مدير المزامنة الذي كان مفقوداً ويسبب انهيار صامت أثناء الرفع
-      const isSyncManager = currentUser?.role === 'owner' 
-        || currentUser?.phone === '01228466613'
-        || (currentUser?.customRoleName && (currentUser.customRoleName.includes('نائب المدير') || currentUser.customRoleName.includes('مشرف عام')));
+      const isSyncManager = ref.currentUser?.role === 'owner' 
+        || ref.currentUser?.phone === '01228466613'
+        || (ref.currentUser?.customRoleName && (ref.currentUser.customRoleName.includes('نائب المدير') || ref.currentUser.customRoleName.includes('مشرف عام')));
 
       // حساب الصافي الحقيقي للتدفق النقدي لتصديره لشيت (الملخص)
       const totalCollected = currentInvoices.reduce((sum, inv) => sum + (inv.paidAmount !== undefined ? inv.paidAmount : (inv.totalAfterDiscount || 0)), 0);
@@ -1247,11 +1258,11 @@ export default function App() {
 
       const payload = {
         type: 'تقرير_كامل',
-        syncPhone: currentUser?.phone || '01228466613',
-        syncRole: currentUser?.role || 'owner',
-        customRoleName: currentUser?.customRoleName || '',
-        canEditPrices: currentUser?.canEditPrices !== false,
-        dbVersion: dbVersion,
+        syncPhone: ref.currentUser?.phone || '01228466613',
+        syncRole: ref.currentUser?.role || 'owner',
+        customRoleName: ref.currentUser?.customRoleName || '',
+        canEditPrices: ref.currentUser?.canEditPrices !== false,
+        dbVersion: ref.dbVersion,
         deletedIds: deletedIds,
         metadata: {
           syncedAt: new Date().toISOString(),
@@ -1409,7 +1420,12 @@ export default function App() {
           locationLink: l.locationLink,
           type: l.type || '',
           dateAdded: l.dateAdded || ''
-        }))
+        })),
+        settings: {
+          workAreas: ref.settings.workAreas || [],
+          googleSheetsUrl: ref.settings.googleSheetsUrl || '',
+          googleMapsApiKey: ref.settings.googleMapsApiKey || ''
+        }
       };
 
       const response = await fetchWithTimeout(scriptUrl.trim(), {
@@ -1446,7 +1462,7 @@ export default function App() {
       setSyncLogs(prev => [{
         id: Date.now().toString() + Math.random(),
         timestamp: new Date().toISOString(),
-        delegateName: currentUser?.name || 'مجهول',
+        delegateName: ref.currentUser?.name || 'مجهول',
         status: 'success',
         actionDesc: 'مزامنة شاملة للبيانات',
         durationMs: elapsed
@@ -1713,7 +1729,8 @@ export default function App() {
   }
 
   async function handleUpdateData(isSilent = false) {
-    const scriptUrl = getSafeScriptUrl(settings.googleSheetsUrl);
+    const ref = latestDataRef.current;
+    const scriptUrl = getSafeScriptUrl(ref.settings.googleSheetsUrl);
     const startTime = performance.now();
 
     let shouldReplace = false;
@@ -1743,7 +1760,7 @@ export default function App() {
       const data = await response.json();
 
       // Check for dbVersion — if sheet has a newer version, force full replace
-      if (data && data.dbVersion && typeof data.dbVersion === 'number' && data.dbVersion > dbVersion) {
+      if (data && data.dbVersion && typeof data.dbVersion === 'number' && data.dbVersion > ref.dbVersion) {
         shouldReplace = true;
         setDbVersion(data.dbVersion);
         localStorage.setItem('app_db_version_sys', data.dbVersion.toString());
@@ -1753,20 +1770,20 @@ export default function App() {
       }
 
       let deletedIds: string[] = [];
-      const isUserAdmin = currentUser?.role === 'owner' || currentUser?.phone === '01228466613' || (currentUser?.customRoleName && (currentUser.customRoleName.includes('نائب المدير') || currentUser.customRoleName.includes('مشرف عام')));
+      const isUserAdmin = ref.currentUser?.role === 'owner' || ref.currentUser?.phone === '01228466613' || (ref.currentUser?.customRoleName && (ref.currentUser.customRoleName.includes('نائب المدير') || ref.currentUser.customRoleName.includes('مشرف عام')));
       if (isUserAdmin) {
         try {
           deletedIds = JSON.parse(localStorage.getItem('deleted_records_sys') || '[]');
         } catch(e) {}
       }
 
-      let finalProducts = products;
-      let finalCustomers = customers;
-      let finalInvoices = invoices;
-      let finalExpenses = expenses;
-      let finalTrips = trips;
-      let finalLoads = factoryLoads;
-      let updatedSettings = { ...settings };
+      let finalProducts = ref.products;
+      let finalCustomers = ref.customers;
+      let finalInvoices = ref.invoices;
+      let finalExpenses = ref.expenses;
+      let finalTrips = ref.trips;
+      let finalLoads = ref.factoryLoads;
+      let updatedSettings = { ...ref.settings };
 
       if (data && (data.users || data.products || data.customers)) {
         // 1. Update users permissions list (highly sensitive, managed by general manager)
@@ -1899,7 +1916,8 @@ export default function App() {
           if (shouldReplace) {
             finalProducts = mappedProducts;
           } else {
-            const merged = [...products];
+            const mappedIds = new Set(mappedProducts.map((p: any) => String(p.id)));
+            const merged = [...ref.products];
             mappedProducts.forEach(np => {
               // الاعتماد على الاسم بجانب الـ ID لمنع تكرار الصنف نهائياً
               const idx = merged.findIndex(p => p.id === np.id || p.name.trim().toLowerCase() === np.name.trim().toLowerCase());
@@ -1909,7 +1927,7 @@ export default function App() {
                   merged.push(np as Product);
               }
             });
-            finalProducts = merged;
+            finalProducts = merged.filter(p => mappedIds.has(p.id));
           }
           setProducts(finalProducts);
         } else if (data.products && Array.isArray(data.products)) {
@@ -1926,13 +1944,14 @@ export default function App() {
           if (shouldReplace) {
             finalProducts = mappedProducts;
           } else {
-            const merged = [...products];
+            const mappedIds = new Set(mappedProducts.map((p: any) => String(p.id)));
+            const merged = [...ref.products];
             mappedProducts.forEach((np: any) => {
               const idx = merged.findIndex(p => p.id === np.id);
               if (idx > -1) merged[idx] = np;
               else merged.push(np);
             });
-            finalProducts = merged;
+            finalProducts = merged.filter(p => mappedIds.has(p.id));
           }
           setProducts(finalProducts);
         }
@@ -1960,7 +1979,8 @@ export default function App() {
           if (shouldReplace) {
             finalCustomers = mappedCustomers;
           } else {
-            const merged = [...customers];
+            const mappedIds = new Set(mappedCustomers.map((c: any) => String(c.id)));
+            const merged = [...ref.customers];
             mappedCustomers.forEach((nc: any) => {
               const idx = merged.findIndex(c => c.id === nc.id || (c.phone && c.phone === nc.phone));
               if (idx > -1) {
@@ -1969,12 +1989,12 @@ export default function App() {
                 merged.push(nc);
               }
             });
-            finalCustomers = merged;
+            finalCustomers = merged.filter(c => mappedIds.has(c.id));
           }
           setCustomers(finalCustomers);
 
           // تحديث تلقائي لـ workAreas من بيانات العملاء المسحوبة من الشيت (عملاء، عملاء مكتشفين، عملاء محتملين)
-          const existingPairs = new Set((settings.workAreas || []).map(w => `${w.governorate}||${w.area}`));
+          const existingPairs = new Set((updatedSettings.workAreas || []).map(w => `${w.governorate}||${w.area}`));
           const newPairs: { governorate: string; area: string }[] = [];
 
           const addPair = (gov: string, area: string) => {
@@ -2000,7 +2020,7 @@ export default function App() {
           }
 
           if (newPairs.length > 0) {
-            updatedSettings = { ...settings, workAreas: [...(settings.workAreas || []), ...newPairs] };
+            updatedSettings = { ...updatedSettings, workAreas: [...(updatedSettings.workAreas || []), ...newPairs] };
             setSettings(updatedSettings);
           }
         }
@@ -2040,13 +2060,14 @@ export default function App() {
           if (shouldReplace) {
             finalInvoices = mappedInvoices;
           } else {
-            const merged = [...invoices];
+            const mappedIds = new Set(mappedInvoices.map((i: any) => String(i.id)));
+            const merged = [...ref.invoices];
             mappedInvoices.forEach((ni: any) => {
               const idx = merged.findIndex(i => i.id === ni.id);
               if (idx > -1) merged[idx] = ni;
               else merged.push(ni);
             });
-            finalInvoices = merged;
+            finalInvoices = merged.filter(i => mappedIds.has(i.id));
           }
           setInvoices(finalInvoices);
         }
@@ -2062,18 +2083,19 @@ export default function App() {
             locationLink: l.locationLink || '',
             type: l.type || '',
             dateAdded: l.dateAdded || ''
-          }));
+          })).filter((l: any) => !deletedIds.includes(l.id));
           setGoogleLeads(prev => {
             if (shouldReplace) {
               return mappedLeads;
             } else {
+              const mappedIds = new Set(mappedLeads.map((l: any) => String(l.id)));
               const merged = [...prev];
               mappedLeads.forEach((nl: any) => {
                 const idx = merged.findIndex((l: any) => l.id === nl.id);
                 if (idx > -1) merged[idx] = nl;
                 else merged.push(nl);
               });
-              return merged;
+              return merged.filter(l => mappedIds.has(l.id));
             }
           });
         }
@@ -2089,18 +2111,19 @@ export default function App() {
             locationLink: l.locationLink || '',
             type: l.type || '',
             dateAdded: l.dateAdded || ''
-          }));
+          })).filter((l: any) => !deletedIds.includes(l.id));
           setPotentialLeads(prev => {
             if (shouldReplace) {
               return mappedPotential;
             } else {
+              const mappedIds = new Set(mappedPotential.map((l: any) => String(l.id)));
               const merged = [...prev];
               mappedPotential.forEach((nl: any) => {
                 const idx = merged.findIndex((l: any) => l.id === nl.id);
                 if (idx > -1) merged[idx] = nl;
                 else merged.push(nl);
               });
-              return merged;
+              return merged.filter(l => mappedIds.has(l.id));
             }
           });
         }
@@ -2135,13 +2158,14 @@ export default function App() {
           if (shouldReplace) {
             finalExpenses = mappedExpenses;
           } else {
-            const merged = [...expenses];
+            const mappedIds = new Set(mappedExpenses.map((e: any) => String(e.id)));
+            const merged = [...ref.expenses];
             mappedExpenses.forEach((ne: any) => {
               const idx = merged.findIndex(e => e.id === ne.id);
               if (idx > -1) merged[idx] = ne;
               else merged.push(ne);
             });
-            finalExpenses = merged;
+            finalExpenses = merged.filter(e => mappedIds.has(e.id));
           }
           setExpenses(finalExpenses);
         }
@@ -2161,13 +2185,14 @@ export default function App() {
           if (shouldReplace) {
             finalTrips = mappedTrips;
           } else {
-            const merged = [...trips];
+            const mappedIds = new Set(mappedTrips.map((t: any) => String(t.id)));
+            const merged = [...ref.trips];
             mappedTrips.forEach((nt: any) => {
               const idx = merged.findIndex(t => t.id === nt.id);
               if (idx > -1) merged[idx] = nt;
               else merged.push(nt);
             });
-            finalTrips = merged;
+            finalTrips = merged.filter(t => mappedIds.has(t.id));
           }
           setTrips(finalTrips);
         }
@@ -2192,13 +2217,14 @@ export default function App() {
           if (shouldReplace) {
             finalLoads = mappedLoads;
           } else {
-            const merged = [...factoryLoads];
+            const mappedIds = new Set(mappedLoads.map((l: any) => String(l.id)));
+            const merged = [...ref.factoryLoads];
             mappedLoads.forEach((nl: any) => {
               const idx = merged.findIndex(l => l.id === nl.id);
               if (idx > -1) merged[idx] = nl;
               else merged.push(nl);
             });
-            finalLoads = merged;
+            finalLoads = merged.filter(l => mappedIds.has(l.id));
           }
           setFactoryLoads(finalLoads);
         }
