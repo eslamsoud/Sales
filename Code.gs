@@ -12,14 +12,19 @@ function getSafeNumber(val) {
 }
 
 function formatPhone(val) {
-  var p = String(val !== undefined && val !== null ? val : '').replace(/^'/, '').replace(/\s+/g, '');
-  if (p.length === 10 && p.indexOf('1') === 0) p = '0' + p;
+  var p = String(val !== undefined && val !== null ? val : '')
+    .replace(/^'/, '').replace(/\s+/g, '').replace(/[^\d]/g, '');
+  if (p.startsWith('0020')) p = p.substring(4);
+  if (p.startsWith('20') && p.length > 10) p = p.substring(2);
+  if (!p.startsWith('0') && p.length >= 7) p = '0' + p;
   return p ? "'" + p : '';
 }
 
 function getSafePhone(val) {
-  var p = getSafeString(val).replace(/^'/, '').replace(/\s+/g, '');
-  if (p.length === 10 && p.indexOf('1') === 0) p = '0' + p;
+  var p = getSafeString(val).replace(/^'/, '').replace(/\s+/g, '').replace(/[^\d]/g, '');
+  if (p.startsWith('0020')) p = p.substring(4);
+  if (p.startsWith('20') && p.length > 10) p = p.substring(2);
+  if (!p.startsWith('0') && p.length >= 7) p = '0' + p;
   return p;
 }
 
@@ -393,7 +398,10 @@ function doPost(e) {
     if (data.type === 'تقرير_كامل') {
 
       // 🟢 التهيئة الكاملة: مسح جميع الجداول قبل الكتابة (باستثناء صلاحيات المستخدمين)
-      if (data.dbVersion !== undefined && data.dbVersion !== null) {
+      // فقط عند تغير dbVersion (تهيئة من المدير) وليس في كل مزامنة
+      var currentDbVersion = PropertiesService.getScriptProperties().getProperty('dbVersion');
+      if (data.dbVersion !== undefined && data.dbVersion !== null && 
+          (!currentDbVersion || Number(data.dbVersion) > Number(currentDbVersion))) {
         PropertiesService.getScriptProperties().setProperty('dbVersion', data.dbVersion.toString());
         ['الفواتير', 'أرشيف السداد', 'الماليات', 'المشاوير', 'العملاء', 'الأصناف_والأوزان', 'المصنع', 'عملاء_مكتشفين', 'عملاء_محتملين'].forEach(function(name) {
           var s = ss.getSheetByName(name);

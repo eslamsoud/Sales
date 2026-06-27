@@ -667,6 +667,17 @@ export default function App() {
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
   }, [syncAllDataToGoogle]);
 
+  // 🔄 سحب تلقائي عند العودة للتطبيق (التبديل من تبويب آخر)
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible' && currentUser) {
+        handleUpdateData(true);
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => document.removeEventListener('visibilitychange', handleVisibility);
+  }, [currentUser, handleUpdateData]);
+
   // 🔄 إعادة محاولة تلقائية للمزامنة الفاشلة (إذا فشلت المزامنة، نعيد المحاولة بعد 30 ثانية)
   useEffect(() => {
     if (!isDbLoaded || !currentUser) return;
