@@ -16,6 +16,7 @@ interface FinancialSummary {
   totalExpenseAmount: number;
   totalRevenueAmount: number;
   totalTripAmount: number;
+  factorySoldCost: number;
 }
 
 interface ExpensesTabProps {
@@ -549,7 +550,7 @@ export default function ExpensesTab({ expenses, onAddExpense, onDeleteExpense, o
                 <span className="text-indigo-600 font-bold block">هامش الربح</span>
                 <span className="text-indigo-800 font-black text-sm">
                   {(() => {
-                    const profit = summaryData.totalInvoiceAmount - summaryData.totalLoadCost;
+                    const profit = summaryData.totalInvoiceAmount + summaryData.totalRevenueAmount + summaryData.totalTripAmount - summaryData.factorySoldCost - summaryData.totalExpenseAmount;
                     const pct = summaryData.totalInvoiceAmount > 0 ? (profit / summaryData.totalInvoiceAmount * 100) : 0;
                     return `${profit.toLocaleString()} ج (${pct.toFixed(1)}%)`;
                   })()}

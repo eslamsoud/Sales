@@ -6,7 +6,7 @@ import { confirmDialog, duaConfirmDialog } from '../utils/confirm';
  */
 
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { Customer, Product, ProductWeight, Invoice, InvoiceItem, FactoryLoad, getProductWeightsFallback, formatNum } from '../types';
+import { Customer, Product, ProductWeight, Invoice, InvoiceItem, FactoryLoad, getProductWeightsFallback, formatNum, getItemFactoryCost } from '../types';
 import { Receipt, Plus, Trash2, ArrowRight, Save, User, MapPin, Percent, HelpCircle, Package, AlertTriangle, Scale, Eye, Search, Check, Loader2, Download, Share2, FileText, Printer, ScanLine, Copy } from 'lucide-react';
 import { showToast } from '../utils/toast';
 import SecurePhoneDisplay from './SecurePhoneDisplay';
@@ -568,7 +568,7 @@ export default function InvoiceTab({
       const extraNotes = totals.extraDiscount > 0 ? `خصم إضافي خاص: ${totals.extraDiscount}ج.م - السبب: ${totals.extraDiscountReason}` : '';
       const finalNotes = [invoiceNotes.trim(), extraNotes].filter(Boolean).join(" | ");
 
-      const paidValue = customPaidAmount !== '' ? parseFloat(customPaidAmount) : totals.after;
+      const paidValue = customPaidAmount !== '' ? parseFloat(customPaidAmount) : 0;
 
       // Create a copy of billItems to save immediately
       const itemsToSave = [...billItems];
@@ -1635,6 +1635,8 @@ export default function InvoiceTab({
                 const weights = prod ? getProductWeightsFallback(prod) : [];
                 const weight = weights.find(w => String(w.id).trim() === String(item.weightId).trim()) || weights[0];
                 const itemTotal = item.finalPrice * item.quantity;
+                const fpPerUnit = getItemFactoryCost(item, weight, prod);
+                const itemProfit = ((item.finalPrice || 0) - fpPerUnit) * (item.quantity || 0);
                 
                 const multiplier = weight ? (weight.unitsPerCarton || 12) : 12;
                 const qtyLabel = formatCartonsAndPieces(item.quantity, multiplier);
@@ -1649,6 +1651,10 @@ export default function InvoiceTab({
                         {item.discountPercent > 0 && <span className="text-rose-600 text-[10px] font-bold">(خصم {item.discountPercent}%)</span>}
                         <span>•</span>
                         <span>الصافي: <strong className="text-[#DD6B20] font-extrabold">{formatNum(itemTotal)} ج.م</strong></span>
+                        <span>•</span>
+                        <span className={`font-bold text-[10px] ${itemProfit >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                          هامش: {formatNum(itemProfit)} ج
+                        </span>
                       </div>
                     </div>
                     
@@ -1688,6 +1694,21 @@ export default function InvoiceTab({
                 <span>إجمالي الخصومات:</span>
                 <span>-{formatNum(totals.discount)}ج.م</span>
               </div>
+              {(() => {
+                const totalFactoryCost = billItems.reduce((sum, it) => {
+                  const p = products.find(pp => String(pp.id).trim() === String(it.productId).trim());
+                  const ws = p ? getProductWeightsFallback(p) : [];
+                  const w = ws.find(ww => String(ww.id).trim() === String(it.weightId).trim()) || ws[0];
+                  return sum + (getItemFactoryCost(it, w, p) * (it.quantity || 0));
+                }, 0);
+                const totalProfit = totals.after - totalFactoryCost;
+                return (
+                  <div className={`flex justify-between font-bold ${totalProfit >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
+                    <span>صافي الربح:</span>
+                    <span className="text-sm font-black">{formatNum(totalProfit)}ج.م</span>
+                  </div>
+                );
+              })()}
               <div className="flex flex-col gap-3 mt-3 pt-3 border-t border-slate-150">
                 <div className="flex justify-between items-center text-sm font-black text-[#1A365D] border-b border-slate-100 pb-2">
                    <span>المسدد:</span>
@@ -1904,6 +1925,7 @@ export default function InvoiceTab({
                         </div>
 
                         <div className="grid grid-cols-3 gap-2 mt-1">
+                          {isManager && (
                           <button
                             type="button"
                             onClick={() => {
@@ -1930,6 +1952,7 @@ export default function InvoiceTab({
                           >
                             ✍️ تعديل
                           </button>
+                          )}
                           <button
                             type="button"
                             onClick={() => {
@@ -2113,6 +2136,35 @@ export default function InvoiceTab({
                               >
                                 <Check className="h-4 w-4" />
                               </button>
+                              {isManager && (
+                              <button
+                                onClick={() => {
+                                  setActiveSubTab('create');
+                                  setEditingInvoiceId(inv.id);
+                                  setSelectedCustomerId(inv.customerId);
+                                  const cust = customers.find(c => c.id === inv.customerId);
+                                  if (cust) {
+                                    setFilterGovernorate(cust.governorate || '');
+                                    setFilterArea(cust.area || '');
+                                  }
+                                  let dStr = '';
+                                  const parsed = new Date(inv.date);
+                                  if (!isNaN(parsed.getTime())) {
+                                    dStr = parsed.toISOString().substring(0, 16);
+                                  }
+                                  setInvoiceDate(dStr);
+                                  setBillItems(inv.items);
+                                  setInvoiceNotes(inv.notes || '');
+                                  setCustomPaidAmount(inv.paidAmount !== undefined ? inv.paidAmount.toString() : inv.totalAfterDiscount.toString());
+                                  setManualInvoiceNumber(inv.invoiceNumber);
+                                  window.scrollTo({ top: 0, behavior: 'smooth' });
+                                }}
+                                className="bg-sky-100 border border-sky-250 p-2 text-sky-700 rounded-xl hover:bg-sky-200 active:scale-95 transition-all cursor-pointer flex items-center justify-center font-bold text-[11px]"
+                                title="تعديل بيانات الفاتورة"
+                              >
+                                <span className="font-extrabold px-1">تعديل</span>
+                              </button>
+                              )}
                             </>
                           )}
                           <button
@@ -2194,6 +2246,38 @@ export default function InvoiceTab({
                 <FileText className="h-4 w-4" />
                 تنزيل كملف صورة PDF
               </button>
+
+              {isManager && (
+              <button
+                type="button"
+                onClick={() => {
+                  const inv = selectedInvoice;
+                  setSelectedInvoice(null);
+                  setActiveSubTab('create');
+                  setEditingInvoiceId(inv.id);
+                  setSelectedCustomerId(inv.customerId);
+                  const cust = customers.find(c => c.id === inv.customerId);
+                  if (cust) {
+                    setFilterGovernorate(cust.governorate || '');
+                    setFilterArea(cust.area || '');
+                  }
+                  let dStr = '';
+                  const parsed = new Date(inv.date);
+                  if (!isNaN(parsed.getTime())) {
+                    dStr = parsed.toISOString().substring(0, 16);
+                  }
+                  setInvoiceDate(dStr);
+                  setBillItems(inv.items);
+                  setInvoiceNotes(inv.notes || '');
+                  setCustomPaidAmount(inv.paidAmount !== undefined ? inv.paidAmount.toString() : inv.totalAfterDiscount.toString());
+                  setManualInvoiceNumber(inv.invoiceNumber);
+                  window.scrollTo({ top: 0, behavior: 'smooth' });
+                }}
+                className="bg-sky-100 hover:bg-sky-200 text-sky-800 font-bold py-2 px-3 rounded-xl text-[11px] sm:text-xs transition-colors flex items-center justify-center gap-1 cursor-pointer shadow-xs border border-sky-200"
+              >
+                ✍️ تعديل الفاتورة
+              </button>
+              )}
             </div>
           </div>
         </div>

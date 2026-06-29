@@ -7,8 +7,8 @@ import { jsPDF } from 'jspdf';
  */
 
 import React, { useState, useEffect, useMemo } from 'react';
-import { Product, FactoryLoad, CarBalance, ProductWeight, getProductWeightsFallback, Invoice, Trip, formatNum, Expense, UserAuth } from '../types';
-import { Truck, Plus, PackagePlus, ArrowRight, History, Trash2, AlertCircle, Edit, Save, HelpCircle, FileText, Image, Scale, CirclePercent, DollarSign, Box, Clock, CheckCircle2, ShieldMinus, Wallet, Printer, Calendar, MapPin, Download, ScanLine, Archive, Landmark } from 'lucide-react';
+import { Product, FactoryLoad, CarBalance, ProductWeight, getProductWeightsFallback, Invoice, Trip, formatNum, Expense, UserAuth, getItemFactoryCost } from '../types';
+import { Truck, Plus, PackagePlus, Package, ArrowRight, History, Trash2, AlertCircle, Edit, Save, HelpCircle, FileText, Image, Scale, CirclePercent, DollarSign, Box, Clock, CheckCircle2, ShieldMinus, Wallet, Printer, Calendar, MapPin, Download, ScanLine, Archive, Landmark } from 'lucide-react';
 import { showToast } from '../utils/toast';
 
 interface FactoryTabProps {
@@ -292,12 +292,146 @@ export default function FactoryTab({
         stocks[key] = {
           loaded,
           sold,
-          remaining: loaded - sold
+          remaining: Math.max(0, loaded - sold)
         };
       });
     });
+
+    factoryLoads.forEach(load => {
+      const pid = String(load.productId).trim();
+      const wid = String(load.weightId || '').trim();
+      if (!wid) return;
+      const key = `${pid}_${wid}`;
+      if (stocks[key]) return;
+      const prod = products.find(p => String(p.id).trim() === pid);
+      if (!prod) {
+        stocks[key] = { loaded: load.quantity || 0, sold: 0, remaining: load.quantity || 0 };
+        return;
+      }
+      const weights = getProductWeightsFallback(prod);
+      const matched = weights.find(w => String(w.id).trim() === wid);
+      if (!matched) {
+        const fallbackKey = key;
+        if (!stocks[fallbackKey]) {
+          stocks[fallbackKey] = { loaded: load.quantity || 0, sold: 0, remaining: load.quantity || 0 };
+        } else {
+          stocks[fallbackKey].loaded += load.quantity || 0;
+          stocks[fallbackKey].remaining = Math.max(0, stocks[fallbackKey].loaded - stocks[fallbackKey].sold);
+        }
+      }
+    });
+
     return stocks;
   }, [products, factoryLoads, invoices]);
+
+  const [inventoryFilter, setInventoryFilter] = useState<'all' | 'daily' | 'weekly' | 'monthly' | 'custom'>('all');
+  const [inventoryStartDate, setInventoryStartDate] = useState('');
+  const [inventoryEndDate, setInventoryEndDate] = useState('');
+  const [inventoryDayFilters, setInventoryDayFilters] = useState<string[]>([]);
+
+  const weightStocksInCartons = useMemo(() => {
+    const stocks: Record<string, { loaded: number; sold: number; remaining: number }> = {};
+    const seenKeys = new Set<string>();
+
+    products.forEach(p => {
+      const weights = getProductWeightsFallback(p);
+      weights.forEach(w => {
+        const key = `${p.id}_${w.id}`;
+        seenKeys.add(key);
+        const unitsPerC = w.unitsPerCarton || 12;
+        const u = weightStocks[key] || { loaded: 0, sold: 0, remaining: 0 };
+        stocks[key] = {
+          loaded: Math.floor(u.loaded / unitsPerC),
+          sold: Math.floor(u.sold / unitsPerC),
+          remaining: Math.floor(u.remaining / unitsPerC)
+        };
+      });
+    });
+
+    Object.keys(weightStocks).forEach(key => {
+      if (seenKeys.has(key)) return;
+      const u = weightStocks[key];
+      stocks[key] = {
+        loaded: Math.floor(u.loaded / 12),
+        sold: Math.floor(u.sold / 12),
+        remaining: Math.floor(u.remaining / 12)
+      };
+    });
+
+    return stocks;
+  }, [weightStocks, products]);
+
+  const inventoryFilteredStocks = useMemo(() => {
+    if (inventoryFilter === 'all') return weightStocksInCartons;
+
+    const now = new Date();
+    const isDateInRange = (dateStr: string) => {
+      const d = new Date(dateStr);
+      if (isNaN(d.getTime())) return false;
+      if (inventoryFilter === 'daily') return d.toDateString() === now.toDateString();
+      if (inventoryFilter === 'weekly') {
+        if ((now.getTime() - d.getTime()) > 7 * 24 * 60 * 60 * 1000) return false;
+        if (inventoryDayFilters.length > 0) {
+          const dayName = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][d.getDay()];
+          if (!inventoryDayFilters.includes(dayName)) return false;
+        }
+        return true;
+      }
+      if (inventoryFilter === 'monthly') return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+      if (inventoryFilter === 'custom') {
+        const dStr = dateStr.split('T')[0];
+        if (inventoryStartDate && dStr < inventoryStartDate) return false;
+        if (inventoryEndDate && dStr > inventoryEndDate) return false;
+      }
+      return true;
+    };
+
+    const stocks: Record<string, { loaded: number; sold: number; remaining: number }> = {};
+    const seenKeys = new Set<string>();
+    products.forEach(p => {
+      const weights = getProductWeightsFallback(p);
+      weights.forEach(w => {
+        const key = `${p.id}_${w.id}`;
+        seenKeys.add(key);
+        const unitsPerC = w.unitsPerCarton || 12;
+        const loaded = factoryLoads.filter(l => String(l.productId).trim() === String(p.id).trim() && String(l.weightId || w.id).trim() === String(w.id).trim() && isDateInRange(l.date)).reduce((sum, l) => sum + l.quantity, 0);
+        let sold = 0;
+        invoices.forEach(inv => {
+          if (!isDateInRange(inv.date)) return;
+          inv.items.forEach(item => {
+            if (String(item.productId).trim() === String(p.id).trim() && String(item.weightId || w.id).trim() === String(w.id).trim()) {
+              sold += item.quantity;
+            }
+          });
+        });
+        stocks[key] = {
+          loaded: Math.floor(loaded / unitsPerC),
+          sold: Math.floor(sold / unitsPerC),
+          remaining: Math.floor((loaded - sold) / unitsPerC)
+        };
+      });
+    });
+    factoryLoads.filter(l => isDateInRange(l.date)).forEach(load => {
+      const pid = String(load.productId).trim();
+      const wid = String(load.weightId || '').trim();
+      if (!wid) return;
+      const key = `${pid}_${wid}`;
+      if (seenKeys.has(key)) return;
+      const unitsPerC = 12;
+      const loaded = load.quantity || 0;
+      let sold = 0;
+      invoices.forEach(inv => {
+        if (!isDateInRange(inv.date)) return;
+        inv.items.forEach(item => {
+          if (String(item.productId).trim() === pid && String(item.weightId || '').trim() === wid) {
+            sold += item.quantity;
+          }
+        });
+      });
+      stocks[key] = { loaded: Math.floor(loaded / unitsPerC), sold: Math.floor(sold / unitsPerC), remaining: Math.floor((loaded - sold) / unitsPerC) };
+    });
+    return stocks;
+  }, [weightStocksInCartons, products, factoryLoads, invoices, inventoryFilter, inventoryStartDate, inventoryEndDate, inventoryDayFilters]);
 
   const filteredLoads = React.useMemo(() => {
     return factoryLoads.filter(load => {
@@ -740,7 +874,7 @@ export default function FactoryTab({
             cartonsCount: item.cartons,
             looseUnitsCount: 0,
             cartonPrice: item.weight.cartonPriceFromFactory || 0,
-            unitPrice: item.weight.factoryPricePerUnit || 0,
+            unitPrice: (item.weight.factoryPricePerUnit || 0),
             notes: loadNotes.trim() || `شحنة محملة [${group.product.name} - وزن ${item.weight.size}]`,
             warehouseKeeper: warehouseKeeper.trim() || undefined,
             advanceAmount: showAdvanceInput ? (parseFloat(advanceAmount) || undefined) : undefined,
@@ -782,7 +916,7 @@ export default function FactoryTab({
 
       const cartons = load.cartonsCount !== undefined ? load.cartonsCount : Math.floor(load.quantity / (weight?.unitsPerCarton || 12));
       const loose = load.looseUnitsCount !== undefined ? load.looseUnitsCount : (load.quantity % (weight?.unitsPerCarton || 12));
-      const cartonPrice = load.cartonPrice !== undefined ? Number(load.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) * (weight?.unitsPerCarton || 12) : 0) || 0);
+      const cartonPrice = load.cartonPrice !== undefined ? Number(load.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) : 0) || 0);
       const factoryPricePerUnit = load.unitPrice !== undefined ? Number(load.unitPrice) : (Number(weight?.factoryPricePerUnit) || (prod ? Number(prod.price) : 0) || 0);
 
       const subtotal = (cartons * cartonPrice) + (loose * factoryPricePerUnit);
@@ -826,7 +960,7 @@ export default function FactoryTab({
 
       const cartons = load.cartonsCount !== undefined ? load.cartonsCount : Math.floor(load.quantity / (weight?.unitsPerCarton || 12));
       const loose = load.looseUnitsCount !== undefined ? load.looseUnitsCount : (load.quantity % (weight?.unitsPerCarton || 12));
-      const cartonPrice = load.cartonPrice !== undefined ? Number(load.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) * (weight?.unitsPerCarton || 12) : 0) || 0);
+      const cartonPrice = load.cartonPrice !== undefined ? Number(load.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) : 0) || 0);
       const factoryPricePerUnit = load.unitPrice !== undefined ? Number(load.unitPrice) : (Number(weight?.factoryPricePerUnit) || (prod ? Number(prod.price) : 0) || 0);
 
       const subtotal = (cartons * cartonPrice) + (loose * factoryPricePerUnit);
@@ -883,7 +1017,7 @@ export default function FactoryTab({
 
       const cartons = load.cartonsCount !== undefined ? load.cartonsCount : Math.floor(load.quantity / (weight?.unitsPerCarton || 12));
       const loose = load.looseUnitsCount !== undefined ? load.looseUnitsCount : (load.quantity % (weight?.unitsPerCarton || 12));
-      const cartonPrice = load.cartonPrice !== undefined ? Number(load.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) * (weight?.unitsPerCarton || 12) : 0) || 0);
+      const cartonPrice = load.cartonPrice !== undefined ? Number(load.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) : 0) || 0);
       const factoryPricePerUnit = load.unitPrice !== undefined ? Number(load.unitPrice) : (Number(weight?.factoryPricePerUnit) || (prod ? Number(prod.price) : 0) || 0);
       const subtotal = (cartons * cartonPrice) + (loose * factoryPricePerUnit);
 
@@ -1363,9 +1497,27 @@ export default function FactoryTab({
     const doc = iframe.contentWindow?.document;
     if (!doc) return;
 
-    const filteredLoads = factoryLoads.filter(filterByFactoryDelegate).filter(l => !l.archivedAt);
     const selectedDel = archiveDelegates.find(d => d.phone === factoryDelegateFilter || d.name === factoryDelegateFilter);
     const delegateHeader = selectedDel ? `<p style="font-size: 14px; margin-top: 5px; color: #1e3a8a; font-weight: bold;">المندوب: ${selectedDel.name} ${selectedDel.phone !== 'مجهول' ? `(${selectedDel.phone})` : ''}</p>` : '';
+
+    const filteredLoadsPdf = factoryLoads.filter(filterByFactoryDelegate).filter(l => !l.archivedAt);
+    const soldItems = allAccountLoadsForExport.filter(item => item.loaded > 0 || item.sold > 0).map(item => {
+      const avgCartonPrice = item.loaded > 0 ? Math.round(item.loadedValue / item.loaded) : 0;
+      return {
+        productName: item.productName,
+        size: item.size,
+        loaded: item.loaded,
+        sold: item.sold,
+        remaining: item.remaining,
+        factoryCartonPrice: avgCartonPrice,
+        factoryValue: item.soldValue
+      };
+    });
+
+    const totalLoadedCrates = soldItems.reduce((sum, item) => sum + item.loaded, 0);
+    const totalSoldCrates = soldItems.reduce((sum, item) => sum + item.sold, 0);
+    const totalRemainingCrates = soldItems.reduce((sum, item) => sum + item.remaining, 0);
+    const totalSoldValuePdf = soldItems.reduce((sum, item) => sum + item.factoryValue, 0);
 
     doc.open();
     doc.write(`
@@ -1380,29 +1532,24 @@ export default function FactoryTab({
             .header { text-align: center; margin-bottom: 25px; border-bottom: 3px double #1e3a8a; padding-bottom: 12px; }
             .header h1 { color: #1e3a8a; margin: 0 0 5px 0; font-size: 24px; font-weight: 900; }
             .header p { margin: 0; color: #64748b; font-size: 13px; font-weight: bold; }
-            
             .meta-box { display: flex; justify-content: space-between; margin-bottom: 25px; font-size: 11px; color: #334155; font-weight: bold; border-bottom: 1px solid #e2e8f0; padding-bottom: 8px; }
-            
             .summary-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; margin-bottom: 25px; }
             .card { background: #f8fafc; border: 1px solid #e2e8f0; padding: 15px; border-radius: 12px; text-align: center; }
             .card.danger { background: #fff5f5; border-color: #fee2e2; }
             .card.success { background: #f0fdf4; border-color: #dcfce7; }
             .card span { display: block; font-size: 10px; color: #64748b; font-weight: bold; margin-bottom: 5px; }
             .card strong { font-size: 15px; color: #0f172a; font-weight: 900; }
-            
             h2 { font-size: 13px; color: #1e3a8a; margin: 25px 0 10px 0; border-right: 4px solid #dd6b20; padding-right: 8px; font-weight: bold; }
-            
             table { width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 11px; }
             th, td { border: 1px solid #e2e8f0; padding: 8px 12px; text-align: right; }
             th { background: #f1f5f9; color: #334155; font-weight: 900; }
-            
             .footer-notes { margin-top: 40px; border-top: 1px solid #cbd5e1; padding-top: 15px; display: flex; justify-content: space-between; font-size: 11px; font-weight: bold; color: #475569; }
           </style>
         </head>
         <body>
           <div class="header">
-            <h1>كشف حساب المالي للمصنع والموردين</h1>
-            <p>نظام التوزيع والمبيعات المعتمد للأغذية والمستودع</p>
+            <h1>كشف حساب المالي للمصنع</h1>
+            <p>محسوب بناءً على البضاعة المباع فقط (الجرد)</p>
             ${delegateHeader}
           </div>
           
@@ -1413,7 +1560,7 @@ export default function FactoryTab({
           
           <div class="summary-cards">
             <div class="card">
-              <span>حساب المصنع</span>
+              <span>حساب المصنع (المبيع بسعر المصنع)</span>
               <strong>${factoryBalanceDetails.totalWithdrawnValue.toLocaleString('ar-EG')} ج.م</strong>
             </div>
             <div class="card success">
@@ -1435,44 +1582,48 @@ export default function FactoryTab({
             </div>`}
           </div>
           
-          <h2>تفاصيل حمولات البضاعة المسحوبة ومقدماتها</h2>
+          <h2>تفاصيل البضاعة (المحمل - المبيع - المتبقي)</h2>
           <table>
             <thead>
               <tr>
                 <th width="40">م</th>
-                <th>الصنف وتفاصيل الوزن</th>
-                <th>الكمية وحالة الشحن</th>
-                <th>سعر المورد للكرتونة</th>
-                <th>إجمالي القيمة المسحوبة</th>
-                <th>مقدم السداد المدفوع</th>
+                <th>الصنف والحجم</th>
+                <th>المحمل (كرتونة)</th>
+                <th>المبيع (كرتونة)</th>
+                <th>المتبقي (كرتونة)</th>
+                <th>سعر المصنع للكرتونة</th>
+                <th>قيمة المبيع بسعر المصنع</th>
               </tr>
             </thead>
             <tbody>
-              ${filteredLoads.length === 0 ? '<tr><td colspan="6" style="text-align:center; color:#94a3b8;">لا توجد حمولات بضاعة مسجلة.</td></tr>' : 
-                filteredLoads.map((load, idx) => {
-                  const prod = products.find(p => String(p.id).trim() === String(load.productId).trim());
-                  const weights = prod ? getProductWeightsFallback(prod) : [];
-                  const weight = weights.find(w => String(w.id).trim() === String(load.weightId).trim());
-                  const unitsPerCarton = weight?.unitsPerCarton || 12;
-                  const cartons = load.cartonsCount !== undefined ? load.cartonsCount : Math.floor(load.quantity / unitsPerCarton);
-                  const loose = load.looseUnitsCount !== undefined ? load.looseUnitsCount : (load.quantity % unitsPerCarton);
-                  const cartonPrice = load.cartonPrice !== undefined ? Number(load.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) * unitsPerCarton : 0) || 0);
-                  const unitPrice = load.unitPrice !== undefined ? Number(load.unitPrice) : (Number(weight?.factoryPricePerUnit) || (prod ? Number(prod.price) : 0) || 0);
-                  const subtotal = (cartons * cartonPrice) + (loose * unitPrice);
-
-                  return `
+              ${soldItems.length === 0 ? '<tr><td colspan="7" style="text-align:center; color:#94a3b8;">لا توجد بضاعة مباع مسجلة.</td></tr>' : 
+                soldItems.map((item, idx) => `
                     <tr>
                       <td>${idx + 1}</td>
-                      <td><b>${prod ? prod.name : ((load as any).productName || 'صنف غير معروف')}</b> (وزن: ${weight ? weight.size : ((load as any).weightSize || 'افتراضي')})</td>
-                      <td>${cartons} كرتونة ${loose > 0 ? ` + ${loose} عبوة` : ''}</td>
-                      <td>${cartonPrice.toLocaleString('ar-EG')} ج.م</td>
-                      <td><b>${subtotal.toLocaleString('ar-EG')} ج.م</b></td>
-                      <td>${(load.advanceAmount || 0).toLocaleString('ar-EG')} ج.م</td>
+                      <td><b>${item.productName}</b> ${item.size}</td>
+                      <td>${item.loaded}</td>
+                      <td style="color: #16a34a; font-weight: bold;">${item.sold}</td>
+                      <td style="color: ${item.remaining > 0 ? '#dd6b20' : '#16a34a'}; font-weight: bold;">${item.remaining}</td>
+                      <td>${item.factoryCartonPrice > 0 ? item.factoryCartonPrice.toLocaleString('ar-EG') + ' ج.م' : '—'}</td>
+                      <td><b>${item.factoryValue.toLocaleString('ar-EG')} ج.م</b></td>
                     </tr>
-                  `;
-                }).join('')
+                  `).join('')
               }
             </tbody>
+            <tfoot>
+              <tr style="background: #1e3a5f; color: white; font-weight: bold;">
+                <td colspan="2">المجموع</td>
+                <td>${totalLoadedCrates}</td>
+                <td>${totalSoldCrates}</td>
+                <td style="color: #fbbf24;">${totalRemainingCrates}</td>
+                <td></td>
+                <td></td>
+              </tr>
+              <tr style="background: #0d7c5f; color: white; font-weight: bold;">
+                <td colspan="5">إجمالي المستحق (المبيع بسعر المصنع)</td>
+                <td colspan="2" style="font-size: 14px;">${totalSoldValuePdf.toLocaleString('ar-EG')} ج.م</td>
+              </tr>
+            </tfoot>
           </table>
           
           <h2>تفاصيل دفعات السداد المباشرة للمورد</h2>
@@ -1540,25 +1691,17 @@ export default function FactoryTab({
       const unitsPerCarton = weight?.unitsPerCarton || 12;
       const cartons = load.cartonsCount !== undefined ? load.cartonsCount : Math.floor(load.quantity / unitsPerCarton);
       const loose = load.looseUnitsCount !== undefined ? load.looseUnitsCount : (load.quantity % unitsPerCarton);
-      const cartonPrice = load.cartonPrice !== undefined ? Number(load.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) * unitsPerCarton : 0) || 0);
+      const cartonPrice = load.cartonPrice !== undefined ? Number(load.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) : 0) || 0);
       const unitPrice = load.unitPrice !== undefined ? Number(load.unitPrice) : (Number(weight?.factoryPricePerUnit) || (prod ? Number(prod.price) : 0) || 0);
       const subtotal = (cartons * cartonPrice) + (loose * unitPrice);
       rawLoadedValue += subtotal;
       currentAdvances += load.advanceAmount ?? 0;
     });
 
-    // المدين = إجمالي قيمة البضاعة المحملة (بدون المديونية السابقة)
-    const totalWithdrawnValue = rawLoadedValue;
-
-    // إجمالي الدفعات المسجلة - مع خصم ما تم تسديده من المديونية القديمة لتجنب ازدواج الخصم
-    const manualPaymentsSum = extraPayments.reduce((sum, p) => sum + (p.amount - (p.appliedToCarriedDebt || 0)), 0);
-
-    // المسدد = مقدمات الشحن بالسيارة + دفعات ميزان المصنع المباشرة
-    const totalAdvancePayments = currentAdvances + manualPaymentsSum;
-
     // Calculate total sold items from invoices matching our products list
     let totalSoldValue = 0; // إجمالي قيمة المبيعات للعملاء
-    const soldCounts: Record<string, { cartons: number, units: number, value: number }> = {}; // weightId -> counts
+    let totalSoldFactoryValue = 0; // إجمالي قيمة المبيعات بسعر المصنع (المستحق للمصنع)
+    const soldCounts: Record<string, { cartons: number, units: number, value: number, factoryValue: number }> = {}; // weightId -> counts
 
     filteredInvoices.forEach(inv => {
       inv.items.forEach(item => {
@@ -1569,15 +1712,29 @@ export default function FactoryTab({
         if (!weight) return;
 
         const key = item.weightId || 'raw_' + item.productId;
-        const current = soldCounts[key] || { cartons: 0, units: 0, value: 0 };
+        const current = soldCounts[key] || { cartons: 0, units: 0, value: 0, factoryValue: 0 };
+        const upc = weight.unitsPerCarton || 12;
         current.units += item.quantity;
-        current.cartons += (item.quantity / weight.unitsPerCarton);
+        current.cartons += item.quantity / upc;
         current.value += item.finalPrice * item.quantity;
+        const factoryCartonPrice = Number(weight.cartonPriceFromFactory) || Number(prod.price) || (Number(weight.factoryPricePerUnit) || 0);
+        const factoryUnitPrice = factoryCartonPrice / upc;
+        current.factoryValue += (item.quantity / upc) * factoryCartonPrice;
         soldCounts[key] = current;
 
         totalSoldValue += item.finalPrice * item.quantity;
+        totalSoldFactoryValue += (item.quantity / upc) * factoryCartonPrice;
       });
     });
+
+    // المدين = إجمالي قيمة البضاعة المباع فقط بسعر المصنع (وليس المحمل كله)
+    const totalWithdrawnValue = totalSoldFactoryValue;
+
+    // إجمالي الدفعات المسجلة - مع خصم ما تم تسديده من المديونية القديمة لتجنب ازدواج الخصم
+    const manualPaymentsSum = extraPayments.reduce((sum, p) => sum + (p.amount - (p.appliedToCarriedDebt || 0)), 0);
+
+    // المسدد = مقدمات الشحن بالسيارة + دفعات ميزان المصنع المباشرة
+    const totalAdvancePayments = currentAdvances + manualPaymentsSum;
 
     const netRemainingDueToFactory = totalWithdrawnValue - totalAdvancePayments + carriedOverDebt;
 
@@ -1586,6 +1743,7 @@ export default function FactoryTab({
       totalWithdrawnValue,
       totalAdvancePayments,
       totalSoldValue,
+      totalSoldFactoryValue,
       netRemainingDueToFactory,
       soldCounts,
       manualPaymentsSum,
@@ -1597,6 +1755,7 @@ export default function FactoryTab({
   const [accountLoadsFilter, setAccountLoadsFilter] = useState<'all' | 'daily' | 'weekly' | 'monthly' | 'custom'>('all');
   const [accountLoadsStartDate, setAccountLoadsStartDate] = useState('');
   const [accountLoadsEndDate, setAccountLoadsEndDate] = useState('');
+  const [accountLoadsDayFilters, setAccountLoadsDayFilters] = useState<string[]>([]);
 
   const filteredAccountLoads = React.useMemo(() => {
     return factoryLoads.filter(load => {
@@ -1605,7 +1764,14 @@ export default function FactoryTab({
       if (isNaN(loadDateObj.getTime())) return false;
       const now = new Date();
       if (accountLoadsFilter === 'daily') return loadDateObj.toDateString() === now.toDateString();
-      if (accountLoadsFilter === 'weekly') return (now.getTime() - loadDateObj.getTime()) <= 7 * 24 * 60 * 60 * 1000;
+      if (accountLoadsFilter === 'weekly') {
+        if ((now.getTime() - loadDateObj.getTime()) > 7 * 24 * 60 * 60 * 1000) return false;
+        if (accountLoadsDayFilters.length > 0) {
+          const dayName = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][loadDateObj.getDay()];
+          if (!accountLoadsDayFilters.includes(dayName)) return false;
+        }
+        return true;
+      }
       if (accountLoadsFilter === 'monthly') return loadDateObj.getMonth() === now.getMonth() && loadDateObj.getFullYear() === now.getFullYear();
       if (accountLoadsFilter === 'custom') {
         const dStr = load.date.split('T')[0];
@@ -1614,10 +1780,12 @@ export default function FactoryTab({
       }
       return true;
     });
-  }, [factoryLoads, accountLoadsFilter, accountLoadsStartDate, accountLoadsEndDate, factoryDelegateFilter, isManager]);
+  }, [factoryLoads, accountLoadsFilter, accountLoadsStartDate, accountLoadsEndDate, accountLoadsDayFilters, factoryDelegateFilter, isManager]);
 
   const accountLoadsSummary = useMemo(() => {
-    return filteredAccountLoads.map(load => {
+    const totals: Record<string, { loaded: number; sold: number; remaining: number; loadedValue: number; soldValue: number; remainingValue: number; storedProductName?: string; storedWeightSize?: string }> = {};
+
+    filteredAccountLoads.forEach(load => {
       const prod = products.find(p => String(p.id).trim() === String(load.productId).trim());
       const weights = prod ? getProductWeightsFallback(prod) : [];
       const weight = weights.find(w => String(w.id).trim() === String(load.weightId).trim()) || weights[0];
@@ -1625,144 +1793,316 @@ export default function FactoryTab({
       const unitsPerCarton = weight?.unitsPerCarton || 12;
       const cartons = load.cartonsCount !== undefined ? load.cartonsCount : Math.floor(load.quantity / unitsPerCarton);
       const loose = load.looseUnitsCount !== undefined ? load.looseUnitsCount : (load.quantity % unitsPerCarton);
-      const cartonPrice = load.cartonPrice !== undefined ? Number(load.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) * unitsPerCarton : 0) || 0);
+      const cartonPrice = load.cartonPrice !== undefined ? Number(load.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) : 0) || 0);
       const unitPrice = load.unitPrice !== undefined ? Number(load.unitPrice) : (Number(weight?.factoryPricePerUnit) || (prod ? Number(prod.price) : 0) || 0);
-
       const subtotal = (cartons * cartonPrice) + (loose * unitPrice);
 
+      const key = `${load.productId}_${load.weightId || (weight ? weight.id : '')}`;
+      const existing = totals[key] || { loaded: 0, sold: 0, remaining: 0, loadedValue: 0, soldValue: 0, remainingValue: 0 };
+      existing.loaded += cartons;
+      existing.loadedValue += subtotal;
+      if (!existing.storedProductName && load.productName) existing.storedProductName = load.productName;
+      if (!existing.storedWeightSize && load.weightSize) existing.storedWeightSize = load.weightSize;
+      totals[key] = existing;
+    });
+
+    Object.keys(totals).forEach(key => {
+      const [prodId, weightId] = key.split('_');
+      const stock = weightStocks[key] || { loaded: 0, sold: 0, remaining: 0 };
+      const prod = products.find(p => String(p.id).trim() === String(prodId).trim());
+      const weights = prod ? getProductWeightsFallback(prod) : [];
+      const weight = weights.find(w => String(w.id).trim() === String(weightId).trim());
+      const unitsPerCarton = weight?.unitsPerCarton || 12;
+      const cartonPrice = weight ? (Number(weight.cartonPriceFromFactory) || Number(prod?.price || 0)) : 0;
+      const unitPrice = weight ? (Number(weight.factoryPricePerUnit) || Number(prod?.price || 0)) : 0;
+      const soldCartons = stock.sold;
+      const soldValue = soldCartons * cartonPrice;
+      const remCartons = stock.remaining;
+      const remainingValue = remCartons * cartonPrice;
+      totals[key].sold = soldCartons;
+      totals[key].remaining = remCartons;
+      totals[key].soldValue = soldValue;
+      totals[key].remainingValue = remainingValue;
+    });
+
+    const prod = (pid: string) => products.find(p => String(p.id).trim() === String(pid).trim());
+    const wgt = (pid: string, wid: string) => { const pp = prod(pid); const ww = pp ? getProductWeightsFallback(pp) : []; return ww.find(w => String(w.id).trim() === String(wid).trim()); };
+
+    return Object.entries(totals).map(([key, data]) => {
+      const [pid, wid] = key.split('_');
+      const p = prod(pid);
+      const w = wgt(pid, wid);
+      const unitsPerCarton = w?.unitsPerCarton || 12;
       return {
-        id: load.id,
-        productName: prod ? prod.name : (load.productName || 'صنف محذوف'),
-        size: weight ? weight.size : (load.weightSize || 'محتوى موجود'),
-        cartons,
-        loose,
-        cartonPrice,
-        subtotal,
-        date: load.date,
-        warehouseKeeper: load.warehouseKeeper,
-        advanceAmount: load.advanceAmount,
-        delegateName: load.delegateName
+        id: key,
+        productName: p ? p.name : (data.storedProductName || 'صنف محذوف'),
+        size: w ? w.size : (data.storedWeightSize || 'افتراضي'),
+        loaded: data.loaded,
+        sold: data.sold,
+        remaining: data.remaining,
+        loadedValue: data.loadedValue,
+        soldValue: data.soldValue,
+        remainingValue: data.remainingValue,
+        unitsPerCarton
       };
     });
-  }, [filteredAccountLoads, products]);
+  }, [filteredAccountLoads, products, weightStocks]);
+
+  const allAccountLoadsForExport = useMemo(() => {
+    const allLoads = factoryLoads.filter(filterByFactoryDelegate).filter(l => !l.archivedAt);
+    const totals: Record<string, { loaded: number; sold: number; remaining: number; loadedValue: number; soldValue: number; remainingValue: number; storedProductName?: string; storedWeightSize?: string }> = {};
+
+    allLoads.forEach(load => {
+      const prod = products.find(p => String(p.id).trim() === String(load.productId).trim());
+      const weights = prod ? getProductWeightsFallback(prod) : [];
+      const weight = weights.find(w => String(w.id).trim() === String(load.weightId).trim()) || weights[0];
+
+      const unitsPerCarton = weight?.unitsPerCarton || 12;
+      const cartons = load.cartonsCount !== undefined ? load.cartonsCount : Math.floor(load.quantity / unitsPerCarton);
+      const loose = load.looseUnitsCount !== undefined ? load.looseUnitsCount : (load.quantity % unitsPerCarton);
+      const cartonPrice = load.cartonPrice !== undefined ? Number(load.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) : 0) || 0);
+      const unitPrice = load.unitPrice !== undefined ? Number(load.unitPrice) : (Number(weight?.factoryPricePerUnit) || (prod ? Number(prod.price) : 0) || 0);
+      const subtotal = (cartons * cartonPrice) + (loose * unitPrice);
+
+      const key = `${load.productId}_${load.weightId || (weight ? weight.id : '')}`;
+      const existing = totals[key] || { loaded: 0, sold: 0, remaining: 0, loadedValue: 0, soldValue: 0, remainingValue: 0 };
+      existing.loaded += cartons;
+      existing.loadedValue += subtotal;
+      if (!existing.storedProductName && load.productName) existing.storedProductName = load.productName;
+      if (!existing.storedWeightSize && load.weightSize) existing.storedWeightSize = load.weightSize;
+      totals[key] = existing;
+    });
+
+    Object.keys(totals).forEach(key => {
+      const [prodId, weightId] = key.split('_');
+      const stock = weightStocks[key] || { loaded: 0, sold: 0, remaining: 0 };
+      const prod = products.find(p => String(p.id).trim() === String(prodId).trim());
+      const weights = prod ? getProductWeightsFallback(prod) : [];
+      const weight = weights.find(w => String(w.id).trim() === String(weightId).trim());
+      const unitsPerCarton = weight?.unitsPerCarton || 12;
+      const cartonPrice = weight ? (Number(weight.cartonPriceFromFactory) || Number(prod?.price || 0)) : 0;
+      const unitPrice = weight ? (Number(weight.factoryPricePerUnit) || Number(prod?.price || 0)) : 0;
+      const soldCartons = stock.sold;
+      const soldValue = soldCartons * cartonPrice;
+      const remCartons = stock.remaining;
+      const remainingValue = remCartons * cartonPrice;
+      totals[key].sold = soldCartons;
+      totals[key].remaining = remCartons;
+      totals[key].soldValue = soldValue;
+      totals[key].remainingValue = remainingValue;
+    });
+
+    const prod = (pid: string) => products.find(p => String(p.id).trim() === String(pid).trim());
+    const wgt = (pid: string, wid: string) => { const pp = prod(pid); const ww = pp ? getProductWeightsFallback(pp) : []; return ww.find(w => String(w.id).trim() === String(wid).trim()); };
+
+    return Object.entries(totals).map(([key, data]) => {
+      const [pid, wid] = key.split('_');
+      const p = prod(pid);
+      const w = wgt(pid, wid);
+      const unitsPerCarton = w?.unitsPerCarton || 12;
+      return {
+        id: key,
+        productName: p ? p.name : (data.storedProductName || 'صنف محذوف'),
+        size: w ? w.size : (data.storedWeightSize || 'افتراضي'),
+        loaded: data.loaded,
+        sold: data.sold,
+        remaining: data.remaining,
+        loadedValue: data.loadedValue,
+        soldValue: data.soldValue,
+        remainingValue: data.remainingValue,
+        unitsPerCarton
+      };
+    });
+  }, [factoryLoads, products, weightStocks, factoryDelegateFilter, isManager]);
 
   const exportAccountLoads = (format: 'png' | 'pdf') => {
-    const list = accountLoadsSummary;
+    const list = allAccountLoadsForExport;
     if (list.length === 0) {
-      showToast('⚠️ لا توجد شحنات تحميل مسجلة لهذه الفترة.');
+      showToast('⚠️ لا توجد شحنات تحميل مسجلة.');
       return;
     }
 
+    const W = 920;
+    const padX = 30;
+    const tableW = W - padX * 2;
+    const rowH = 38;
+    const summaryRowH = 36;
+    const bottomBoxH = 140;
+    const footerH = 60;
+    const headerH = 110;
+    const totalH = 24 + headerH + 32 + (list.length * rowH) + summaryRowH + 12 + bottomBoxH + footerH + 24;
+
     const canvas = document.createElement('canvas');
-    canvas.width = 800;
-    canvas.height = 240 + list.length * 50 + 120;
+    canvas.width = W;
+    canvas.height = totalH;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     ctx.direction = 'rtl';
 
-    ctx.fillStyle = '#f1f5f9';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(15, 15, canvas.width - 30, canvas.height - 30);
-    ctx.fillStyle = '#1e293b';
-    ctx.fillRect(15, 15, canvas.width - 30, 8);
+    const roundRect = (c: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) => {
+      c.beginPath(); c.moveTo(x+r, y); c.lineTo(x+w-r, y);
+      c.quadraticCurveTo(x+w, y, x+w, y+r); c.lineTo(x+w, y+h-r);
+      c.quadraticCurveTo(x+w, y+h, x+w-r, y+h); c.lineTo(x+r, y+h);
+      c.quadraticCurveTo(x, y+h, x, y+h-r); c.lineTo(x, y+r);
+      c.quadraticCurveTo(x, y, x+r, y); c.closePath();
+    };
 
-    const headerGrad = ctx.createLinearGradient(0, 0, canvas.width, 0);
-    headerGrad.addColorStop(0, '#0f172a');
-    headerGrad.addColorStop(1, '#1e293b');
-    ctx.fillStyle = headerGrad;
-    ctx.fillRect(15, 23, canvas.width - 30, 115);
+    ctx.fillStyle = '#faf8f5';
+    ctx.fillRect(0, 0, W, totalH);
+
+    ctx.strokeStyle = '#1a1a1a';
+    ctx.lineWidth = 3;
+    ctx.strokeRect(8, 8, W-16, totalH-16);
+
+    roundRect(ctx, 12, 12, W-24, headerH, 6);
+    ctx.fillStyle = '#1e2a4a';
+    ctx.fill();
+    ctx.fillStyle = '#d4a843';
+    ctx.fillRect(12, 12 + headerH - 4, W-24, 4);
 
     ctx.fillStyle = '#ffffff';
-    ctx.textAlign = 'right';
-    ctx.font = 'bold 26px system-ui, sans-serif';
-    ctx.fillText('بيان حركة البضاعة المسحوبة', canvas.width - 45, 70);
-    
+    ctx.font = 'bold 22px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('بيان حركة البضاعة (المحمل - المبيع - المتبقي)', W/2, 12 + 38);
+    ctx.fillStyle = '#93c5fd';
     ctx.font = '500 12px system-ui, sans-serif';
-    ctx.fillStyle = '#94a3b8';
-    ctx.fillText('حركة سحب البضائع من المصنع للفترة المحددة', canvas.width - 45, 105);
-    
-    ctx.fillStyle = '#38bdf8';
-    ctx.textAlign = 'left';
-    ctx.font = 'bold 12px system-ui, sans-serif';
-    ctx.fillText(`تاريخ الاستخراج: ${new Date().toLocaleDateString('ar-EG')}`, 45, 70);
-
-    let y = 190;
-    ctx.fillStyle = '#0f172a';
-    ctx.fillRect(35, y - 25, canvas.width - 70, 40);
-
-    ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 13px system-ui, sans-serif';
+    ctx.fillText('شامل لجميع الفترات — حركة سحب البضائع من المصنع ومبيعاتها وجردها', W/2, 12 + 58);
+    ctx.fillStyle = '#cbd5e1';
+    ctx.font = '12px system-ui, sans-serif';
     ctx.textAlign = 'right';
-    ctx.fillText('الصنف وحجم الوزن المحمل', canvas.width - 55, y + 2);
+    ctx.fillText(`التاريخ: ${new Date().toLocaleDateString('ar-EG')}`, W - padX - 10, 12 + 80);
     ctx.textAlign = 'left';
-    ctx.fillText('القيمة', 65, y + 2);
-    ctx.fillText('الكمية (بالكرتونة)', 180, y + 2);
+    ctx.fillStyle = '#fbbf24';
+    ctx.font = 'bold 12px system-ui, sans-serif';
+    ctx.fillText(`عدد الأصناف: ${list.length}`, padX + 10, 12 + 80);
 
-    y += 25;
+    const tableY = 24 + headerH;
+    const headers = ['م', 'المنتج', 'الحجم', 'المحمل (كرتونة)', 'المبيع (كرتونة)', 'المتبقي (كرتونة)', 'قيمة المبيع'];
+    const colXs = [padX + tableW - 30, padX + tableW - 120, padX + tableW - 220, padX + tableW - 340, padX + tableW - 460, padX + tableW - 580, padX + tableW - 720];
 
-    let totalVal = 0;
-    let totalCrates = 0;
+    ctx.fillStyle = '#2c3e6b';
+    ctx.fillRect(padX, tableY, tableW, 32);
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 11px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    headers.forEach((h, i) => { ctx.fillText(h, colXs[i], tableY + 21); });
+
+    let y = tableY + 32;
+    let totalLoaded = 0, totalSold = 0, totalRemaining = 0, totalSoldValue = 0;
 
     list.forEach((item, idx) => {
-      totalVal += item.subtotal;
-      totalCrates += item.cartons;
+      ctx.fillStyle = idx % 2 === 0 ? '#ffffff' : '#f5f3ee';
+      ctx.fillRect(padX, y, tableW, rowH);
+      ctx.strokeStyle = '#d5d0c8';
+      ctx.lineWidth = 0.5;
+      ctx.strokeRect(padX, y, tableW, rowH);
 
-      if (idx % 2 === 0) {
-        ctx.fillStyle = '#f8fafc';
-        ctx.fillRect(35, y - 5, canvas.width - 70, 45);
-      } else {
-        ctx.fillStyle = '#ffffff';
-        ctx.fillRect(35, y - 5, canvas.width - 70, 45);
-      }
-
-      ctx.strokeStyle = '#e2e8f0';
-      ctx.lineWidth = 1;
-      ctx.strokeRect(35, y - 5, canvas.width - 70, 45);
-
-      ctx.fillStyle = '#334155';
-      ctx.font = 'bold 13px system-ui, sans-serif';
+      ctx.fillStyle = '#1a1a1a';
+      ctx.font = '11px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(String(idx + 1), colXs[0], y + 23);
       ctx.textAlign = 'right';
-      ctx.fillText(`${item.productName} (${item.size})`, canvas.width - 55, y + 20);
+      ctx.fillText(item.productName, colXs[1], y + 23);
+      ctx.textAlign = 'center';
+      ctx.fillText(item.size, colXs[2], y + 23);
+      ctx.fillText(String(item.loaded), colXs[3], y + 23);
 
-      if (item.delegateName) {
-        const cleanDelName = item.delegateName.replace(/ \(.*?\)/g, '').trim();
-        ctx.fillStyle = '#64748b';
-        ctx.font = '500 11px system-ui, sans-serif';
-        ctx.fillText(`المندوب: ${cleanDelName}`, canvas.width - 55, y + 36);
-      }
+      ctx.fillStyle = '#38A169';
+      ctx.font = 'bold 11px system-ui, sans-serif';
+      ctx.fillText(String(item.sold), colXs[4], y + 23);
 
-      ctx.textAlign = 'left';
-      ctx.fillStyle = '#0f172a';
-      ctx.font = 'bold 13px system-ui, sans-serif';
-      ctx.fillText(`${item.cartons} كرتونة`, 180, y + 23);
-      
+      ctx.fillStyle = item.remaining > 0 ? '#DD6B20' : '#38A169';
+      ctx.fillText(String(item.remaining), colXs[5], y + 23);
+
       ctx.fillStyle = '#4f46e5';
-      ctx.fillText(`${formatNum(item.subtotal)} ج.م`, 65, y + 23);
+      ctx.fillText(`${formatNum(item.soldValue)} ج.م`, colXs[6], y + 23);
 
-      y += 45;
+      totalLoaded += item.loaded;
+      totalSold += item.sold;
+      totalRemaining += item.remaining;
+      totalSoldValue += item.soldValue;
+      y += rowH;
     });
 
-    y += 15;
-    ctx.fillStyle = '#f1f5f9';
-    ctx.fillRect(35, y - 20, canvas.width - 70, 50);
-    ctx.strokeStyle = '#cbd5e1';
-    ctx.lineWidth = 1.5;
-    ctx.strokeRect(35, y - 20, canvas.width - 70, 50);
+    ctx.fillStyle = '#0d7c5f';
+    ctx.fillRect(padX, y, tableW, summaryRowH);
+    ctx.strokeStyle = '#0a6e54';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(padX, y, tableW, summaryRowH);
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 12px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('الإجمالي', colXs[0], y + 23);
+    ctx.fillText('', colXs[1], y + 23);
+    ctx.fillText('', colXs[2], y + 23);
+    ctx.fillText(String(totalLoaded), colXs[3], y + 23);
+    ctx.fillText(String(totalSold), colXs[4], y + 23);
+    ctx.fillText(String(totalRemaining), colXs[5], y + 23);
+    ctx.fillText(`${formatNum(totalSoldValue)} ج.م`, colXs[6], y + 23);
+    y += summaryRowH + 12;
 
-    ctx.fillStyle = '#1e293b';
-    ctx.font = 'bold 14px system-ui, sans-serif';
+    const boxW = (tableW - 12) / 2;
+    roundRect(ctx, padX, y, boxW, bottomBoxH, 4);
+    ctx.fillStyle = '#fdf6ee';
+    ctx.fill();
+    ctx.strokeStyle = '#d5d0c8';
+    ctx.lineWidth = 0.5;
+    ctx.stroke();
+    ctx.fillStyle = '#2c3e6b';
+    ctx.fillRect(padX, y, boxW, 24);
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 11px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('ملخص الجرد', padX + boxW/2, y + 16);
+    ctx.fillStyle = '#1a1a1a';
+    ctx.font = '12px system-ui, sans-serif';
     ctx.textAlign = 'right';
-    ctx.fillText(`إجمالي الكراتين: ${totalCrates}`, canvas.width - 55, y + 10);
-    
-    ctx.textAlign = 'left';
+    ctx.fillText(`إجمالي المحمل: ${totalLoaded} كرتونة`, padX + boxW - 12, y + 52);
+    ctx.fillText(`إجمالي المبيع: ${totalSold} كرتونة`, padX + boxW - 12, y + 74);
+    ctx.fillStyle = totalRemaining > 0 ? '#DD6B20' : '#38A169';
+    ctx.font = 'bold 12px system-ui, sans-serif';
+    ctx.fillText(`إجمالي المتبقي: ${totalRemaining} كرتونة`, padX + boxW - 12, y + 96);
     ctx.fillStyle = '#4f46e5';
-    ctx.font = 'bold 16px system-ui, sans-serif';
-    ctx.fillText(`الإجمالي: ${formatNum(totalVal)} ج.م`, 65, y + 10);
+    ctx.font = 'bold 12px system-ui, sans-serif';
+    ctx.fillText(`قيمة المبيع للمصنع: ${formatNum(totalSoldValue)} ج.م`, padX + boxW - 12, y + 118);
+
+    const box2X = padX + boxW + 12;
+    roundRect(ctx, box2X, y, boxW, bottomBoxH, 4);
+    ctx.fillStyle = '#ffffff';
+    ctx.fill();
+    ctx.strokeStyle = '#d5d0c8';
+    ctx.lineWidth = 0.5;
+    ctx.stroke();
+    ctx.fillStyle = '#2c3e6b';
+    ctx.fillRect(box2X, y, boxW, 24);
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 11px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('ملاحظات', box2X + boxW/2, y + 16);
+    ctx.fillStyle = '#1a1a1a';
+    ctx.font = '11px system-ui, sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillText('• المحمل = الكمية المسحوبة من المصنع', box2X + boxW - 12, y + 52);
+    ctx.fillText('• المبيع = الكمية المباع للعملاء فعلياً', box2X + boxW - 12, y + 74);
+    ctx.fillText('• المتبقي = المحمل - المبيع (في السيارة)', box2X + boxW - 12, y + 96);
+    ctx.fillText(`• تاريخ الاستخراج: ${new Date().toLocaleDateString('ar-EG')}`, box2X + boxW - 12, y + 118);
+    y += bottomBoxH + 8;
+
+    ctx.strokeStyle = '#d5d0c8';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(padX, y);
+    ctx.lineTo(padX + tableW, y);
+    ctx.stroke();
+    y += 18;
+    ctx.fillStyle = '#1a1a1a';
+    ctx.font = '11px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(`نظام إدارة المبيعات | ${new Date().toLocaleString('ar-EG')}`, W/2, y);
 
     if (format === 'png') {
       const link = document.createElement('a');
-      link.download = `بيان_سحب_${new Date().toISOString().substring(0, 10)}.png`;
+      link.download = `بيان_البضاعة_${new Date().toISOString().substring(0, 10)}.png`;
       link.href = canvas.toDataURL('image/png');
       link.click();
     } else {
@@ -1775,7 +2115,7 @@ export default function FactoryTab({
         format: [pdfWidth, Math.max(297, pdfHeight + 10)]
       });
       doc.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight, undefined, 'FAST');
-      doc.save(`بيان_سحب_${new Date().toISOString().substring(0, 10)}.pdf`);
+      doc.save(`بيان_البضاعة_${new Date().toISOString().substring(0, 10)}.pdf`);
     }
   };
 
@@ -1799,23 +2139,39 @@ export default function FactoryTab({
 
   // Draw and download factory account statement image — clean professional invoice style
   const handleDownloadFactoryLedgerImage = () => {
-    const { totalWithdrawnValue, totalAdvancePayments, netRemainingDueToFactory, currentAdvances } = factoryBalanceDetails;
+    const { totalWithdrawnValue, totalAdvancePayments, netRemainingDueToFactory, currentAdvances, soldCounts, rawLoadedValue } = factoryBalanceDetails;
     const list = extraPayments;
-    const filteredLoads = factoryLoads.filter(filterByFactoryDelegate).filter(l => !l.archivedAt);
+
+    const soldItems = allAccountLoadsForExport.filter(item => item.loaded > 0 || item.sold > 0).map(item => {
+      const avgCartonPrice = item.loaded > 0 ? Math.round(item.loadedValue / item.loaded) : 0;
+      return {
+        key: item.id,
+        productName: item.productName,
+        size: item.size,
+        loaded: item.loaded,
+        sold: item.sold,
+        remaining: item.remaining,
+        factoryCartonPrice: avgCartonPrice,
+        factoryValue: item.soldValue
+      };
+    });
+
+    const totalLoadedCrates = soldItems.reduce((sum, item) => sum + item.loaded, 0);
+    const totalSoldCrates = soldItems.reduce((sum, item) => sum + item.sold, 0);
+    const totalRemainingCrates = soldItems.reduce((sum, item) => sum + item.remaining, 0);
 
     const W = 920;
     const padX = 30;
     const tableW = W - padX * 2;
     const loadRowH = 38;
-    const payRowH = 34;
-
-    // Pre-calc height
-    const headerH = 110;
-    const loadsTableH = filteredLoads.length > 0 ? 36 + filteredLoads.length * loadRowH + 36 : 50;
     const summaryRowH = 36;
+    const totalsRowH = 36;
+    const payRowH = 34;
+    const headerH = 110;
+    const loadsTableH = soldItems.length > 0 ? 32 + soldItems.length * loadRowH + summaryRowH + totalsRowH : 50;
     const bottomBoxH = Math.max(list.length * payRowH + 100, 180);
     const footerH = 70;
-    const totalH = headerH + 10 + loadsTableH + summaryRowH + 15 + bottomBoxH + footerH + 40;
+    const totalH = headerH + 10 + loadsTableH + 15 + bottomBoxH + footerH + 40;
 
     const canvas = document.createElement('canvas');
     canvas.width = W;
@@ -1824,7 +2180,6 @@ export default function FactoryTab({
     if (!ctx) return;
     ctx.direction = 'rtl';
 
-    // Rounded rect helper
     const roundRect = (c: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) => {
       c.beginPath(); c.moveTo(x+r, y); c.lineTo(x+w-r, y);
       c.quadraticCurveTo(x+w, y, x+w, y+r); c.lineTo(x+w, y+h-r);
@@ -1833,36 +2188,25 @@ export default function FactoryTab({
       c.quadraticCurveTo(x, y, x+r, y); c.closePath();
     };
 
-    // ── Background (clean cream) ──
     ctx.fillStyle = '#faf8f5';
     ctx.fillRect(0, 0, W, totalH);
-
-    // ── Outer frame (black thin) ──
     ctx.strokeStyle = '#1a1a1a';
     ctx.lineWidth = 3;
     ctx.strokeRect(8, 8, W - 16, totalH - 16);
 
-    // ── Header (dark navy solid) ──
     ctx.fillStyle = '#1e2a4a';
     roundRect(ctx, 12, 12, W - 24, headerH, 6);
     ctx.fill();
-
-    // Gold accent line under header
     ctx.fillStyle = '#d4a843';
     ctx.fillRect(12, 12 + headerH - 4, W - 24, 4);
 
-    // Title
     ctx.fillStyle = '#ffffff';
     ctx.textAlign = 'center';
     ctx.font = 'bold 24px system-ui, sans-serif';
-    ctx.fillText('كشف حساب مالي للمصنع وامودعين', W / 2, 48);
-
-    // Subtitle
+    ctx.fillText('كشف حساب مالي للمصنع', W / 2, 48);
     ctx.font = '500 12px system-ui, sans-serif';
     ctx.fillStyle = '#93c5fd';
-    ctx.fillText('نظام التوزيع والمبيعات المعتمد للأغذية والمستودع', W / 2, 68);
-
-    // Date and operation number
+    ctx.fillText('بيان الأصناف المحملة والمباع والمتبقية', W / 2, 68);
     ctx.font = '12px system-ui, sans-serif';
     ctx.fillStyle = '#cbd5e1';
     ctx.textAlign = 'right';
@@ -1872,7 +2216,6 @@ export default function FactoryTab({
     ctx.font = 'bold 12px system-ui, sans-serif';
     ctx.fillText(`رقم العملية: FACT-${Date.now().toString().slice(-6)}`, 55, 92);
 
-    // Delegate name if filtered
     if (factoryDelegateFilter !== 'all') {
       const delName = archiveDelegates.find(d => d.phone === factoryDelegateFilter || d.name === factoryDelegateFilter)?.name || factoryDelegateFilter;
       ctx.textAlign = 'left';
@@ -1883,9 +2226,7 @@ export default function FactoryTab({
 
     let y = 12 + headerH + 12;
 
-    // ── Loads Table ──
     const colX = padX;
-    // Table header
     ctx.fillStyle = '#2c3e6b';
     ctx.fillRect(colX, y, tableW, 32);
     ctx.strokeStyle = '#1a1a1a';
@@ -1893,103 +2234,98 @@ export default function FactoryTab({
     ctx.strokeRect(colX, y, tableW, 32);
 
     ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 12px system-ui, sans-serif';
-    // RTL columns: م | البيان / المرحلة | العدد | السعر | الإجمالي
-    const colSerial = colX + tableW - 35;
+    ctx.font = 'bold 11px system-ui, sans-serif';
+    const colSerial = colX + tableW - 30;
     const colDesc = colX + tableW - 150;
-    const colQty = colX + tableW - 370;
-    const colPrice = colX + tableW - 530;
-    const colTotal = colX + tableW - 700;
+    const colLoaded = colX + tableW - 290;
+    const colSold = colX + tableW - 400;
+    const colRemaining = colX + tableW - 510;
+    const colPrice = colX + tableW - 640;
+    const colTotal = colX + tableW - 770;
 
     ctx.textAlign = 'center';
     ctx.fillText('م', colSerial, y + 22);
     ctx.textAlign = 'right';
-    ctx.fillText('البيان / المرحلة', colDesc, y + 22);
+    ctx.fillText('الصنف', colDesc, y + 22);
+    ctx.fillText('المحمل (كر)', colLoaded, y + 22);
+    ctx.fillText('المبيع (كر)', colSold, y + 22);
+    ctx.fillText('المتبقي (كر)', colRemaining, y + 22);
     ctx.textAlign = 'center';
-    ctx.fillText('العدد', colQty, y + 22);
-    ctx.fillText('السعر', colPrice, y + 22);
-    ctx.fillText('الإجمالي', colTotal, y + 22);
+    ctx.fillText('سعر المصنع', colPrice, y + 22);
+    ctx.fillText('قيمة المبيع', colTotal, y + 22);
     y += 32;
 
-    let totalLoadValue = 0;
+    let totalSoldValueCanvas = 0;
 
-    filteredLoads.forEach((load, idx) => {
-      const prod = products.find(p => String(p.id).trim() === String(load.productId).trim());
-      const weights = prod ? getProductWeightsFallback(prod) : [];
-      const weight = weights.find(w => String(w.id).trim() === String(load.weightId).trim());
-      const unitsPerCarton = weight?.unitsPerCarton || 12;
-      const cartons = load.cartonsCount !== undefined ? load.cartonsCount : Math.floor(load.quantity / unitsPerCarton);
-      const loose = load.looseUnitsCount !== undefined ? load.looseUnitsCount : (load.quantity % unitsPerCarton);
-      const cartonPrice = load.cartonPrice !== undefined ? Number(load.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) * unitsPerCarton : 0) || 0);
-      const unitPrice = load.unitPrice !== undefined ? Number(load.unitPrice) : (Number(weight?.factoryPricePerUnit) || (prod ? Number(prod.price) : 0) || 0);
-      const subtotal = (cartons * cartonPrice) + (loose * unitPrice);
-
-      // Row bg
+    soldItems.forEach((item, idx) => {
       ctx.fillStyle = idx % 2 === 0 ? '#ffffff' : '#f5f3ee';
       ctx.fillRect(colX, y, tableW, loadRowH);
       ctx.strokeStyle = '#d5d0c8';
       ctx.lineWidth = 0.5;
       ctx.strokeRect(colX, y, tableW, loadRowH);
 
-      // Bottom line
-      ctx.beginPath();
-      ctx.moveTo(colX, y + loadRowH);
-      ctx.lineTo(colX + tableW, y + loadRowH);
-      ctx.stroke();
-
-      const prodName = prod ? prod.name : (load.productName || 'غير معروف');
-      const weightSize = weight ? weight.size : (load as any).weightSize || '';
-
       ctx.fillStyle = '#1a1a1a';
-      ctx.font = '12px system-ui, sans-serif';
-
-      // Serial (Arabic-Indic numeral)
-      const arabicNum = String(idx + 1).padStart(2, '0');
+      ctx.font = '11px system-ui, sans-serif';
       ctx.textAlign = 'center';
-      ctx.fillText(arabicNum, colSerial, y + 24);
-
-      // Description
+      ctx.fillText(String(idx + 1).padStart(2, '0'), colSerial, y + 23);
       ctx.textAlign = 'right';
-      ctx.fillText(`${prodName} (${weightSize})`, colDesc, y + 24);
-
-      // Quantity
+      ctx.fillText(`${item.productName} ${item.size}`, colDesc, y + 23);
       ctx.textAlign = 'center';
-      ctx.fillText(`${cartons} كرتونة${loose > 0 ? ` + ${loose}` : ''}`, colQty, y + 24);
+      ctx.fillText(String(item.loaded), colLoaded, y + 23);
+      ctx.fillStyle = '#38A169';
+      ctx.font = 'bold 11px system-ui, sans-serif';
+      ctx.fillText(String(item.sold), colSold, y + 23);
+      ctx.fillStyle = item.remaining > 0 ? '#DD6B20' : '#38A169';
+      ctx.fillText(String(item.remaining), colRemaining, y + 23);
+      ctx.fillStyle = '#1a1a1a';
+      ctx.font = '11px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(`${item.factoryCartonPrice > 0 ? item.factoryCartonPrice.toLocaleString('ar-EG') : '—'}`, colPrice, y + 23);
+      ctx.fillStyle = '#4f46e5';
+      ctx.font = 'bold 11px system-ui, sans-serif';
+      ctx.fillText(`${item.factoryValue.toLocaleString('ar-EG')} ج.م`, colTotal, y + 23);
 
-      // Price
-      ctx.fillText(`${cartonPrice.toFixed(0)} ج.م`, colPrice, y + 24);
-
-      // Total
-      ctx.font = 'bold 12px system-ui, sans-serif';
-      ctx.fillText(`${subtotal.toLocaleString('ar-EG')} ج.م`, colTotal, y + 24);
-
-      totalLoadValue += subtotal;
+      totalSoldValueCanvas += item.factoryValue;
       y += loadRowH;
     });
 
-    // Summary row (teal/green)
-    ctx.fillStyle = '#0d7c5f';
+    ctx.fillStyle = '#1e3a5f';
     ctx.fillRect(colX, y, tableW, summaryRowH);
-    ctx.strokeStyle = '#0a6e54';
+    ctx.strokeStyle = '#152a4a';
     ctx.lineWidth = 1;
     ctx.strokeRect(colX, y, tableW, summaryRowH);
-
     ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 13px system-ui, sans-serif';
+    ctx.font = 'bold 12px system-ui, sans-serif';
     ctx.textAlign = 'right';
-    ctx.fillText('إجمالي المسحوبات (المطلوب)', colDesc, y + 24);
+    ctx.fillText('المجموع', colDesc, y + 23);
     ctx.textAlign = 'center';
-    ctx.fillText(`${totalLoadValue.toLocaleString('ar-EG')} ج.م`, colTotal, y + 24);
-    y += summaryRowH + 15;
+    ctx.fillText(String(totalLoadedCrates), colLoaded, y + 23);
+    ctx.font = 'bold 13px system-ui, sans-serif';
+    ctx.fillText(String(totalSoldCrates), colSold, y + 23);
+    ctx.fillStyle = totalRemainingCrates > 0 ? '#fbbf24' : '#86efac';
+    ctx.fillText(String(totalRemainingCrates), colRemaining, y + 23);
+    y += summaryRowH;
 
-    // ── Bottom two boxes side by side ──
+    ctx.fillStyle = '#0d7c5f';
+    ctx.fillRect(colX, y, tableW, totalsRowH);
+    ctx.strokeStyle = '#0a6e54';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(colX, y, tableW, totalsRowH);
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 12px system-ui, sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillText('إجمالي المستحق (المبيع بسعر المصنع)', colDesc, y + 23);
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 13px system-ui, sans-serif';
+    ctx.fillText(`${totalSoldValueCanvas.toLocaleString('ar-EG')} ج.م`, colTotal, y + 23);
+    y += totalsRowH + 15;
+
     const boxGap = 15;
-    const rightBoxW = (tableW - boxGap) * 0.55;  // payments box (larger)
-    const leftBoxW = (tableW - boxGap) * 0.45;   // net remaining box
+    const rightBoxW = (tableW - boxGap) * 0.55;
+    const leftBoxW = (tableW - boxGap) * 0.45;
     const rightBoxX = colX;
     const leftBoxX = colX + rightBoxW + boxGap;
 
-    // ── Right Box: سجل الدفعات المستلمة ──
     roundRect(ctx, rightBoxX, y, rightBoxW, bottomBoxH, 6);
     ctx.fillStyle = '#fdf6ee';
     ctx.fill();
@@ -1997,7 +2333,6 @@ export default function FactoryTab({
     ctx.lineWidth = 2;
     ctx.stroke();
 
-    // Box header
     ctx.fillStyle = '#2c3e6b';
     ctx.fillRect(rightBoxX, y, rightBoxW, 30);
     ctx.fillStyle = '#ffffff';
@@ -2010,7 +2345,6 @@ export default function FactoryTab({
 
     if (list.length > 0) {
       list.forEach((pay, idx) => {
-        // Dashed separator
         if (idx > 0) {
           ctx.setLineDash([4, 3]);
           ctx.strokeStyle = '#c5b89a';
@@ -2021,25 +2355,19 @@ export default function FactoryTab({
           ctx.stroke();
           ctx.setLineDash([]);
         }
-
-        // Payment entry: bullet + description + amount
         ctx.fillStyle = '#1a1a1a';
         ctx.font = '11px system-ui, sans-serif';
         ctx.textAlign = 'right';
         const desc = pay.notes || 'تسديد مباشر';
         const dateStr = pay.date || '';
         ctx.fillText(`• ${desc} - ${dateStr}`, rightBoxX + rightBoxW - 20, payY + 14);
-
         ctx.font = 'bold 12px system-ui, sans-serif';
         ctx.fillStyle = '#0d7c5f';
         ctx.textAlign = 'left';
         ctx.fillText(`${pay.amount.toLocaleString('ar-EG')} ج.م`, rightBoxX + 20, payY + 14);
-
         totalPayments += pay.amount;
         payY += payRowH;
       });
-
-      // Total line
       payY += 4;
       ctx.strokeStyle = '#2c3e6b';
       ctx.lineWidth = 1.5;
@@ -2047,16 +2375,14 @@ export default function FactoryTab({
       ctx.moveTo(rightBoxX + 15, payY);
       ctx.lineTo(rightBoxX + rightBoxW - 15, payY);
       ctx.stroke();
-
       payY += 18;
       ctx.fillStyle = '#1a1a1a';
       ctx.font = 'bold 13px system-ui, sans-serif';
       ctx.textAlign = 'right';
       ctx.fillText(`إجمالي المسدد: ${totalPayments.toLocaleString('ar-EG')} ج.م`, rightBoxX + rightBoxW - 20, payY);
-
       ctx.font = '12px system-ui, sans-serif';
       ctx.textAlign = 'left';
-      ctx.fillText(`عدد الدفعات: ${list.length}`, rightBoxX + 20, payY);
+      ctx.fillText(`مقدمات الشحن: ${currentAdvances.toLocaleString('ar-EG')} ج.م`, rightBoxX + 20, payY);
     } else {
       ctx.fillStyle = '#94a3b8';
       ctx.font = '12px system-ui, sans-serif';
@@ -2064,7 +2390,6 @@ export default function FactoryTab({
       ctx.fillText('لا توجد دفعات مسجلة', rightBoxX + rightBoxW / 2, payY + 30);
     }
 
-    // ── Left Box: صافي المستحق (المتبقي) ──
     roundRect(ctx, leftBoxX, y, leftBoxW, bottomBoxH, 6);
     ctx.fillStyle = '#ffffff';
     ctx.fill();
@@ -2072,7 +2397,6 @@ export default function FactoryTab({
     ctx.lineWidth = 2;
     ctx.stroke();
 
-    // Box header
     ctx.fillStyle = '#2c3e6b';
     ctx.fillRect(leftBoxX, y, leftBoxW, 30);
     ctx.fillStyle = '#ffffff';
@@ -2080,36 +2404,29 @@ export default function FactoryTab({
     ctx.textAlign = 'center';
     ctx.fillText('صافي المستحق (المتبقي)', leftBoxX + leftBoxW / 2, y + 21);
 
-    // Net amount — centered vertically in the box
     const netCenterY = y + 30 + (bottomBoxH - 30) / 2;
 
     if (netRemainingDueToFactory > 0) {
-      // Debt — red
       ctx.fillStyle = '#dc2626';
       ctx.font = 'bold 28px system-ui, sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText(`${netRemainingDueToFactory.toLocaleString('ar-EG')} ج.م`, leftBoxX + leftBoxW / 2, netCenterY);
-
       ctx.font = '12px system-ui, sans-serif';
       ctx.fillStyle = '#dc2626';
       ctx.fillText('يجب سداد المبلغ أعلاه', leftBoxX + leftBoxW / 2, netCenterY + 28);
     } else if (netRemainingDueToFactory === 0) {
-      // Settled — emerald green
       ctx.fillStyle = '#059669';
       ctx.font = 'bold 28px system-ui, sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText('٠.٠٠ ج.م', leftBoxX + leftBoxW / 2, netCenterY);
-
       ctx.font = 'bold 13px system-ui, sans-serif';
       ctx.fillStyle = '#059669';
       ctx.fillText('*تم تسوية الحساب بالكامل*', leftBoxX + leftBoxW / 2, netCenterY + 30);
     } else {
-      // Credit — indigo
       ctx.fillStyle = '#4f46e5';
       ctx.font = 'bold 28px system-ui, sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText(`${Math.abs(netRemainingDueToFactory).toLocaleString('ar-EG')} ج.م`, leftBoxX + leftBoxW / 2, netCenterY);
-
       ctx.font = 'bold 13px system-ui, sans-serif';
       ctx.fillStyle = '#4f46e5';
       ctx.fillText('رصيد دائن لصالح المصنع', leftBoxX + leftBoxW / 2, netCenterY + 30);
@@ -2117,20 +2434,17 @@ export default function FactoryTab({
 
     y += bottomBoxH + 20;
 
-    // ── Footer / Signatures ──
     ctx.strokeStyle = '#d5d0c8';
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(padX, y);
     ctx.lineTo(W - padX, y);
     ctx.stroke();
-
     y += 22;
     ctx.fillStyle = '#1a1a1a';
     ctx.font = '11px system-ui, sans-serif';
     ctx.textAlign = 'center';
     ctx.fillText('تم التصدير من نظام تتبع المبيعات — ' + new Date().toLocaleDateString('ar-EG'), W / 2, y);
-
     y += 30;
     ctx.strokeStyle = '#d5d0c8';
     ctx.lineWidth = 0.5;
@@ -2139,7 +2453,6 @@ export default function FactoryTab({
     ctx.lineTo(W - padX, y);
     ctx.stroke();
 
-    // Download
     const dataUrl = canvas.toDataURL('image/png');
     const downloadLink = document.createElement('a');
     downloadLink.download = `كشف_حساب_المصنع_${new Date().toISOString().substring(0, 10)}.png`;
@@ -3358,7 +3671,7 @@ export default function FactoryTab({
       const prod = products.find(p => p.id === load.productId);
       const weights = prod ? getProductWeightsFallback(prod) : [];
       const weight = weights.find(w => w.id === load.weightId) || weights[0];
-      const cartonPrice = load.cartonPrice !== undefined ? Number(load.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) * (weight?.unitsPerCarton || 12) : 0) || 0);
+      const cartonPrice = load.cartonPrice !== undefined ? Number(load.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) : 0) || 0);
       const loadedCartons = Number((load.cartonsCount !== undefined ? load.cartonsCount : (load.quantity / (weight?.unitsPerCarton || 12))).toFixed(3));
       const totalLoadedValue = loadedCartons * cartonPrice;
 
@@ -3477,7 +3790,7 @@ export default function FactoryTab({
 
   // ── Filtered loads image export (professional invoice style) ──
   const downloadFilteredLoadsImage = () => {
-    if (filteredLoads.length === 0) { showToast('⚠️ لا توجد شحنات مسجلة لهذه الفترة!'); return; }
+    if (filteredLoads.length === 0) { showToast('⚠️ لا توجد شحنات تحميل مسجلة!'); return; }
 
     const W = 920;
     const padX = 30;
@@ -3506,16 +3819,13 @@ export default function FactoryTab({
       c.quadraticCurveTo(x, y, x+r, y); c.closePath();
     };
 
-    // Background
     ctx.fillStyle = '#faf8f5';
     ctx.fillRect(0, 0, W, totalH);
 
-    // Outer frame
     ctx.strokeStyle = '#1a1a1a';
     ctx.lineWidth = 3;
     ctx.strokeRect(8, 8, W - 16, totalH - 16);
 
-    // Header
     ctx.fillStyle = '#1e2a4a';
     roundRect(ctx, 12, 12, W - 24, headerH, 6);
     ctx.fill();
@@ -3543,7 +3853,7 @@ export default function FactoryTab({
 
     let y = 12 + headerH + 12;
 
-    // ── Loads Table ──
+    // ── Loads Table: 7 columns ──
     const colX = padX;
     ctx.fillStyle = '#2c3e6b';
     ctx.fillRect(colX, y, tableW, 32);
@@ -3552,63 +3862,80 @@ export default function FactoryTab({
     ctx.strokeRect(colX, y, tableW, 32);
 
     ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 12px system-ui, sans-serif';
-    const colSerial = colX + tableW - 35;
-    const colDesc = colX + tableW - 150;
-    const colQty = colX + tableW - 370;
-    const colPrice = colX + tableW - 530;
-    const colTotal = colX + tableW - 700;
+    ctx.font = 'bold 11px system-ui, sans-serif';
+    const colSerial = colX + tableW - 30;
+    const colDesc = colX + tableW - 135;
+    const colLoaded = colX + tableW - 240;
+    const colSold = colX + tableW - 345;
+    const colRemaining = colX + tableW - 450;
+    const colPrice = colX + tableW - 580;
+    const colTotal = colX + tableW - 720;
 
     ctx.textAlign = 'center';
     ctx.fillText('م', colSerial, y + 22);
     ctx.textAlign = 'right';
-    ctx.fillText('البيان / المرحلة', colDesc, y + 22);
+    ctx.fillText('الصنف والحجم', colDesc, y + 22);
     ctx.textAlign = 'center';
-    ctx.fillText('العدد', colQty, y + 22);
-    ctx.fillText('السعر', colPrice, y + 22);
-    ctx.fillText('الإجمالي', colTotal, y + 22);
+    ctx.fillText('المحمل', colLoaded, y + 22);
+    ctx.fillText('المبيع', colSold, y + 22);
+    ctx.fillText('المتبقي', colRemaining, y + 22);
+    ctx.fillText('سعر الكرتونة', colPrice, y + 22);
+    ctx.fillText('قيمة المبيع', colTotal, y + 22);
     y += 32;
 
-    let totalLoadValue = 0;
+    let totalLoadedCrates = 0;
+    let totalSoldCrates = 0;
+    let totalRemainingCrates = 0;
+    let totalSoldValue = 0;
     let totalAdvanceAmounts = 0;
 
     filteredLoads.forEach((load, idx) => {
       const prod = products.find(p => String(p.id).trim() === String(load.productId).trim());
       const weights = prod ? getProductWeightsFallback(prod) : [];
-      const weight = weights.find(w => String(w.id).trim() === String(load.weightId).trim());
+      const weight = weights.find(w => String(w.id).trim() === String(load.weightId).trim()) || weights[0];
       const unitsPerCarton = weight?.unitsPerCarton || 12;
       const cartons = load.cartonsCount !== undefined ? load.cartonsCount : Math.floor(load.quantity / unitsPerCarton);
-      const loose = load.looseUnitsCount !== undefined ? load.looseUnitsCount : (load.quantity % unitsPerCarton);
-      const cartonPrice = load.cartonPrice !== undefined ? Number(load.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) * unitsPerCarton : 0) || 0);
+      const cartonPrice = load.cartonPrice !== undefined ? Number(load.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) : 0) || 0);
       const unitPrice = load.unitPrice !== undefined ? Number(load.unitPrice) : (Number(weight?.factoryPricePerUnit) || (prod ? Number(prod.price) : 0) || 0);
-      const subtotal = (cartons * cartonPrice) + (loose * unitPrice);
+
+      const key = `${load.productId}_${load.weightId || (weight ? weight.id : '')}`;
+      const stock = weightStocks[key] || { loaded: 0, sold: 0, remaining: 0 };
+      const soldCartons = Math.floor(stock.sold / unitsPerCarton);
+      const remainingCartons = Math.max(0, cartons - soldCartons);
+      const soldValueForLoad = soldCartons * cartonPrice;
+
+      const prodName = prod ? prod.name : (load.productName || 'غير معروف');
+      const weightSize = weight ? weight.size : (load as any).weightSize || '';
 
       ctx.fillStyle = idx % 2 === 0 ? '#ffffff' : '#f5f3ee';
       ctx.fillRect(colX, y, tableW, loadRowH);
       ctx.strokeStyle = '#d5d0c8';
       ctx.lineWidth = 0.5;
       ctx.strokeRect(colX, y, tableW, loadRowH);
-      ctx.beginPath();
-      ctx.moveTo(colX, y + loadRowH);
-      ctx.lineTo(colX + tableW, y + loadRowH);
-      ctx.stroke();
-
-      const prodName = prod ? prod.name : (load.productName || 'غير معروف');
-      const weightSize = weight ? weight.size : (load as any).weightSize || '';
 
       ctx.fillStyle = '#1a1a1a';
-      ctx.font = '12px system-ui, sans-serif';
+      ctx.font = '11px system-ui, sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText(String(idx + 1).padStart(2, '0'), colSerial, y + 24);
       ctx.textAlign = 'right';
       ctx.fillText(`${prodName} (${weightSize})`, colDesc, y + 24);
       ctx.textAlign = 'center';
-      ctx.fillText(`${cartons} كرتونة${loose > 0 ? ` + ${loose}` : ''}`, colQty, y + 24);
-      ctx.fillText(`${cartonPrice.toFixed(0)} ج.م`, colPrice, y + 24);
-      ctx.font = 'bold 12px system-ui, sans-serif';
-      ctx.fillText(`${subtotal.toLocaleString('ar-EG')} ج.م`, colTotal, y + 24);
+      ctx.fillText(String(cartons), colLoaded, y + 24);
+      ctx.fillStyle = '#16a34a';
+      ctx.font = 'bold 11px system-ui, sans-serif';
+      ctx.fillText(String(soldCartons), colSold, y + 24);
+      ctx.fillStyle = remainingCartons > 0 ? '#DD6B20' : '#16a34a';
+      ctx.fillText(String(remainingCartons), colRemaining, y + 24);
+      ctx.fillStyle = '#1a1a1a';
+      ctx.font = '11px system-ui, sans-serif';
+      ctx.fillText(`${cartonPrice.toLocaleString('ar-EG')} ج.م`, colPrice, y + 24);
+      ctx.font = 'bold 11px system-ui, sans-serif';
+      ctx.fillText(`${soldValueForLoad.toLocaleString('ar-EG')} ج.م`, colTotal, y + 24);
 
-      totalLoadValue += subtotal;
+      totalLoadedCrates += cartons;
+      totalSoldCrates += soldCartons;
+      totalRemainingCrates += remainingCartons;
+      totalSoldValue += soldValueForLoad;
       totalAdvanceAmounts += (load.advanceAmount || 0);
       y += loadRowH;
     });
@@ -3620,11 +3947,25 @@ export default function FactoryTab({
     ctx.lineWidth = 1;
     ctx.strokeRect(colX, y, tableW, summaryRowH);
     ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 12px system-ui, sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillText('المجموع', colDesc, y + 24);
+    ctx.textAlign = 'center';
+    ctx.fillText(String(totalLoadedCrates), colLoaded, y + 24);
+    ctx.fillText(String(totalSoldCrates), colSold, y + 24);
+    ctx.fillText(String(totalRemainingCrates), colRemaining, y + 24);
+    ctx.fillText(`${totalSoldValue.toLocaleString('ar-EG')} ج.م`, colTotal, y + 24);
+
+    // Totals row
+    y += summaryRowH;
+    ctx.fillStyle = '#1e3a5f';
+    ctx.fillRect(colX, y, tableW, summaryRowH);
+    ctx.fillStyle = '#ffffff';
     ctx.font = 'bold 13px system-ui, sans-serif';
     ctx.textAlign = 'right';
-    ctx.fillText('إجمالي المسحوبات (المطلوب)', colDesc, y + 24);
+    ctx.fillText('إجمالي المستحق (المبيع بسعر المصنع)', colDesc, y + 24);
     ctx.textAlign = 'center';
-    ctx.fillText(`${totalLoadValue.toLocaleString('ar-EG')} ج.م`, colTotal, y + 24);
+    ctx.fillText(`${totalSoldValue.toLocaleString('ar-EG')} ج.م`, colTotal, y + 24);
     y += summaryRowH + 15;
 
     // ── Bottom two boxes ──
@@ -3655,27 +3996,20 @@ export default function FactoryTab({
     ctx.textAlign = 'right';
     ctx.fillText(`عدد الشحنات: ${filteredLoads.length}`, rightBoxX + rightBoxW - 20, infoY);
     infoY += 22;
-    ctx.fillText(`إجمالي القيمة: ${totalLoadValue.toLocaleString('ar-EG')} ج.م`, rightBoxX + rightBoxW - 20, infoY);
+    ctx.fillText(`إجمالي المحمل: ${totalLoadedCrates} كرتونة`, rightBoxX + rightBoxW - 20, infoY);
     infoY += 22;
     ctx.fillText(`إجمالي المقدمات: ${totalAdvanceAmounts.toLocaleString('ar-EG')} ج.م`, rightBoxX + rightBoxW - 20, infoY);
     infoY += 22;
     ctx.font = 'bold 12px system-ui, sans-serif';
     ctx.fillStyle = '#0d7c5f';
-    ctx.fillText(`المتبقي: ${(totalLoadValue - totalAdvanceAmounts).toLocaleString('ar-EG')} ج.م`, rightBoxX + rightBoxW - 20, infoY);
+    ctx.fillText(`المتبقي: ${totalRemainingCrates} كرتونة`, rightBoxX + rightBoxW - 20, infoY);
 
-    // Left Box: إجمالي المبيعات
-    const totalSoldValue = filteredLoads.reduce((sum, l) => {
-      let totalUnitsSold = 0;
-      invoices.forEach(inv => { inv.items.forEach(item => { if (item.productId === l.productId && item.weightId === l.weightId) totalUnitsSold += item.quantity; }); });
-      const prod = products.find(p => String(p.id).trim() === String(l.productId).trim());
-      const weights = prod ? getProductWeightsFallback(prod) : [];
-      const weight = weights.find(w => String(w.id).trim() === String(l.weightId).trim());
-      const unitPrice = l.unitPrice !== undefined ? Number(l.unitPrice) : (Number(weight?.factoryPricePerUnit) || (prod ? Number(prod.price) : 0) || 0);
-      return sum + (totalUnitsSold * unitPrice);
-    }, 0);
+    // Left Box: صافي المستحق
+    const totalDirectPayments = filteredArchiveExtraPayments.reduce((sum, p) => sum + (p.amount - (p.appliedToCarriedDebt || 0)), 0);
+    const netDue = totalSoldValue - totalAdvanceAmounts - totalDirectPayments;
 
     roundRect(ctx, leftBoxX, y, leftBoxW, bottomBoxH, 6);
-    ctx.fillStyle = '#ffffff';
+    ctx.fillStyle = netDue > 0 ? '#FFF5F5' : '#ffffff';
     ctx.fill();
     ctx.strokeStyle = '#2c3e6b';
     ctx.lineWidth = 2;
@@ -3686,19 +4020,14 @@ export default function FactoryTab({
     ctx.fillStyle = '#ffffff';
     ctx.font = 'bold 13px system-ui, sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText('ملخص المبيعات', leftBoxX + leftBoxW / 2, y + 21);
+    ctx.fillText('صافي المستحق (المتبقي)', leftBoxX + leftBoxW / 2, y + 21);
 
-    infoY = y + 50;
-    ctx.fillStyle = '#1a1a1a';
-    ctx.font = '12px system-ui, sans-serif';
-    ctx.textAlign = 'right';
-    ctx.fillText(`إجمالي المباع: ${totalSoldValue.toLocaleString('ar-EG')} ج.م`, leftBoxX + leftBoxW - 20, infoY);
-    infoY += 22;
-    const totalDirectPayments = filteredArchiveExtraPayments.reduce((sum, p) => sum + (p.amount - (p.appliedToCarriedDebt || 0)), 0);
-    const netDue = totalLoadValue - totalAdvanceAmounts - totalDirectPayments;
-    ctx.font = 'bold 13px system-ui, sans-serif';
+    ctx.font = 'bold 28px system-ui, sans-serif';
+    ctx.textAlign = 'center';
     ctx.fillStyle = netDue > 0 ? '#dc2626' : '#059669';
-    ctx.fillText(`${netDue > 0 ? 'المتبقي للمصنع' : netDue === 0 ? 'مسوى' : 'رصيد دائن'}: ${Math.abs(netDue).toLocaleString('ar-EG')} ج.م`, leftBoxX + leftBoxW - 20, infoY);
+    ctx.fillText(`${Math.abs(netDue).toLocaleString('ar-EG')} ج.م`, leftBoxX + leftBoxW / 2, y + 80);
+    ctx.font = 'bold 13px system-ui, sans-serif';
+    ctx.fillText(netDue > 0 ? 'يجب سداد المبلغ أعلاه' : netDue === 0 ? '*تم تسوية الحساب بالكامل*' : 'رصيد دائن لصالح المصنع', leftBoxX + leftBoxW / 2, y + 110);
 
     y += bottomBoxH + 20;
 
@@ -3725,38 +4054,50 @@ export default function FactoryTab({
 
   // ── Filtered loads PDF export (professional invoice style) ──
   const downloadFilteredLoadsPDF = () => {
-    if (filteredLoads.length === 0) { showToast('⚠️ لا توجد شحنات مسجلة لهذه الفترة!'); return; }
+    if (filteredLoads.length === 0) { showToast('⚠️ لا توجد شحنات تحميل مسجلة!'); return; }
 
     const filterLabel = archiveFilter === 'all' ? 'جميع الفترات' : archiveFilter === 'daily' ? 'يومي (اليوم الحالي)' : archiveFilter === 'weekly' ? 'أسبوعي (آخر 7 أيام)' : archiveFilter === 'monthly' ? 'شهري (آخر 30 يوم)' : 'مخصص';
 
-    let totalLoadValue = 0;
+    let totalLoadedCrates = 0;
+    let totalSoldCrates = 0;
+    let totalRemainingCrates = 0;
+    let totalSoldValue = 0;
     let totalAdvanceAmounts = 0;
 
     const loadsRows = filteredLoads.map((load, i) => {
       const prod = products.find(p => String(p.id).trim() === String(load.productId).trim());
       const weights = prod ? getProductWeightsFallback(prod) : [];
-      const weight = weights.find(w => String(w.id).trim() === String(load.weightId).trim());
+      const weight = weights.find(w => String(w.id).trim() === String(load.weightId).trim()) || weights[0];
       const unitsPerCarton = weight?.unitsPerCarton || 12;
       const cartons = load.cartonsCount !== undefined ? load.cartonsCount : Math.floor(load.quantity / unitsPerCarton);
-      const loose = load.looseUnitsCount !== undefined ? load.looseUnitsCount : (load.quantity % unitsPerCarton);
-      const cartonPrice = load.cartonPrice !== undefined ? Number(load.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) * unitsPerCarton : 0) || 0);
-      const unitPrice = load.unitPrice !== undefined ? Number(load.unitPrice) : (Number(weight?.factoryPricePerUnit) || (prod ? Number(prod.price) : 0) || 0);
-      const subtotal = (cartons * cartonPrice) + (loose * unitPrice);
+      const cartonPrice = load.cartonPrice !== undefined ? Number(load.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) : 0) || 0);
+
+      const key = `${load.productId}_${load.weightId || (weight ? weight.id : '')}`;
+      const stock = weightStocks[key] || { loaded: 0, sold: 0, remaining: 0 };
+      const soldCartons = Math.floor(stock.sold / unitsPerCarton);
+      const remainingCartons = Math.max(0, cartons - soldCartons);
+      const soldValueForLoad = soldCartons * cartonPrice;
+
       const prodName = prod ? prod.name : (load.productName || 'غير معروف');
       const weightSize = weight ? weight.size : (load as any).weightSize || '';
-      totalLoadValue += subtotal;
+      totalLoadedCrates += cartons;
+      totalSoldCrates += soldCartons;
+      totalRemainingCrates += remainingCartons;
+      totalSoldValue += soldValueForLoad;
       totalAdvanceAmounts += (load.advanceAmount || 0);
       return `<tr>
         <td style="text-align:center">${String(i + 1).padStart(2, '0')}</td>
-        <td style="text-align:right">${prodName} (${weightSize})</td>
-        <td style="text-align:center">${cartons} كرتونة${loose > 0 ? ` + ${loose}` : ''}</td>
-        <td style="text-align:center">${cartonPrice.toFixed(0)} ج.م</td>
-        <td style="text-align:center;font-weight:bold">${subtotal.toLocaleString('ar-EG')} ج.م</td>
+        <td style="text-align:right">${prodName} ${weightSize}</td>
+        <td style="text-align:center">${cartons}</td>
+        <td style="text-align:center;color:#16a34a;font-weight:bold">${soldCartons}</td>
+        <td style="text-align:center;color:${remainingCartons > 0 ? '#DD6B20' : '#16a34a'};font-weight:bold">${remainingCartons}</td>
+        <td style="text-align:center">${cartonPrice.toLocaleString('ar-EG')} ج.م</td>
+        <td style="text-align:center;font-weight:bold">${soldValueForLoad.toLocaleString('ar-EG')} ج.م</td>
       </tr>`;
     }).join('');
 
     const totalDirectPayments = filteredArchiveExtraPayments.reduce((sum, p) => sum + (p.amount - (p.appliedToCarriedDebt || 0)), 0);
-    const netDue = totalLoadValue - totalAdvanceAmounts - totalDirectPayments;
+    const netDue = totalSoldValue - totalAdvanceAmounts - totalDirectPayments;
     const netColor = netDue > 0 ? '#dc2626' : netDue === 0 ? '#059669' : '#4f46e5';
     const netText = netDue > 0 ? `${netDue.toLocaleString('ar-EG')} ج.م — يجب سداد المبلغ` : netDue === 0 ? '٠.٠٠ ج.م — *تم تسوية الحساب بالكامل*' : `${Math.abs(netDue).toLocaleString('ar-EG')} ج.م — رصيد دائن لصالح المصنع`;
 
@@ -3798,12 +4139,30 @@ export default function FactoryTab({
         </div>
 
         <table>
-          <thead><tr><th width="40">م</th><th>البيان / المرحلة</th><th>العدد</th><th>السعر</th><th>الإجمالي</th></tr></thead>
-          <tbody>${loadsRows}</tbody>
+          <thead><tr>
+            <th width="35">م</th>
+            <th>الصنف والحجم</th>
+            <th>المحمل (كرتونة)</th>
+            <th>المبيع (كرتونة)</th>
+            <th>المتبقي (كرتونة)</th>
+            <th>سعر الكرتونة</th>
+            <th>قيمة المبيع</th>
+          </tr></thead>
+          <tbody>
+            ${loadsRows}
+            <tr style="background:#0d7c5f;color:#fff;font-weight:bold">
+              <td colspan="2" style="text-align:center;border:none;padding:10px 6px">المجموع</td>
+              <td style="text-align:center;border:none;padding:10px 6px">${totalLoadedCrates}</td>
+              <td style="text-align:center;border:none;padding:10px 6px;color:#bbf7d0">${totalSoldCrates}</td>
+              <td style="text-align:center;border:none;padding:10px 6px;color:#fed7aa">${totalRemainingCrates}</td>
+              <td style="border:none;padding:10px 6px"></td>
+              <td style="text-align:center;border:none;padding:10px 6px;color:#bbf7d0">${totalSoldValue.toLocaleString('ar-EG')} ج.م</td>
+            </tr>
+          </tbody>
         </table>
-        <div style="background:#0d7c5f;color:#fff;padding:10px 12px;border-radius:6px;display:flex;justify-content:space-between;font-weight:bold;font-size:13px;margin-bottom:12px">
-          <span>إجمالي المسحوبات (المطلوب)</span>
-          <span>${totalLoadValue.toLocaleString('ar-EG')} ج.م</span>
+        <div style="background:#1e2a4a;color:#fff;padding:10px 12px;border-radius:6px;display:flex;justify-content:space-between;font-weight:bold;font-size:13px;margin-bottom:12px">
+          <span>إجمالي المستحق (المبيع)</span>
+          <span>${totalSoldValue.toLocaleString('ar-EG')} ج.م</span>
         </div>
 
         <div class="boxes">
@@ -3811,9 +4170,11 @@ export default function FactoryTab({
             <div class="box-header">ملخص الشحنات</div>
             <div class="box-body">
               <div class="info-line"><span>عدد الشحنات:</span><span class="info-bold">${filteredLoads.length}</span></div>
-              <div class="info-line"><span>إجمالي القيمة:</span><span class="info-bold">${totalLoadValue.toLocaleString('ar-EG')} ج.م</span></div>
+              <div class="info-line"><span>إجمالي المحمل:</span><span class="info-bold">${totalLoadedCrates.toLocaleString('ar-EG')} كرتونة</span></div>
+              <div class="info-line"><span>إجمالي المبيع:</span><span class="info-bold" style="color:#0d7c5f">${totalSoldCrates.toLocaleString('ar-EG')} كرتونة</span></div>
+              <div class="info-line"><span>إجمالي المتبقي:</span><span class="info-bold" style="color:#DD6B20">${totalRemainingCrates.toLocaleString('ar-EG')} كرتونة</span></div>
               <div class="info-line"><span>إجمالي المقدمات:</span><span class="info-bold">${totalAdvanceAmounts.toLocaleString('ar-EG')} ج.م</span></div>
-              <div class="info-line" style="border-top:1px solid #d5d0c8;padding-top:6px;margin-top:6px"><span style="font-weight:bold;color:#0d7c5f">المتبقي:</span><span class="info-bold" style="color:#0d7c5f">${(totalLoadValue - totalAdvanceAmounts).toLocaleString('ar-EG')} ج.م</span></div>
+            </div>
             </div>
           </div>
           <div class="box">
@@ -4387,7 +4748,7 @@ export default function FactoryTab({
                         const weight = weights.find(w => String(w.id).trim() === String(load.weightId).trim()) || weights[0];
                         const pName = prod ? prod.name : ((load as any).productName || 'صنف غير معرف');
                         const wSize = weight ? weight.size : ((load as any).weightSize || 'وزن مجهول');
-                        const cartonPrice = load.cartonPrice !== undefined ? Number(load.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) * (weight?.unitsPerCarton || 12) : 0) || 0);
+                        const cartonPrice = load.cartonPrice !== undefined ? Number(load.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) : 0) || 0);
                         const loadedCartons = Number((load.cartonsCount !== undefined ? load.cartonsCount : (load.quantity / (weight?.unitsPerCarton || 12))).toFixed(3));
                         const totalLoadedValue = loadedCartons * cartonPrice;
 
@@ -4786,7 +5147,7 @@ export default function FactoryTab({
                     const wSize = weight ? weight.size : ((load as any).weightSize || 'حجم مبدئي');
                     const accountingUnitLabel = prod?.accountingUnit || 'كرتونة';
 
-                    const cartonPrice = load.cartonPrice !== undefined ? Number(load.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) * (weight?.unitsPerCarton || 12) : 0) || 0);
+                    const cartonPrice = load.cartonPrice !== undefined ? Number(load.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) : 0) || 0);
                     const loadedCartons = Number((load.cartonsCount !== undefined ? load.cartonsCount : (load.quantity / (weight?.unitsPerCarton || 12))).toFixed(3));
                     const totalLoadedValue = loadedCartons * cartonPrice;
 
@@ -4899,45 +5260,75 @@ export default function FactoryTab({
                 )}
                 
                 {/* Invoice-like summary for Factory Archive */}
-                {filteredLoads.length > 0 && (
+                {filteredLoads.length > 0 && (() => {
+                  let totalLoadedCrates = 0;
+                  let totalSoldCrates = 0;
+                  let totalRemainingCrates = 0;
+                  let totalSoldValue = 0;
+                  filteredLoads.forEach(l => {
+                    const prod = products.find(p => String(p.id).trim() === String(l.productId).trim());
+                    const weights = prod ? getProductWeightsFallback(prod) : [];
+                    const weight = weights.find(w => String(w.id).trim() === String(l.weightId).trim()) || weights[0];
+                    const unitsPerCarton = weight?.unitsPerCarton || 12;
+                    const cartons = l.cartonsCount !== undefined ? l.cartonsCount : Math.floor(l.quantity / unitsPerCarton);
+                    const cartonPrice = l.cartonPrice !== undefined ? Number(l.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) : 0) || 0);
+                    const key = `${l.productId}_${l.weightId || (weight ? weight.id : '')}`;
+                    const stock = weightStocks[key] || { loaded: 0, sold: 0, remaining: 0 };
+                    const soldCartons = Math.floor(stock.sold / unitsPerCarton);
+                    const remainingCartons = Math.max(0, cartons - soldCartons);
+                    totalLoadedCrates += cartons;
+                    totalSoldCrates += soldCartons;
+                    totalRemainingCrates += remainingCartons;
+                    totalSoldValue += soldCartons * cartonPrice;
+                  });
+                  const totalAdvance = filteredLoads.reduce((sum, l) => sum + (l.advanceAmount || 0), 0);
+                  const totalDirectPayments = filteredArchiveExtraPayments.reduce((sum, p) => sum + (p.amount - (p.appliedToCarriedDebt || 0)), 0);
+                  const totalPaid = totalAdvance + totalDirectPayments;
+                  const remainingDue = Math.max(0, totalSoldValue - totalPaid);
+                  return (
                   <div className="mt-4 bg-[#1A365D] text-white border-transparent text-white p-5 rounded-2xl flex flex-col gap-3 shadow-md">
                     <h3 className="text-center font-bold text-sm border-b border-slate-700 pb-2 mb-1">ملخص حساب الأرشيف المفلتر</h3>
                     
-                    <div className="flex justify-between items-center text-sm">
-                      <span className="text-slate-300">إجمالي قيمة المحمل:</span>
-                      <span className="font-bold font-mono">{filteredLoads.reduce((sum, l) => {
-                          const prod = products.find(p => String(p.id).trim() === String(l.productId).trim());
-                          const weights = prod ? getProductWeightsFallback(prod) : [];
-                          const weight = weights.find(w => String(w.id).trim() === String(l.weightId).trim()) || weights[0];
-                          const cartonPrice = l.cartonPrice !== undefined ? Number(l.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) * (weight?.unitsPerCarton || 12) : 0) || 0);
-                          const loadedCartons = Number((l.cartonsCount !== undefined ? l.cartonsCount : (l.quantity / (weight?.unitsPerCarton || 12))).toFixed(3));
-                          return sum + (loadedCartons * cartonPrice);
-                        }, 0).toLocaleString('ar-EG', {minimumFractionDigits: 2, maximumFractionDigits: 2})}ج.م</span>
+                    <div className="grid grid-cols-3 gap-2 text-center">
+                      <div className="bg-white/10 rounded-xl p-2">
+                        <span className="text-[9px] text-blue-200 font-bold block">المحمل</span>
+                        <span className="text-sm font-black">{totalLoadedCrates.toLocaleString('ar-EG')}</span>
+                        <span className="text-[8px] text-blue-300">كرتونة</span>
+                      </div>
+                      <div className="bg-white/10 rounded-xl p-2">
+                        <span className="text-[9px] text-blue-200 font-bold block">المبيع</span>
+                        <span className="text-sm font-black text-emerald-300">{totalSoldCrates.toLocaleString('ar-EG')}</span>
+                        <span className="text-[8px] text-blue-300">كرتونة</span>
+                      </div>
+                      <div className="bg-white/10 rounded-xl p-2">
+                        <span className="text-[9px] text-blue-200 font-bold block">المتبقي</span>
+                        <span className="text-sm font-black text-amber-300">{totalRemainingCrates.toLocaleString('ar-EG')}</span>
+                        <span className="text-[8px] text-blue-300">كرتونة</span>
+                      </div>
+                    </div>
+                    
+                    <div className="flex justify-between items-center text-sm border-b border-slate-700 pb-3">
+                      <span className="text-slate-300">قيمة المبيع (بعد الجرد):</span>
+                      <span className="font-bold font-mono">{totalSoldValue.toLocaleString('ar-EG', {minimumFractionDigits: 2, maximumFractionDigits: 2})}ج.م</span>
                     </div>
                     
                     <div className="flex justify-between items-center text-sm">
                       <span className="text-slate-300">المسدد المباشر للمورد:</span>
-                      <span className="font-bold font-mono text-emerald-400">{filteredArchiveExtraPayments.reduce((sum, p) => sum + (p.amount - (p.appliedToCarriedDebt || 0)), 0).toLocaleString('ar-EG', {minimumFractionDigits: 2, maximumFractionDigits: 2})}ج.م</span>
+                      <span className="font-bold font-mono text-emerald-400">{totalDirectPayments.toLocaleString('ar-EG', {minimumFractionDigits: 2, maximumFractionDigits: 2})}ج.م</span>
                     </div>
                     
                     <div className="flex justify-between items-center text-sm border-b border-slate-700 pb-3">
                       <span className="text-slate-300">إجمالي المسدد (مقدم + مباشر):</span>
-                      <span className="font-bold font-mono text-emerald-400">{(filteredLoads.reduce((sum, l) => sum + (l.advanceAmount || 0), 0) + filteredArchiveExtraPayments.reduce((sum, p) => sum + (p.amount - (p.appliedToCarriedDebt || 0)), 0)).toLocaleString('ar-EG', {minimumFractionDigits: 2, maximumFractionDigits: 2})}ج.م</span>
+                      <span className="font-bold font-mono text-emerald-400">{totalPaid.toLocaleString('ar-EG', {minimumFractionDigits: 2, maximumFractionDigits: 2})}ج.م</span>
                     </div>
                     
                     <div className="flex justify-between items-center pt-1">
                       <span className="font-black text-slate-100">المتبقي للمصنع:</span>
-                      <span className="text-lg font-black font-mono text-amber-400">{Math.max(0, filteredLoads.reduce((sum, l) => {
-                        const prod = products.find(p => String(p.id).trim() === String(l.productId).trim());
-                        const weights = prod ? getProductWeightsFallback(prod) : [];
-                        const weight = weights.find(w => String(w.id).trim() === String(l.weightId).trim()) || weights[0];
-                        const cartonPrice = l.cartonPrice !== undefined ? Number(l.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) * (weight?.unitsPerCarton || 12) : 0) || 0);
-                        const loadedCartons = Number((l.cartonsCount !== undefined ? l.cartonsCount : (l.quantity / (weight?.unitsPerCarton || 12))).toFixed(3));
-                        return sum + (loadedCartons * cartonPrice);
-                      }, 0) - filteredLoads.reduce((sum, l) => sum + (l.advanceAmount || 0), 0) - filteredArchiveExtraPayments.reduce((sum, p) => sum + (p.amount - (p.appliedToCarriedDebt || 0)), 0)).toLocaleString('ar-EG', {minimumFractionDigits: 2, maximumFractionDigits: 2})}ج.م</span>
+                      <span className="text-lg font-black font-mono text-amber-400">{remainingDue.toLocaleString('ar-EG', {minimumFractionDigits: 2, maximumFractionDigits: 2})}ج.م</span>
                     </div>
                   </div>
-                )}
+                  );
+                })()}
               </div>
               </>
             )}
@@ -5038,7 +5429,7 @@ export default function FactoryTab({
                         const weight = weights.find(w => String(w.id).trim() === String(load.weightId).trim()) || weights[0];
                         const pName = prod ? prod.name : ((load as any).productName || 'مجهول');
                         const wSize = weight ? weight.size : ((load as any).weightSize || '');
-                        const cartonPrice = load.cartonPrice !== undefined ? Number(load.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) * (weight?.unitsPerCarton || 12) : 0) || 0);
+                        const cartonPrice = load.cartonPrice !== undefined ? Number(load.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) : 0) || 0);
                         const loadedCartons = Number((load.cartonsCount !== undefined ? load.cartonsCount : (load.quantity / (weight?.unitsPerCarton || 12))).toFixed(3));
                         const totalLoadedValue = loadedCartons * cartonPrice;
 
@@ -5098,7 +5489,7 @@ export default function FactoryTab({
                           const prod = products.find(p => String(p.id).trim() === String(l.productId).trim());
                           const weights = prod ? getProductWeightsFallback(prod) : [];
                           const weight = weights.find(w => String(w.id).trim() === String(l.weightId).trim()) || weights[0];
-                          const cartonPrice = l.cartonPrice !== undefined ? Number(l.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) * (weight?.unitsPerCarton || 12) : 0) || 0);
+                          const cartonPrice = l.cartonPrice !== undefined ? Number(l.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) : 0) || 0);
                           const loadedCartons = Number((l.cartonsCount !== undefined ? l.cartonsCount : (l.quantity / (weight?.unitsPerCarton || 12))).toFixed(3));
                           return sum + (loadedCartons * cartonPrice);
                         }, 0).toFixed(2)}ج.م
@@ -5118,7 +5509,7 @@ export default function FactoryTab({
                               const prod = products.find(p => String(p.id).trim() === String(l.productId).trim());
                               const weights = prod ? getProductWeightsFallback(prod) : [];
                               const weight = weights.find(w => String(w.id).trim() === String(l.weightId).trim()) || weights[0];
-                              const cartonPrice = l.cartonPrice !== undefined ? Number(l.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) * (weight?.unitsPerCarton || 12) : 0) || 0);
+                              const cartonPrice = l.cartonPrice !== undefined ? Number(l.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) : 0) || 0);
                               const loadedCartons = Number((l.cartonsCount !== undefined ? l.cartonsCount : (l.quantity / (weight?.unitsPerCarton || 12))).toFixed(3));
                               return sum + (loadedCartons * cartonPrice);
                             }, 0);
@@ -5883,7 +6274,7 @@ export default function FactoryTab({
                               const unitsPerCarton = weight?.unitsPerCarton || 12;
                               const cartons = l.cartonsCount !== undefined ? l.cartonsCount : Math.floor(l.quantity / unitsPerCarton);
                               const loose = l.looseUnitsCount !== undefined ? l.looseUnitsCount : (l.quantity % unitsPerCarton);
-                              const cartonPrice = l.cartonPrice !== undefined ? Number(l.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) * unitsPerCarton : 0) || 0);
+                              const cartonPrice = l.cartonPrice !== undefined ? Number(l.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) : 0) || 0);
                               const unitPrice = l.unitPrice !== undefined ? Number(l.unitPrice) : (Number(weight?.factoryPricePerUnit) || (prod ? Number(prod.price) : 0) || 0);
                               return {
                                 date: l.date, productName: prod?.name || l.productName || 'غير معروف',
@@ -5989,30 +6380,42 @@ export default function FactoryTab({
                   حركة البضاعة المسحوبة من المصنع
                 </h4>
                 
-                <div className="flex flex-wrap items-center gap-2 mb-2 bg-slate-50 p-2 rounded-xl border border-slate-150 text-right">
-                  <span className="text-[10px] font-bold text-slate-500">الفترة:</span>
-                  <select value={accountLoadsFilter} onChange={e => setAccountLoadsFilter(e.target.value as any)} className="bg-white border border-slate-200 rounded p-1 text-[11px] font-bold outline-none focus:ring-1 focus:ring-indigo-500">
-                    <option value="all">الكل</option>
-                    <option value="daily">اليوم</option>
-                    <option value="weekly">الأسبوع</option>
-                    <option value="monthly">الشهر</option>
-                    <option value="custom">مخصص</option>
-                  </select>
+                <div className="flex flex-col gap-2 mb-2 bg-slate-50 p-2 rounded-xl border border-slate-150 text-right">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] font-bold text-slate-500">الفترة:</span>
+                    <div className="grid grid-cols-5 bg-white border border-slate-200 p-1 rounded-xl text-center gap-1 flex-1">
+                      <button type="button" onClick={() => { setAccountLoadsFilter('all'); setAccountLoadsDayFilters([]); }} className={`py-1.5 px-0.5 rounded-lg text-[10.5px] font-bold transition-all cursor-pointer ${accountLoadsFilter === 'all' ? 'bg-[#FFFFFF] text-[#1A365D] border-b-2 border-[#DD6B20] shadow-sm' : 'text-[#9CA3AF] hover:bg-slate-55'}`}>الكل</button>
+                      <button type="button" onClick={() => { setAccountLoadsFilter('daily'); setAccountLoadsDayFilters([]); }} className={`py-1.5 px-0.5 rounded-lg text-[10.5px] font-bold transition-all cursor-pointer ${accountLoadsFilter === 'daily' ? 'bg-[#FFFFFF] text-[#1A365D] border-b-2 border-[#DD6B20] shadow-sm' : 'text-[#9CA3AF] hover:bg-slate-55'}`}>يومي</button>
+                      <button type="button" onClick={() => { setAccountLoadsFilter('weekly'); setAccountLoadsDayFilters([]); }} className={`py-1.5 px-0.5 rounded-lg text-[10.5px] font-bold transition-all cursor-pointer ${accountLoadsFilter === 'weekly' ? 'bg-[#FFFFFF] text-[#1A365D] border-b-2 border-[#DD6B20] shadow-sm' : 'text-[#9CA3AF] hover:bg-slate-55'}`}>أسبوعي</button>
+                      <button type="button" onClick={() => { setAccountLoadsFilter('monthly'); setAccountLoadsDayFilters([]); }} className={`py-1.5 px-0.5 rounded-lg text-[10.5px] font-bold transition-all cursor-pointer ${accountLoadsFilter === 'monthly' ? 'bg-[#FFFFFF] text-[#1A365D] border-b-2 border-[#DD6B20] shadow-sm' : 'text-[#9CA3AF] hover:bg-slate-55'}`}>شهري</button>
+                      <button type="button" onClick={() => { setAccountLoadsFilter('custom'); setAccountLoadsDayFilters([]); }} className={`py-1.5 px-0.5 rounded-lg text-[10.5px] font-bold transition-all cursor-pointer ${accountLoadsFilter === 'custom' ? 'bg-[#FFFFFF] text-[#1A365D] border-b-2 border-[#DD6B20] shadow-sm' : 'text-[#9CA3AF] hover:bg-slate-55'}`}>مخصص</button>
+                    </div>
+                    <div className="flex gap-1.5 mr-auto">
+                      <button type="button" onClick={() => exportAccountLoads('png')} className="bg-indigo-50 text-indigo-700 p-1.5 rounded-lg border border-indigo-100 hover:bg-indigo-100 transition-colors" title="تنزيل صورة">
+                        <Image className="w-3.5 h-3.5"/>
+                      </button>
+                      <button type="button" onClick={() => exportAccountLoads('pdf')} className="bg-rose-50 text-rose-700 p-1.5 rounded-lg border border-rose-100 hover:bg-rose-100 transition-colors" title="تنزيل PDF">
+                        <FileText className="w-3.5 h-3.5"/>
+                      </button>
+                    </div>
+                  </div>
+
                   {accountLoadsFilter === 'custom' && (
                     <div className="flex gap-1.5">
                       <input type="date" value={accountLoadsStartDate} onChange={e => setAccountLoadsStartDate(e.target.value)} className="bg-white border border-slate-200 rounded p-1 text-[10px]" />
                       <input type="date" value={accountLoadsEndDate} onChange={e => setAccountLoadsEndDate(e.target.value)} className="bg-white border border-slate-200 rounded p-1 text-[10px]" />
                     </div>
                   )}
-                  <div className="flex gap-1.5 mr-auto">
-                    <button type="button" onClick={() => exportAccountLoads('png')} className="bg-indigo-50 text-indigo-700 p-1.5 rounded-lg border border-indigo-100 hover:bg-indigo-100 transition-colors" title="تنزيل صورة">
-                      <Image className="w-3.5 h-3.5"/>
-                    </button>
-                    <button type="button" onClick={() => exportAccountLoads('pdf')} className="bg-rose-50 text-rose-700 p-1.5 rounded-lg border border-rose-100 hover:bg-rose-100 transition-colors" title="تنزيل PDF">
-                      <FileText className="w-3.5 h-3.5"/>
-                    </button>
-                  </div>
                 </div>
+
+                {accountLoadsFilter === 'weekly' && (
+                  <div className="flex bg-white border border-slate-200 rounded-lg overflow-hidden flex-wrap gap-px p-0.5 animate-fade-in" dir="rtl">
+                    <button type="button" onClick={() => setAccountLoadsDayFilters([])} className={`flex-1 text-[10px] py-1.5 rounded font-bold transition-colors ${accountLoadsDayFilters.length === 0 ? 'bg-[#1A365D] text-white shadow-xs' : 'text-slate-600 hover:bg-slate-100 bg-white'}`}>الكل</button>
+                    {[['Saturday', 'السبت'], ['Sunday', 'الأحد'], ['Monday', 'الإثنين'], ['Tuesday', 'الثلاثاء'], ['Wednesday', 'الأربعاء'], ['Thursday', 'الخميس'], ['Friday', 'الجمعة']].map(([en, ar]) => (
+                      <button key={en} type="button" onClick={() => setAccountLoadsDayFilters(prev => prev.includes(en) ? prev.filter(d => d !== en) : [...prev, en])} className={`flex-1 text-[10px] py-1.5 rounded font-bold transition-colors ${accountLoadsDayFilters.includes(en) ? 'bg-[#1A365D] text-white shadow-xs' : 'text-slate-600 hover:bg-slate-100 bg-white'}`}>{ar}</button>
+                    ))}
+                  </div>
+                )}
 
                 <div className="max-h-80 overflow-y-auto custom-scroll flex flex-col gap-2.5">
                   {accountLoadsSummary.length === 0 ? (
@@ -6022,23 +6425,12 @@ export default function FactoryTab({
                       <div key={'with_' + item.id + '_' + idx} className="bg-[#F7FAFC] border border-slate-100 rounded-xl p-3.5 flex flex-col gap-1 text-xs">
                         <div className="flex justify-between items-center font-bold text-[#1A365D]">
                           <span>{item.productName} ({item.size})</span>
-                          <span>{item.cartons} كرتونة</span>
+                          <span className="text-[10px] text-slate-500">محمل: {item.loaded} | مبيع: <span className="text-emerald-600">{item.sold}</span> | متبقي: <span className={item.remaining > 0 ? 'text-[#DD6B20]' : 'text-emerald-600'}>{item.remaining}</span></span>
                         </div>
-                        <div className="flex justify-between items-center text-[10px] text-[#2B6CB0] mt-0.5 font-medium">
-                          <span>سعر المصنع للكرتونة: {item.cartonPrice}ج.م</span>
-                          <span className="font-mono text-[#1A365D]">القيمة: <strong className="font-bold text-[#1A365D]">{formatNum(item.subtotal)}ج.م</strong></span>
+                        <div className="flex justify-between items-center text-[10px] mt-0.5 font-medium">
+                          <span className="text-[#2B6CB0]">قيمة المبيع بسعر المصنع: <strong className="text-[#1A365D]">{formatNum(item.soldValue)}ج.م</strong></span>
+                          {item.remaining > 0 && <span className="text-[#DD6B20]">المتبقي في السيارة: {item.remaining} كرتونة</span>}
                         </div>
-                        {item.advanceAmount && item.advanceAmount > 0 ? (
-                          <div className="flex justify-between items-center text-[10px] text-[#DD6B20] bg-emerald-50 border border-emerald-100 rounded px-1.5 py-0.5 mt-1 font-bold">
-                            <span>خصم مقدم البضاعة للمصنع:</span>
-                            <span className="font-mono">-{item.advanceAmount}ج.م</span>
-                          </div>
-                        ) : null}
-                        {item.warehouseKeeper && (
-                          <span className="text-[10px] text-[#1A365D] font-bold mt-1">
-                            الجهة المستلمة والمراجعة: {item.warehouseKeeper}
-                          </span>
-                        )}
                       </div>
                     ))
                   )}
@@ -6096,10 +6488,310 @@ export default function FactoryTab({
               </div>
 
             </div>
+
+            {/* ⭐ قسم جرد السيارة */}
+            <div className="bg-gradient-to-br from-[#EBF4FF] to-[#E9F5FE] p-5 rounded-2xl border border-[#BEE3F8] shadow-sm flex flex-col gap-3 mt-5">
+              <div className="flex items-center justify-between border-b border-[#BEE3F8] pb-2">
+                <h4 className="font-bold text-[#1A365D] text-sm flex items-center gap-1.5">
+                  <Package className="h-4.5 w-4.5 text-[#2B6CB0]" />
+                  جرد البضاعة في السيارة (بالكرتونة)
+                </h4>
+                <div className="flex flex-wrap items-center gap-2 bg-white p-2 rounded-xl border border-[#BEE3F8] text-right">
+                  <span className="text-[10px] font-bold text-[#2B6CB0]">الفترة:</span>
+                  <select value={inventoryFilter} onChange={e => { setInventoryFilter(e.target.value as any); setInventoryDayFilters([]); }} className="bg-white border border-[#BEE3F8] rounded p-1 text-[11px] font-bold outline-none focus:ring-1 focus:ring-[#2B6CB0]">
+                    <option value="all">الكل</option>
+                    <option value="daily">اليوم</option>
+                    <option value="weekly">الأسبوع</option>
+                    <option value="monthly">الشهر</option>
+                    <option value="custom">مخصص</option>
+                  </select>
+                  {inventoryFilter === 'custom' && (
+                    <div className="flex gap-1.5">
+                      <input type="date" value={inventoryStartDate} onChange={e => setInventoryStartDate(e.target.value)} className="bg-white border border-[#BEE3F8] rounded p-1 text-[10px]" />
+                      <input type="date" value={inventoryEndDate} onChange={e => setInventoryEndDate(e.target.value)} className="bg-white border border-[#BEE3F8] rounded p-1 text-[10px]" />
+                    </div>
+                  )}
+                </div>
+                {inventoryFilter === 'weekly' && (
+                  <div className="flex bg-white border border-[#BEE3F8] rounded-lg overflow-hidden flex-wrap gap-px p-0.5" dir="rtl">
+                    <button type="button" onClick={() => setInventoryDayFilters([])} className={`px-2 py-1 rounded text-[10px] font-bold transition-colors ${inventoryDayFilters.length === 0 ? 'bg-[#2B6CB0] text-white' : 'bg-white text-[#2B6CB0] hover:bg-[#EBF4FF]'}`}>الكل</button>
+                    {[['Saturday', 'السبت'], ['Sunday', 'الأحد'], ['Monday', 'الإثنين'], ['Tuesday', 'الثلاثاء'], ['Wednesday', 'الأربعاء'], ['Thursday', 'الخميس'], ['Friday', 'الجمعة']].map(([en, ar]) => (
+                      <button key={en} type="button" onClick={() => setInventoryDayFilters(prev => prev.includes(en) ? prev.filter(d => d !== en) : [...prev, en])} className={`px-2 py-1 rounded text-[10px] font-bold transition-colors ${inventoryDayFilters.includes(en) ? 'bg-[#2B6CB0] text-white' : 'bg-white text-[#2B6CB0] hover:bg-[#EBF4FF]'}`}>{ar}</button>
+                    ))}
+                  </div>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    const canvas = document.createElement('canvas');
+                    const W = 920;
+                    canvas.width = W;
+                    const ctx = canvas.getContext('2d');
+                    if (!ctx) return;
+                    const padX = 30;
+                    const tableW = W - padX * 2;
+                    const rowH = 38;
+                    const headerH = 110;
+                    const summaryRowH = 36;
+                    const bottomBoxH = 120;
+                    const footerH = 50;
+
+                    const visibleRows = Object.entries(weightStocksInCartons).filter(([key, stock]) => {
+                      if (stock.loaded === 0 && stock.sold === 0) return false;
+                      return true;
+                    });
+                    const dataRows = visibleRows.length;
+                    const totalH = 24 + headerH + 32 + (dataRows * rowH) + summaryRowH + 12 + bottomBoxH + footerH + 24;
+                    canvas.height = totalH;
+
+                    const roundRect = (c: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) => {
+                      c.beginPath(); c.moveTo(x+r, y); c.lineTo(x+w-r, y);
+                      c.quadraticCurveTo(x+w, y, x+w, y+r); c.lineTo(x+w, y+h-r);
+                      c.quadraticCurveTo(x+w, y+h, x+w-r, y+h); c.lineTo(x+r, y+h);
+                      c.quadraticCurveTo(x, y+h, x, y+h-r); c.lineTo(x, y+r);
+                      c.quadraticCurveTo(x, y, x+r, y); c.closePath();
+                    };
+
+                    ctx.fillStyle = '#faf8f5';
+                    ctx.fillRect(0, 0, W, totalH);
+
+                    ctx.strokeStyle = '#1a1a1a';
+                    ctx.lineWidth = 3;
+                    ctx.strokeRect(8, 8, W-16, totalH-16);
+
+                    roundRect(ctx, 12, 12, W-24, headerH, 6);
+                    ctx.fillStyle = '#1e2a4a';
+                    ctx.fill();
+                    ctx.fillStyle = '#d4a843';
+                    ctx.fillRect(12, 12 + headerH - 4, W-24, 4);
+
+                    ctx.fillStyle = '#ffffff';
+                    ctx.font = 'bold 22px system-ui, sans-serif';
+                    ctx.textAlign = 'center';
+                    ctx.fillText('جرد البضاعة في السيارة', W/2, 12 + 38);
+                    ctx.fillStyle = '#93c5fd';
+                    ctx.font = '500 12px system-ui, sans-serif';
+                    ctx.fillText('المخزون الحالي بالكرتونة', W/2, 12 + 58);
+                    ctx.fillStyle = '#cbd5e1';
+                    ctx.font = '12px system-ui, sans-serif';
+                    ctx.textAlign = 'right';
+                    ctx.fillText(`التاريخ: ${new Date().toLocaleDateString('ar-EG')}`, W - padX - 10, 12 + 80);
+                    ctx.textAlign = 'left';
+                    ctx.fillStyle = '#fbbf24';
+                    ctx.font = 'bold 12px system-ui, sans-serif';
+                    ctx.fillText(`عدد الأصناف: ${visibleRows.length}`, padX + 10, 12 + 80);
+
+                    const tableY = 24 + headerH;
+                    const headers = ['م', 'المنتج', 'الحجم', 'التحميل (كرتونة)', 'المبيع (كرتونة)', 'المتبقي (كرتونة)'];
+                    const colXs = [padX + tableW - 35, padX + tableW - 135, padX + tableW - 265, padX + tableW - 420, padX + tableW - 570, padX + tableW - 720];
+
+                    ctx.fillStyle = '#2c3e6b';
+                    ctx.fillRect(padX, tableY, tableW, 32);
+                    ctx.fillStyle = '#ffffff';
+                    ctx.font = 'bold 12px system-ui, sans-serif';
+                    ctx.textAlign = 'center';
+                    headers.forEach((h, i) => { ctx.fillText(h, colXs[i], tableY + 21); });
+
+                    let y = tableY + 32;
+                    let totalLoaded = 0, totalSold = 0, totalRemaining = 0;
+                    visibleRows.forEach(([key, stock], idx) => {
+                      const [prodId, weightId] = key.split('_');
+                      const prod = products.find(p => p.id === prodId);
+                      const weights = prod ? getProductWeightsFallback(prod) : [];
+                      const w = weights.find(wt => wt.id === weightId);
+                      let displayName = prod ? prod.name : '';
+                      let displaySize = w ? w.size : '';
+                      if (!displayName || !displaySize) {
+                        const refLoad = factoryLoads.find(l => String(l.productId).trim() === prodId && String(l.weightId || '').trim() === weightId);
+                        if (!displayName) displayName = refLoad?.productName || 'صنف محذوف';
+                        if (!displaySize) displaySize = refLoad?.weightSize || 'افتراضي';
+                      }
+
+                      ctx.fillStyle = idx % 2 === 0 ? '#ffffff' : '#f5f3ee';
+                      ctx.fillRect(padX, y, tableW, rowH);
+                      ctx.strokeStyle = '#d5d0c8';
+                      ctx.lineWidth = 0.5;
+                      ctx.strokeRect(padX, y, tableW, rowH);
+
+                      ctx.fillStyle = '#1a1a1a';
+                      ctx.font = '11px system-ui, sans-serif';
+                      ctx.textAlign = 'center';
+                      ctx.fillText(String(idx + 1), colXs[0], y + 23);
+                      ctx.textAlign = 'right';
+                      ctx.fillText(displayName, colXs[1], y + 23);
+                      ctx.textAlign = 'center';
+                      ctx.fillText(displaySize, colXs[2], y + 23);
+                      ctx.fillText(String(stock.loaded), colXs[3], y + 23);
+
+                      ctx.fillStyle = '#38A169';
+                      ctx.font = 'bold 11px system-ui, sans-serif';
+                      ctx.fillText(String(stock.sold), colXs[4], y + 23);
+
+                      ctx.fillStyle = stock.remaining > 0 ? '#DD6B20' : '#38A169';
+                      ctx.font = 'bold 11px system-ui, sans-serif';
+                      ctx.fillText(String(stock.remaining), colXs[5], y + 23);
+
+                      totalLoaded += stock.loaded;
+                      totalSold += stock.sold;
+                      totalRemaining += stock.remaining;
+                      y += rowH;
+                    });
+
+                    ctx.fillStyle = '#0d7c5f';
+                    ctx.fillRect(padX, y, tableW, summaryRowH);
+                    ctx.strokeStyle = '#0a6e54';
+                    ctx.lineWidth = 1;
+                    ctx.strokeRect(padX, y, tableW, summaryRowH);
+                    ctx.fillStyle = '#ffffff';
+                    ctx.font = 'bold 13px system-ui, sans-serif';
+                    ctx.textAlign = 'center';
+                    ctx.fillText('الإجمالي', colXs[0], y + 23);
+                    ctx.fillText('', colXs[1], y + 23);
+                    ctx.fillText('', colXs[2], y + 23);
+                    ctx.fillText(String(totalLoaded), colXs[3], y + 23);
+                    ctx.fillText(String(totalSold), colXs[4], y + 23);
+                    ctx.fillText(String(totalRemaining), colXs[5], y + 23);
+                    y += summaryRowH + 12;
+
+                    const boxW = (tableW - 12) / 2;
+                    roundRect(ctx, padX, y, boxW, bottomBoxH, 4);
+                    ctx.fillStyle = '#fdf6ee';
+                    ctx.fill();
+                    ctx.strokeStyle = '#d5d0c8';
+                    ctx.lineWidth = 0.5;
+                    ctx.stroke();
+                    ctx.fillStyle = '#2c3e6b';
+                    ctx.fillRect(padX, y, boxW, 24);
+                    ctx.fillStyle = '#ffffff';
+                    ctx.font = 'bold 11px system-ui, sans-serif';
+                    ctx.textAlign = 'center';
+                    ctx.fillText('ملخص الجرد', padX + boxW/2, y + 16);
+                    ctx.fillStyle = '#1a1a1a';
+                    ctx.font = '12px system-ui, sans-serif';
+                    ctx.textAlign = 'right';
+                    ctx.fillText(`إجمالي التحميل: ${totalLoaded} كرتونة`, padX + boxW - 12, y + 52);
+                    ctx.fillText(`إجمالي المبيع: ${totalSold} كرتونة`, padX + boxW - 12, y + 74);
+                    ctx.fillStyle = totalRemaining > 0 ? '#DD6B20' : '#38A169';
+                    ctx.font = 'bold 12px system-ui, sans-serif';
+                    ctx.fillText(`إجمالي المتبقي: ${totalRemaining} كرتونة`, padX + boxW - 12, y + 96);
+
+                    const box2X = padX + boxW + 12;
+                    roundRect(ctx, box2X, y, boxW, bottomBoxH, 4);
+                    ctx.fillStyle = '#ffffff';
+                    ctx.fill();
+                    ctx.strokeStyle = '#d5d0c8';
+                    ctx.lineWidth = 0.5;
+                    ctx.stroke();
+                    ctx.fillStyle = '#2c3e6b';
+                    ctx.fillRect(box2X, y, boxW, 24);
+                    ctx.fillStyle = '#ffffff';
+                    ctx.font = 'bold 11px system-ui, sans-serif';
+                    ctx.textAlign = 'center';
+                    ctx.fillText('ملاحظات', box2X + boxW/2, y + 16);
+                    ctx.fillStyle = '#1a1a1a';
+                    ctx.font = '11px system-ui, sans-serif';
+                    ctx.textAlign = 'right';
+                    ctx.fillText('• الأرقام بالكرتونة (بدون أجزاء)', box2X + boxW - 12, y + 52);
+                    ctx.fillText(`• تاريخ الجرد: ${new Date().toLocaleDateString('ar-EG')}`, box2X + boxW - 12, y + 74);
+                    ctx.fillText(`• عدد الأصناف: ${visibleRows.length}`, box2X + boxW - 12, y + 96);
+                    y += bottomBoxH + 8;
+
+                    ctx.strokeStyle = '#d5d0c8';
+                    ctx.lineWidth = 1;
+                    ctx.beginPath();
+                    ctx.moveTo(padX, y);
+                    ctx.lineTo(padX + tableW, y);
+                    ctx.stroke();
+                    y += 18;
+                    ctx.fillStyle = '#1a1a1a';
+                    ctx.font = '11px system-ui, sans-serif';
+                    ctx.textAlign = 'center';
+                    ctx.fillText(`نظام إدارة المبيعات | ${new Date().toLocaleString('ar-EG')}`, W/2, y);
+
+                    const link = document.createElement('a');
+                    link.download = `جرد_السيارة_${new Date().toISOString().split('T')[0]}.png`;
+                    link.href = canvas.toDataURL('image/png');
+                    link.click();
+                  }}
+                  className="bg-[#2B6CB0] text-white px-3 py-1.5 rounded-lg text-[11px] font-bold hover:bg-[#1A365D] transition-colors flex items-center gap-1"
+                >
+                  <Image className="w-3.5 h-3.5" />
+                  تحميل صورة الجرد
+                </button>
+              </div>
+
+              {/* جدول الجرد بالكرتونة */}
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="bg-[#2B6CB0] text-white">
+                      <th className="p-2 rounded-r-lg text-right">المنتج</th>
+                      <th className="p-2 text-center">الحجم</th>
+                      <th className="p-2 text-center">التحميل (كرتونة)</th>
+                      <th className="p-2 text-center">المبيع (كرتونة)</th>
+                      <th className="p-2 text-center rounded-l-lg">المتبقي (كرتونة)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {Object.entries(inventoryFilteredStocks).map(([key, stock]) => {
+                      const [prodId, weightId] = key.split('_');
+                      const prod = products.find(p => p.id === prodId);
+                      if (!prod) return null;
+                      const weights = getProductWeightsFallback(prod);
+                      const weight = weights.find(w => w.id === weightId);
+                      if (!weight) return null;
+                      if (stock.loaded === 0 && stock.sold === 0) return null;
+
+                      return (
+                        <tr key={key} className="border-b border-[#BEE3F8] hover:bg-[#EBF4FF]">
+                          <td className="p-2 font-bold text-[#1A365D]">{prod.name}</td>
+                          <td className="p-2 text-center text-[#2B6CB0]">{weight.size}</td>
+                          <td className="p-2 text-center font-bold">{stock.loaded}</td>
+                          <td className="p-2 text-center text-emerald-700 font-bold">{stock.sold}</td>
+                          <td className={`p-2 text-center font-black ${stock.remaining > 0 ? 'text-[#DD6B20]' : 'text-[#38A169]'}`}>
+                            {stock.remaining}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                  <tfoot>
+                    <tr className="bg-[#0d7c5f] text-white font-black">
+                      <td className="p-2 rounded-r-lg">الإجمالي</td>
+                      <td className="p-2 text-center"></td>
+                      <td className="p-2 text-center">
+                        {Object.values(inventoryFilteredStocks).reduce((sum, s) => sum + s.loaded, 0)}
+                      </td>
+                      <td className="p-2 text-center">
+                        {Object.values(inventoryFilteredStocks).reduce((sum, s) => sum + s.sold, 0)}
+                      </td>
+                      <td className="p-2 text-center rounded-l-lg">
+                        {Object.values(inventoryFilteredStocks).reduce((sum, s) => sum + s.remaining, 0)}
+                      </td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+
+              {/* ملخص الجرد */}
+              <div className="grid grid-cols-3 gap-3 mt-2">
+                <div className="bg-white p-3 rounded-xl border border-[#BEE3F8] text-center">
+                  <div className="text-[10px] text-[#2B6CB0] font-bold">إجمالي التحميل (كرتونة)</div>
+                  <div className="text-lg font-black text-[#1A365D]">{Object.values(inventoryFilteredStocks).reduce((sum, s) => sum + s.loaded, 0)}</div>
+                </div>
+                <div className="bg-white p-3 rounded-xl border border-emerald-200 text-center">
+                  <div className="text-[10px] text-emerald-600 font-bold">إجمالي المبيع (كرتونة)</div>
+                  <div className="text-lg font-black text-emerald-700">{Object.values(inventoryFilteredStocks).reduce((sum, s) => sum + s.sold, 0)}</div>
+                </div>
+                <div className="bg-white p-3 rounded-xl border border-[#DD6B20] text-center">
+                  <div className="text-[10px] text-[#DD6B20] font-bold">إجمالي المتبقي (كرتونة)</div>
+                  <div className="text-lg font-black text-[#DD6B20]">{Object.values(inventoryFilteredStocks).reduce((sum, s) => sum + s.remaining, 0)}</div>
+                </div>
+              </div>
+            </div>
           </div>
         )}
 
-        {/* Edit Archived Cycle Modal */}
         {editingCycle && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => { setEditingCycle(null); setEditData(null); }}>
             <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-y-auto p-6" onClick={e => e.stopPropagation()}>

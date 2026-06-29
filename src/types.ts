@@ -63,12 +63,12 @@ export interface Customer {
 
 export interface InvoiceItem {
   productId: string;
-  weightId?: string; // معرف الوزن المحدد للمنتج المباع
-  quantity: number; // بالعبوات الفردية
-  originalPrice: number; // السعر لوزن العبوة من الإدارة
-  factoryPrice?: number; // سعر العبوة من المصنع (لحساب صافي الربح تاريخياً)
-  discountPercent: number; // 1% , 1.25%, 1.5% أو مخصص
-  finalPrice: number; // السعر بعد الخصم
+  weightId?: string;
+  quantity: number; // دائماً بالزجاجات
+  originalPrice: number; // سعر الزجاجة
+  factoryPrice?: number; // سعر الكرتونة من المصنع
+  discountPercent: number;
+  finalPrice: number; // سعر الزجاجة بعد الخصم
 }
 
 export interface Invoice {
@@ -190,11 +190,11 @@ export function getProductWeightsFallback(product: Product): ProductWeight[] {
     {
       id: "weight-default",
       size: detectedSize,
-      cartonPriceFromFactory: product.price * 12,
+      cartonPriceFromFactory: product.price,
       unitsPerCarton: 12,
       factoryPricePerUnit: product.price,
       profitMarginPercent: 0,
-      retailPricePerUnit: product.price
+      retailPricePerUnit: Number((product.price / 12).toFixed(3))
     }
   ];
 }
@@ -206,4 +206,13 @@ export function formatNum(num: number | string): string {
     minimumFractionDigits: 0,
     maximumFractionDigits: 3
   }).format(val);
+}
+
+export function getFactoryCartonPrice(item: InvoiceItem, weight: ProductWeight | undefined, prod: Product | undefined): number {
+  return weight?.cartonPriceFromFactory || (prod ? Number(prod.price) : 0) || 0;
+}
+
+export function getItemFactoryCost(item: InvoiceItem, weight: ProductWeight | undefined, prod: Product | undefined): number {
+  const cartonPrice = weight?.cartonPriceFromFactory || (prod ? Number(prod.price) : 0) || 0;
+  return cartonPrice / (weight?.unitsPerCarton || 12);
 }

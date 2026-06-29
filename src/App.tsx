@@ -7,7 +7,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { APIProvider } from '@vis.gl/react-google-maps';
 import PersonalSettingsTab from './components/PersonalSettingsTab';
-import { Product, Customer, Invoice, Expense, FactoryLoad, AppSettings, Trip, UserAuth, SyncLog, getProductWeightsFallback } from './types';
+import { Product, Customer, Invoice, Expense, FactoryLoad, AppSettings, Trip, UserAuth, SyncLog, getProductWeightsFallback, getItemFactoryCost } from './types';
 import { AnimatePresence, motion } from 'motion/react';
 import { showToast, toastEvent } from './utils/toast';
 import {
@@ -555,7 +555,7 @@ export default function App() {
             };
           }
           return e;
-        }).filter((e: any) => e.amount > 0 && e.description);
+        }).filter((e: any) => e.amount > 0);
         setExpenses(cleanedExpenses);
 
         setTrips(migrate(tr, 'trips_sys', []));
@@ -1406,8 +1406,8 @@ export default function App() {
             warehouseKeeper: fl.warehouseKeeper || '',
             delegateName: fl.delegateName || 'مجهول',
             delegatePhone: fl.delegatePhone || '',
-            cartonPrice: fl.cartonPrice || wt?.cartonPriceFromFactory || (prod ? prod.price * (wt?.unitsPerCarton || 12) : 0),
-            unitPrice: fl.unitPrice || wt?.factoryPricePerUnit || (prod ? prod.price : 0)
+            cartonPrice: fl.cartonPrice || wt?.cartonPriceFromFactory || (prod ? prod.price : 0),
+            unitPrice: fl.unitPrice || (wt?.factoryPricePerUnit || (prod ? prod.price : 0))
           };
         }),
         discoveredLeads: discoveredLeads.map((l: any) => ({
@@ -2038,9 +2038,6 @@ export default function App() {
 
         // 4. Update operational tables (Invoices, Expenses, Trips, Factory loads)
         if (data.invoices && Array.isArray(data.invoices)) {
-          const thirtyDaysAgo = new Date();
-          thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-
           const mappedInvoices = data.invoices.map((inv: any) => {
             const cust = customers.find(c => c.id === inv.customerId || c.name === inv.customerName);
             return {
@@ -2061,12 +2058,7 @@ export default function App() {
               delegatePhone: inv.delegatePhone || '',
               isDelivered: (inv.isDelivered === '' || inv.isDelivered === undefined) ? true : (inv.isDelivered === 'true' || inv.isDelivered === true)
             };
-          }).filter((inv: any) => !deletedIds.includes(inv.id)).filter((inv: any) => {
-            // تصفية الفواتير القديمة (أكثر من 30 يوم ومسددة بالكامل) لتوفير المساحة
-            const invDate = new Date(inv.date);
-            const isPaid = (inv.paidAmount ?? inv.totalAfterDiscount) >= inv.totalAfterDiscount;
-            return !(invDate < thirtyDaysAgo && isPaid);
-          });
+          }).filter((inv: any) => !deletedIds.includes(inv.id));
           
           if (shouldReplace) {
             finalInvoices = mappedInvoices;
@@ -2078,7 +2070,7 @@ export default function App() {
               if (idx > -1) merged[idx] = ni;
               else merged.push(ni);
             });
-            finalInvoices = merged.filter(i => mappedIds.has(i.id));
+            finalInvoices = merged;
           }
           setInvoices(finalInvoices);
         }
@@ -2165,7 +2157,7 @@ export default function App() {
               delegateName: e.delegateName || 'مجهول',
               delegatePhone: e.delegatePhone || ''
             };
-          }).filter((e: any) => e.amount > 0 && e.description && !deletedIds.includes(e.id));
+          }).filter((e: any) => e.amount > 0 && !deletedIds.includes(e.id));
           if (shouldReplace) {
             finalExpenses = mappedExpenses;
           } else {
@@ -2712,6 +2704,16 @@ export default function App() {
               totalExpenseAmount: filteredExpenses.filter(e => e.type !== 'revenue').reduce((s, e) => s + (e.amount || 0), 0),
               totalRevenueAmount: filteredExpenses.filter(e => e.type === 'revenue').reduce((s, e) => s + (e.amount || 0), 0),
               totalTripAmount: filteredTrips.reduce((s, t) => s + (t.price || 0), 0),
+              factorySoldCost: filteredInvoices.reduce((s, inv) => {
+                if (!Array.isArray(inv.items)) return s;
+                return s + inv.items.reduce((s2, it) => {
+                  if (!it) return s2;
+                  const prod = products.find(p => String(p.id).trim() === String(it.productId).trim());
+                  const weights = prod ? getProductWeightsFallback(prod) : [];
+                  const w = weights.find(ww => String(ww.id).trim() === String(it.weightId).trim()) || weights[0];
+                  return s2 + (getItemFactoryCost(it, w, prod) * (it.quantity || 0));
+                }, 0);
+              }, 0),
             }}
           />
         )}

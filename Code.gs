@@ -76,7 +76,7 @@ function doGet(e) {
       return { 
         id: invId, date: getSafeString(row[1]), invoiceNumber: getSafeString(row[2]), // توافق مع invoiceNumber 
         customerName: getSafeString(row[3]), area: getSafeString(row[4]), total: getSafeNumber(row[5]), 
-        paidAmount: row[6] !== '' ? getSafeNumber(row[6]) : getSafeNumber(row[5]), 
+        paidAmount: row[6] !== '' ? getSafeNumber(row[6]) : 0, 
         delegateName: getSafeString(row[7]).replace(/\s*\(.*?\)/g, '').trim(), notes: getSafeString(row[8]),
         items: items, delegatePhone: getSafePhone(row[10]),
         customerId: getSafeString(row[11]),

@@ -5,7 +5,7 @@
  */
 
 import React, { useState } from 'react';
-import { Invoice, Expense, Product, Customer, Trip, AppSettings, formatNum, FactoryLoad, getProductWeightsFallback, UserAuth, InvoiceItem } from '../types';
+import { Invoice, Expense, Product, Customer, Trip, AppSettings, formatNum, FactoryLoad, getProductWeightsFallback, UserAuth, InvoiceItem, getItemFactoryCost, getFactoryCartonPrice } from '../types';
 import { ArrowRight, FileSpreadsheet, Send, TrendingUp, TrendingDown, Clock, Search, Eye, Filter, Check, ShieldAlert, MapPin, Printer, ChevronDown, AlertCircle, Activity } from 'lucide-react';
 import { showToast } from '../utils/toast';
 import SecurePhoneDisplay from './SecurePhoneDisplay';
@@ -281,53 +281,69 @@ function ReportsTabComponent({
     const totalBeforeDisc = currentFilteredData.invoices.reduce((sum, inv) => sum + (inv.totalBeforeDiscount || 0), 0);
     const totalDiscounts = totalBeforeDisc - trueTotalSales;
 
-    // totalProfit is the Net Profit of invoices
+    // totalProfit = margin-based profit using correct per-unit factory price from product weights
     const totalProfit = currentFilteredData.invoices.reduce((sum, inv) => {
       const itemsProfit = Array.isArray(inv.items) ? inv.items.reduce((isum, it) => {
         if (!it) return isum;
-        return isum + (((it.finalPrice || 0) - (it.factoryPrice || (it.originalPrice || 0) * 0.9)) * (it.quantity || 0));
+        const prod = products.find(p => String(p.id).trim() === String(it.productId).trim());
+        const weights = prod ? getProductWeightsFallback(prod) : [];
+        const weight = weights.find(w => String(w.id).trim() === String(it.weightId).trim()) || weights[0];
+        const fpPerUnit = getItemFactoryCost(it, weight, prod);
+        return isum + (((it.finalPrice || 0) - fpPerUnit) * (it.quantity || 0));
       }, 0) : 0;
       return sum + itemsProfit;
     }, 0);
 
-    const totalSpent = currentFilteredData.expenses.filter(e => e.type !== 'revenue').reduce((sum, exp) => sum + (exp.amount || 0), 0);
+    const totalSpent = currentFilteredData.expenses.filter(e => e.type !== 'revenue' && e.category !== 'سداد للمصنع' && e.type !== 'factory_payment').reduce((sum, exp) => sum + (exp.amount || 0), 0);
     const extraRevenues = currentFilteredData.expenses.filter(e => e.type === 'revenue').reduce((sum, exp) => sum + (exp.amount || 0), 0);
     const totalTripsCollectedProfit = currentFilteredData.trips.filter(t => t.collected).reduce((sum, t) => sum + (t.price || 0), 0);
     
+    // Cost of goods sold (after inventory/jarid) — lookup correct per-unit factory price from product weights
+    const factorySoldCost = currentFilteredData.invoices.reduce((sum, inv) => {
+      const itemsCost = Array.isArray(inv.items) ? inv.items.reduce((isum, it) => {
+        if (!it) return isum;
+        const prod = products.find(p => String(p.id).trim() === String(it.productId).trim());
+        const weights = prod ? getProductWeightsFallback(prod) : [];
+        const weight = weights.find(w => String(w.id).trim() === String(it.weightId).trim()) || weights[0];
+        const fpPerUnit = getItemFactoryCost(it, weight, prod);
+        return isum + (fpPerUnit * (it.quantity || 0));
+      }, 0) : 0;
+      return sum + itemsCost;
+    }, 0);
 
     // Factory stats calculations
     const periodAdvances = currentFilteredData.factoryLoads.reduce((sum, fl) => sum + (fl.advanceAmount ?? 0), 0);
     const periodExtraPayments = currentFilteredData.extraPayments.reduce((sum, ep) => sum + ((ep.amount || 0) - (ep.appliedToCarriedDebt || 0)), 0);
     const totalPaidToFactoryInPeriod = periodAdvances + periodExtraPayments;
 
-    // Cumulative overall remaining debt due to factory
-    let rawAllLoadedValue = 0;
-    delFilteredFactoryLoads.forEach(load => {
-      const prod = products.find(p => String(p.id).trim() === String(load.productId).trim());
-      const weights = prod ? getProductWeightsFallback(prod) : [];
-      const weight = weights.find(w => String(w.id).trim() === String(load.weightId).trim()) || weights[0];
-      if (weight) {
-        const unitsPerCarton = weight.unitsPerCarton || 12;
-        const qty = Number(load.quantity) || 0;
-        const cartons = load.cartonsCount !== undefined ? load.cartonsCount : Math.floor(qty / unitsPerCarton);
-        const loose = load.looseUnitsCount !== undefined ? load.looseUnitsCount : (qty % unitsPerCarton);
-        const cartonPrice = load.cartonPrice !== undefined ? Number(load.cartonPrice) : (Number(weight.cartonPriceFromFactory) || (prod ? Number(prod.price) * unitsPerCarton : 0) || 0);
-        const unitPrice = load.unitPrice !== undefined ? Number(load.unitPrice) : (Number(weight.factoryPricePerUnit) || (prod ? Number(prod.price) : 0) || 0);
-        rawAllLoadedValue += (cartons * cartonPrice) + (loose * unitPrice);
-      }
+    // Cumulative overall remaining debt due to factory (matches FactoryTab: uses SOLD goods only, not loaded)
+    let cumulativeSoldFactoryValue = 0;
+    invoices.forEach(inv => {
+      if (!inv || !Array.isArray(inv.items)) return;
+      inv.items.forEach(item => {
+        if (!item) return;
+        const prod = products.find(p => String(p.id).trim() === String(item.productId).trim());
+        if (!prod) return;
+        const weights = getProductWeightsFallback(prod);
+        const weight = weights.find(w => String(w.id).trim() === String(item.weightId).trim());
+        if (!weight) return;
+        const upc = weight.unitsPerCarton || 12;
+        const factoryCartonPrice = Number(weight.cartonPriceFromFactory) || Number(prod.price) || (Number(weight.factoryPricePerUnit) || 0);
+        cumulativeSoldFactoryValue += (item.quantity / upc) * factoryCartonPrice;
+      });
     });
 
-    const totalWithdrawnValue = rawAllLoadedValue + currentFilteredData.carriedOverDebt;
+    const totalWithdrawnValue = cumulativeSoldFactoryValue + currentFilteredData.carriedOverDebt;
     const currentAdvancesTotal = delFilteredFactoryLoads.reduce((sum, fl) => sum + (fl.advanceAmount ?? 0), 0);
     const manualPaymentsSumTotal = currentFilteredData.allExtraPayments.reduce((sum, p) => sum + ((p.amount || 0) - (p.appliedToCarriedDebt || 0)), 0);
     const totalOverallPaidToFactory = currentAdvancesTotal + manualPaymentsSumTotal;
     const remainingDebtToFactory = Math.max(0, totalWithdrawnValue - totalOverallPaidToFactory);
 
-    // final netProfit based on Cash Flow (الصافي = كل ما تم تحصيله - كل ما تم سداده للمصنع والمصروفات)
-    const netProfit = totalCollected + extraRevenues + totalTripsCollectedProfit - totalPaidToFactoryInPeriod - totalSpent;
+    // صافي الربح التشغيلي = المبيعات + إيرادات + مشاوير - تكلفة_المبيعات - المصروفات
+    const operatingNetProfit = trueTotalSales + extraRevenues + totalTripsCollectedProfit - factorySoldCost - totalSpent;
 
-    // True operating profit = (Sales Profit) + Extra Revenues + Trips Profit - Total Spent
-    const operatingNetProfit = totalProfit + extraRevenues + totalTripsCollectedProfit - totalSpent;
+    // صافي التدفق النقدي = المحصل + إيرادات + مشاوير - تكلفة المبيعات للمصنع(جرد) - مصروفات
+    const netProfit = totalCollected + extraRevenues + totalTripsCollectedProfit - factorySoldCost - totalSpent;
 
     return {
       totalSales: trueTotalSales,
@@ -338,6 +354,7 @@ function ReportsTabComponent({
       totalDiscounts,
       totalSpent,
       totalTripsCollectedProfit,
+      factorySoldCost,
       netProfit,
       operatingNetProfit,
       totalPaidToFactoryInPeriod,
@@ -345,25 +362,37 @@ function ReportsTabComponent({
     };
   }, [currentFilteredData, products, factoryLoads]);
 
-  // Today quick summary stats
-  const todayStats = React.useMemo(() => {
-    const todayStr = new Date().toISOString().split('T')[0];
-    const todayInvoices = invoices.filter(inv => inv.date && inv.date.startsWith(todayStr));
-    const todayExpenses = expenses.filter(e => e.date && e.date.startsWith(todayStr) && e.type !== 'revenue');
-    const todayTrips = trips.filter(t => t.date && t.date.startsWith(todayStr));
+  // Period quick summary stats (follows selected time period, not just today)
+  const periodStats = React.useMemo(() => {
+    const periodInvoices = currentFilteredData.invoices;
+    const periodExpenses = currentFilteredData.expenses.filter(e => e.type !== 'revenue' && e.category !== 'سداد للمصنع' && e.type !== 'factory_payment');
+    const periodTrips = currentFilteredData.trips;
+    const periodExtraRevenues = currentFilteredData.expenses.filter(e => e.type === 'revenue').reduce((s, e) => s + (e.amount || 0), 0);
     return {
-      invoiceCount: todayInvoices.length,
-      totalCollected: todayInvoices.reduce((s, inv) => s + (inv.paidAmount !== undefined ? inv.paidAmount : (inv.totalAfterDiscount || 0)), 0),
-      totalSales: todayInvoices.reduce((s, inv) => s + (inv.totalAfterDiscount || 0), 0),
-      tripsCount: todayTrips.length,
-      tripsCollected: todayTrips.filter(t => t.collected).reduce((s, t) => s + (t.price || 0), 0),
-      expensesTotal: todayExpenses.reduce((s, e) => s + (e.amount || 0), 0),
+      invoiceCount: periodInvoices.length,
+      totalCollected: periodInvoices.reduce((s, inv) => s + (inv.paidAmount !== undefined ? inv.paidAmount : (inv.totalAfterDiscount || 0)), 0),
+      totalSales: periodInvoices.reduce((s, inv) => s + (inv.totalAfterDiscount || 0), 0),
+      factorySoldCost: periodInvoices.reduce((s, inv) => {
+        const itemsCost = Array.isArray(inv.items) ? inv.items.reduce((isum, it) => {
+          if (!it) return isum;
+          const prod = products.find(p => String(p.id).trim() === String(it.productId).trim());
+          const weights = prod ? getProductWeightsFallback(prod) : [];
+          const weight = weights.find(w => String(w.id).trim() === String(it.weightId).trim()) || weights[0];
+          const fpPerUnit = getItemFactoryCost(it, weight, prod);
+          return isum + (fpPerUnit * (it.quantity || 0));
+        }, 0) : 0;
+        return s + itemsCost;
+      }, 0),
+      tripsCount: periodTrips.filter(t => t.collected).length,
+      tripsCollected: periodTrips.filter(t => t.collected).reduce((s, t) => s + (t.price || 0), 0),
+      extraRevenues: periodExtraRevenues,
+      expensesTotal: periodExpenses.reduce((s, e) => s + (e.amount || 0), 0),
     };
-  }, [invoices, expenses, trips]);
+  }, [currentFilteredData, products]);
 
-  // Calculate unpaid debt / debtor customers list 
+  // Calculate unpaid debt / debtor customers list (uses time-filtered invoices like salesStats)
   const debtorCustomers = React.useMemo(() => {
-    const unpaidInvoices = delFilteredInvoices.filter(inv => {
+    const unpaidInvoices = currentFilteredData.invoices.filter(inv => {
       if (!inv) return false;
       const paid = inv.paidAmount !== undefined ? inv.paidAmount : (inv.totalAfterDiscount || 0);
       return ((inv.totalAfterDiscount || 0) - paid) > 0.05; // has outstanding debt
@@ -399,7 +428,7 @@ function ReportsTabComponent({
         totalDebt: data.totalDebt
       };
     }).sort((a, b) => b.totalDebt - a.totalDebt);
-  }, [delFilteredInvoices, customers]);
+  }, [currentFilteredData, customers]);
 
   const handleSettlePartial = async (inv: Invoice, amount: number) => {
     if (!onUpdateInvoice) return;
@@ -624,7 +653,6 @@ function ReportsTabComponent({
   }, [currentFilteredData]);
 
   const exportComprehensiveReportAsPDF = () => {
-    // 1. Create iframe
     const iframe = document.createElement('iframe');
     iframe.style.position = 'fixed';
     iframe.style.top = '-1000px';
@@ -633,17 +661,7 @@ function ReportsTabComponent({
     iframe.style.height = '297mm';
     document.body.appendChild(iframe);
 
-    // Filter displays
-    let periodLabel = periodFilter === 'all' ? 'الكل (جميع الفترات)' : periodFilter === 'month' ? 'هذا الشهر (شهري)' : periodFilter === 'today' ? 'اليوم (يومي)' : 'آخر ٧ أيام (أسبوعي)';
-
-    // compute cost of sold goods
-    const soldGoodsFactoryCost = currentFilteredData.invoices.reduce((sum, inv) => {
-      const cost = Array.isArray(inv.items) ? inv.items.reduce((isum, it) => {
-        if (!it) return isum;
-        return isum + ((it.factoryPrice || (it.originalPrice || 0) * 0.9) * (it.quantity || 0));
-      }, 0) : 0;
-      return sum + cost;
-    }, 0);
+    let periodLabel = periodFilter === 'all' ? 'جميع الفترات' : periodFilter === 'today' ? 'يومي (اليوم الحالي)' : periodFilter === 'week' ? 'أسبوعي (آخر 7 أيام)' : periodFilter === 'month' ? 'شهري (هذا الشهر)' : `مخصص (${customStartDate || '...'} → ${customEndDate || '...'})`;
 
     const doc = iframe.contentWindow?.document;
     if (!doc) return;
@@ -653,89 +671,79 @@ function ReportsTabComponent({
       <html dir="rtl" lang="ar">
         <head>
           <style>
-            @media print {
-              @page { size: A4; margin: 12mm; }
-              body { margin: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-            }
-            body { font-family: system-ui, -apple-system, sans-serif; color: #1e293b; line-height: 1.4; padding: 15px; background: #fff; }
-            .header { text-align: center; margin-bottom: 20px; border-bottom: 3px double #1a365d; padding-bottom: 12px; }
-            .header h1 { color: #1a365d; margin: 0 0 4px 0; font-size: 22px; font-weight: 900; }
-            .header p { margin: 0; color: #475569; font-size: 13px; font-weight: bold; }
-            
-            .meta-flex { display: flex; justify-content: space-between; margin-bottom: 15px; font-size: 11px; color: #334155; font-weight: bold; border-bottom: 1px solid #e2e8f0; padding-bottom: 8px; }
-            
-             .grid-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 15px; }
-             .stat-box { border: 1px solid #cbd5e1; padding: 10px; border-radius: 8px; text-align: center; background: #f8fafc; }
-             .stat-box.highlight { background: #f0fdf4; border-color: #bbf7d0; }
-             .stat-box.alert { background: #fef2f2; border-color: #fca5a5; }
-             .stat-box span { display: block; font-size: 9px; color: #64748b; font-weight: bold; margin-bottom: 4px; }
-             .stat-box strong { font-size: 12px; color: #0f172a; font-weight: 900; }
-             
-             h2 { font-size: 12px; color: #1a365d; margin: 15px 0 8px 0; border-right: 3px solid #dd6b20; padding-right: 8px; font-weight: 850; }
-             
-             table { width: 100%; border-collapse: collapse; margin-bottom: 15px; font-size: 10px; }
-             th, td { border: 1px solid #e2e8f0; padding: 6px 10px; text-align: right; }
-             th { background: #f1f5f9; color: #334155; font-weight: 900; }
-             
-             .badge { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 9px; font-weight: bold; }
-             .badge-success { background: #dcfce7; color: #15803d; }
-             .badge-warn { background: #fef3c7; color: #b45309; }
-             .badge-danger { background: #fee2e2; color: #b91c1c; }
-           </style>
-         </head>
-         <body>
-           <div class="header">
-             <h1>تقرير العمليات والحسابات المالي الشامل</h1>
-             <p>مصنع سمن وزيت سوفانا الفاخر للأغذية المتحدون</p>
-           </div>
-           
-           <div class="meta-flex">
-             <div>الفترة المحددة المفلترة: <span style="color: #dd6b20;">${periodLabel}</span></div>
-             <div>تاريخ الاستخراج: ${new Date().toLocaleDateString('ar-EG', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</div>
-           </div>
-           
-           <div class="grid-stats">
-             <div class="stat-box">
-               <span>إجمالي المبيعات</span>
-               <strong>${salesStats.totalSales.toLocaleString('ar-EG')} ج.م</strong>
-             </div>
-             <div class="stat-box highlight">
-               <span>المحصل كاش</span>
-               <strong>${salesStats.totalCollected.toLocaleString('ar-EG')} ج.م</strong>
-             </div>
-             <div class="stat-box alert">
-               <span>باقي ديون العملاء</span>
-               <strong>${salesStats.totalRemaining.toLocaleString('ar-EG')} ج.m</strong>
-             </div>
-             <div class="stat-box">
-               <span>المصروفات التشغيلية</span>
-               <strong>${salesStats.totalSpent.toLocaleString('ar-EG')} ج.م</strong>
-             </div>
-             <div class="stat-box">
-               <span>أرباح المشاوير</span>
-               <strong>${salesStats.totalTripsCollectedProfit.toLocaleString('ar-EG')} ج.م</strong>
-             </div>
-             <div class="stat-box">
-               <span>إيرادات إضافية</span>
-               <strong>${salesStats.extraRevenues.toLocaleString('ar-EG')} ج.م</strong>
-             </div>
-             <div class="stat-box highlight">
-               <span>المسدد للمصنع</span>
-               <strong>${salesStats.totalPaidToFactoryInPeriod.toLocaleString('ar-EG')} ج.م</strong>
-             </div>
-             <div class="stat-box alert">
-               <span>مديونية المصنع الحالية</span>
-               <strong>${salesStats.remainingDebtToFactory.toLocaleString('ar-EG')} ج.م</strong>
-             </div>
-             <div class="stat-box highlight" style="background: #f0fdf4; border-color: #bbf7d0;">
-               <span>الربح الصافي الحقيقي (النشاط)</span>
-               <strong style="color: #15803d;">${salesStats.operatingNetProfit.toLocaleString('ar-EG')} ج.م</strong>
-             </div>
-             <div class="stat-box highlight" style="background: #e0f2fe; border-color: #bae6fd;">
-               <span>صافي التدفق النقدي (السيولة)</span>
-               <strong style="color: #0369a1;">${salesStats.netProfit.toLocaleString('ar-EG')} ج.م</strong>
-             </div>
-           </div>
+            @media print { @page { size: A4; margin: 10mm; } body { margin: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
+            body { font-family: system-ui, sans-serif; color: #1a1a1a; line-height: 1.4; padding: 0; margin: 0; background: #faf8f5; }
+            .page { padding: 20px; max-width: 210mm; margin: 0 auto; }
+            .header { background: #1e2a4a; color: #fff; padding: 20px; border-radius: 6px; text-align: center; margin-bottom: 16px; border-bottom: 4px solid #d4a843; }
+            .header h1 { margin: 0 0 4px; font-size: 20px; }
+            .header .sub { color: #93c5fd; font-size: 11px; margin: 0 0 4px; }
+            .header .meta { display: flex; justify-content: space-between; font-size: 11px; color: #cbd5e1; padding: 0 10px; }
+            .header .meta .gold { color: #fbbf24; font-weight: bold; }
+            .grid-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 15px; }
+            .stat-box { border: 1px solid #e8e4dc; padding: 10px; border-radius: 6px; text-align: center; background: #fdf6ee; }
+            .stat-box.highlight { background: #f0fdf4; border-color: #bbf7d0; }
+            .stat-box.alert { background: #fef2f2; border-color: #fca5a5; }
+            .stat-box span { display: block; font-size: 9px; color: #64748b; font-weight: bold; margin-bottom: 4px; }
+            .stat-box strong { font-size: 11px; color: #0f172a; font-weight: 900; }
+            h2 { font-size: 12px; color: #1e2a4a; margin: 15px 0 8px 0; border-right: 3px solid #d4a843; padding-right: 8px; font-weight: 850; }
+            table { width: 100%; border-collapse: collapse; margin-bottom: 15px; font-size: 10px; }
+            th, td { border: 1px solid #e8e4dc; padding: 6px 10px; text-align: right; }
+            th { background: #1e2a4a; color: #fff; font-weight: 900; }
+            tr:nth-child(even) td { background: #f5f3ee; }
+            .summary-row { background: #0d7c5f; color: #fff; font-weight: bold; }
+            .summary-row td { border: none; padding: 8px 10px; }
+            .footer { text-align: center; color: #94a3b8; font-size: 10px; margin-top: 20px; border-top: 1px solid #d5d0c8; padding-top: 10px; }
+          </style>
+        </head>
+        <body>
+          <div class="page">
+            <div class="header">
+              <h1>تقرير العمليات المالية الشامل</h1>
+              <p class="sub">نظام التوزيع والمبيعات المعتمد للأغذية والمستودع</p>
+              <div class="meta">
+                <span>الفترة: ${periodLabel}</span>
+                <span class="gold">تاريخ الطباعة: ${new Date().toLocaleDateString('ar-EG')} ${new Date().toLocaleTimeString('ar-EG')}</span>
+              </div>
+            </div>
+
+            <div class="grid-stats">
+              <div class="stat-box highlight">
+                <span>صافي الربح التشغيلي</span>
+                <strong style="color: #15803d;">${salesStats.operatingNetProfit.toLocaleString('ar-EG')} ج.م</strong>
+              </div>
+              <div class="stat-box" style="background: #e0f2fe; border-color: #bae6fd;">
+                <span>صافي التدفق النقدي</span>
+                <strong style="color: #0369a1;">${salesStats.netProfit.toLocaleString('ar-EG')} ج.م</strong>
+              </div>
+              <div class="stat-box">
+                <span>إجمالي المبيعات</span>
+                <strong>${salesStats.totalSales.toLocaleString('ar-EG')} ج.م</strong>
+              </div>
+              <div class="stat-box highlight">
+                <span>المحصل كاش</span>
+                <strong>${salesStats.totalCollected.toLocaleString('ar-EG')} ج.م</strong>
+              </div>
+              <div class="stat-box alert">
+                <span>باقي ديون العملاء</span>
+                <strong>${salesStats.totalRemaining.toLocaleString('ar-EG')} ج.م</strong>
+              </div>
+              <div class="stat-box">
+                <span>تكلفة البضاعة المباعة</span>
+                <strong>${salesStats.factorySoldCost.toLocaleString('ar-EG')} ج.م</strong>
+              </div>
+              <div class="stat-box">
+                <span>المصروفات التشغيلية</span>
+                <strong>${salesStats.totalSpent.toLocaleString('ar-EG')} ج.م</strong>
+              </div>
+              <div class="stat-box">
+                <span>أرباح المشاوير</span>
+                <strong>${salesStats.totalTripsCollectedProfit.toLocaleString('ar-EG')} ج.م</strong>
+              </div>
+              <div class="stat-box alert">
+                <span>مديونية المصنع</span>
+                <strong>${salesStats.remainingDebtToFactory.toLocaleString('ar-EG')} ج.م</strong>
+              </div>
+            </div>
           
           <h2>١. قائمة فواتير مبيعات العملاء للفترة</h2>
           <table>
@@ -785,8 +793,8 @@ function ReportsTabComponent({
               </tr>
             </thead>
             <tbody>
-              ${currentFilteredData.expenses.length === 0 ? '<tr><td colspan="5" style="text-align:center; color:#94a3b8;">لا توجد حركة مصروفات مسجلة في هذه الفترة.</td></tr>' : 
-                currentFilteredData.expenses.map((exp, idx) => {
+              ${currentFilteredData.expenses.filter(e => e.category !== 'سداد للمصنع' && e.type !== 'factory_payment').length === 0 ? '<tr><td colspan="5" style="text-align:center; color:#94a3b8;">لا توجد حركة مصروفات مسجلة في هذه الفترة.</td></tr>' : 
+                currentFilteredData.expenses.filter(e => e.category !== 'سداد للمصنع' && e.type !== 'factory_payment').map((exp, idx) => {
                   const isRev = exp.type === 'revenue';
                   return `
                     <tr>
@@ -830,7 +838,9 @@ function ReportsTabComponent({
             </tbody>
           </table>
 
-          <div style="margin-top: 35px; border-top: 1px solid #cbd5e1; padding-top: 15px; display: flex; justify-content: space-between; font-size: 11px; font-weight: bold; color: #475569;">
+          <div class="footer">تم التصدير من نظام تتبع المبيعات — ${new Date().toLocaleDateString('ar-EG')}</div>
+
+          <div style="margin-top: 35px; border-top: 1px solid #d5d0c8; padding-top: 15px; display: flex; justify-content: space-between; font-size: 11px; font-weight: bold; color: #475569;">
             <div>اعتماد المسؤول الإداري: ................................</div>
             <div>توقيع المندوب الميداني: ................................</div>
           </div>
@@ -865,12 +875,15 @@ function ReportsTabComponent({
       months[monthYear].collected += (inv.paidAmount !== undefined ? inv.paidAmount : (inv.totalAfterDiscount || 0));
       months[monthYear].count += 1;
 
-      // Calculate Cost of Goods Sold (COGS)
+      // Calculate Cost of Goods Sold (COGS) using correct per-unit factory price from product weights
       if (Array.isArray(inv.items)) {
         inv.items.forEach(it => {
           if (!it) return;
-          const itemCost = (it.factoryPrice || (it.originalPrice || 0) * 0.9) * (it.quantity || 0);
-          months[monthYear].cogs += itemCost;
+          const prod = products.find(p => String(p.id).trim() === String(it.productId).trim());
+          const weights = prod ? getProductWeightsFallback(prod) : [];
+          const weight = weights.find(w => String(w.id).trim() === String(it.weightId).trim()) || weights[0];
+          const fpPerUnit = getItemFactoryCost(it, weight, prod);
+          months[monthYear].cogs += fpPerUnit * (it.quantity || 0);
         });
       }
     });
@@ -885,7 +898,7 @@ function ReportsTabComponent({
       }
       if (exp.type === 'revenue') {
         months[monthYear].revs += (exp.amount || 0);
-      } else {
+      } else if (exp.category !== 'سداد للمصنع' && exp.type !== 'factory_payment') {
         months[monthYear].expenses += (exp.amount || 0);
       }
     });
@@ -1778,34 +1791,40 @@ function ReportsTabComponent({
             {/* Today Quick Summary */}
             <div className="bg-gradient-to-r from-[#1A365D] to-[#2B6CB0] rounded-2xl p-4 text-white flex flex-col gap-2 shadow-md">
               <span className="text-[10px] font-black text-blue-200 flex items-center gap-1">
-                <Clock className="h-3 w-3" /> ملخص اليوم — {new Date().toLocaleDateString('ar-EG')}
+                <Clock className="h-3 w-3" /> ملخص الفترة — {
+                  periodFilter === 'all' ? 'الكل' :
+                  periodFilter === 'today' ? 'اليوم' :
+                  periodFilter === 'week' ? 'الأسبوع' :
+                  periodFilter === 'month' ? 'الشهر' :
+                  'مخصص'
+                }
               </span>
               <div className="grid grid-cols-3 gap-2 mt-1">
                 <div className="bg-white/10 rounded-xl p-2 text-center">
                   <span className="text-[9px] text-blue-200 font-bold block">الفواتير</span>
-                  <span className="text-sm font-black">{todayStats.invoiceCount}</span>
+                  <span className="text-sm font-black">{periodStats.invoiceCount}</span>
                 </div>
                 <div className="bg-white/10 rounded-xl p-2 text-center">
                   <span className="text-[9px] text-blue-200 font-bold block">المحصل</span>
-                  <span className="text-sm font-black">{formatNum(todayStats.totalCollected)}</span>
+                  <span className="text-sm font-black">{formatNum(periodStats.totalCollected)}</span>
                 </div>
                 <div className="bg-white/10 rounded-xl p-2 text-center">
                   <span className="text-[9px] text-blue-200 font-bold block">المصروفات</span>
-                  <span className="text-sm font-black text-rose-300">{formatNum(todayStats.expensesTotal)}</span>
+                  <span className="text-sm font-black text-rose-300">{formatNum(periodStats.expensesTotal)}</span>
                 </div>
               </div>
               <div className="grid grid-cols-3 gap-2">
                 <div className="bg-white/10 rounded-xl p-2 text-center">
-                  <span className="text-[9px] text-blue-200 font-bold block">المبيعات</span>
-                  <span className="text-xs font-black">{formatNum(todayStats.totalSales)}</span>
+                  <span className="text-[9px] text-blue-200 font-bold block">صافي الربح</span>
+                  <span className="text-xs font-black">{formatNum(periodStats.totalCollected + periodStats.extraRevenues + periodStats.tripsCollected - periodStats.factorySoldCost - periodStats.expensesTotal)}</span>
                 </div>
                 <div className="bg-white/10 rounded-xl p-2 text-center">
                   <span className="text-[9px] text-blue-200 font-bold block">المشاوير</span>
-                  <span className="text-xs font-black">{todayStats.tripsCount}</span>
+                  <span className="text-xs font-black">{periodStats.tripsCount}</span>
                 </div>
                 <div className="bg-white/10 rounded-xl p-2 text-center">
                   <span className="text-[9px] text-blue-200 font-bold block">محصل المشاوير</span>
-                  <span className="text-xs font-black">{formatNum(todayStats.tripsCollected)}</span>
+                  <span className="text-xs font-black">{formatNum(periodStats.tripsCollected)}</span>
                 </div>
               </div>
             </div>
@@ -1814,25 +1833,21 @@ function ReportsTabComponent({
               <div className="bg-emerald-50 rounded-2xl p-4 border border-emerald-100 flex flex-col gap-1 text-center justify-between">
                 <div>
                   <span className="text-emerald-850 font-black text-xs block">إجمالي الإيرادات</span>
-                  <span className="text-emerald-600 font-bold text-[9px] block leading-tight mt-0.5">ما تم تحصيله بعد خصم المسدد للمصنع</span>
+                  <span className="text-emerald-600 font-bold text-[9px] block leading-tight mt-0.5">المحصل + إيرادات + مشاوير - تكلفة المبيعات - مصروفات</span>
                 </div>
                 <span className="text-xl font-black text-emerald-800 my-1 block">
-                  {formatNum((salesStats.totalCollected + salesStats.extraRevenues + salesStats.totalTripsCollectedProfit) - salesStats.totalPaidToFactoryInPeriod)}
+                  {formatNum(salesStats.netProfit)}
                   <span className="text-xs mr-0.5">ج.م</span>
                 </span>
                 {salesStats.totalSales > 0 && (
                   <span className="text-[9px] font-black text-emerald-600 bg-emerald-100 rounded-full px-2 py-0.5 inline-block">
-                    هامش الإيرادات: {(((salesStats.totalCollected + salesStats.extraRevenues + salesStats.totalTripsCollectedProfit) - salesStats.totalPaidToFactoryInPeriod) / salesStats.totalSales * 100).toFixed(1)}%
+                    هامش الإيرادات: {(salesStats.netProfit / salesStats.totalSales * 100).toFixed(1)}%
                   </span>
                 )}
                 <div className="border-t border-emerald-200/50 pt-1 mt-1 text-[8px] text-emerald-700/80 flex flex-col gap-0.5 text-right font-medium">
                   <div className="flex justify-between">
                     <span>المحصل من العملاء:</span>
                     <span>{formatNum(salesStats.totalCollected)}ج</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>المبيعات الإجمالية:</span>
-                    <span>{formatNum(salesStats.totalSales)}ج</span>
                   </div>
                   {salesStats.extraRevenues > 0 && (
                     <div className="flex justify-between">
@@ -1847,8 +1862,12 @@ function ReportsTabComponent({
                     </div>
                   )}
                   <div className="flex justify-between text-rose-600 font-bold">
-                    <span>خصم المسدد للمصنع:</span>
-                    <span>-{formatNum(salesStats.totalPaidToFactoryInPeriod)}ج</span>
+                    <span>تكلفة البضاعة المباعة:</span>
+                    <span>-{formatNum(salesStats.factorySoldCost)}ج</span>
+                  </div>
+                  <div className="flex justify-between text-rose-600 font-bold">
+                    <span>المصروفات التشغيلية:</span>
+                    <span>-{formatNum(salesStats.totalSpent)}ج</span>
                   </div>
                 </div>
               </div>
@@ -1882,6 +1901,40 @@ function ReportsTabComponent({
                   <span className="text-[11px] text-amber-700 font-medium">إجمالي المديونية المستحقة للمصنع حالياً:</span>
                   <span className="text-sm font-black text-rose-800">{formatNum(salesStats.remainingDebtToFactory)} ج.م</span>
                 </div>
+              </div>
+            )}
+
+            {salesStats.totalRemaining > 0 && (
+              <div className="bg-blue-50 rounded-2xl p-4 border border-blue-200 flex flex-col gap-2 shadow-xs animate-fade-in text-right">
+                <div className="flex items-center gap-1.5 text-blue-800">
+                  <AlertCircle className="h-4.5 w-4.5 text-blue-600 shrink-0" />
+                  <span className="font-bold text-xs">تنبيه: ديون العملاء المدينين بذمة السيارة</span>
+                </div>
+                <div className="flex justify-between items-center pt-1.5 border-t border-blue-200/40">
+                  <span className="text-[11px] text-blue-700 font-medium">إجمالي المديونية المستحقة من العملاء حالياً:</span>
+                  <span className="text-sm font-black text-blue-800">{formatNum(salesStats.totalRemaining)} ج.م</span>
+                </div>
+                {debtorCustomers.length > 0 && (
+                  <div className="flex flex-col gap-1 mt-1 pt-1.5 border-t border-blue-200/30 max-h-[180px] overflow-y-auto">
+                    {debtorCustomers.slice(0, 8).map((dc, idx) => (
+                      <div key={idx} className="flex justify-between items-center bg-white/60 rounded-lg px-2.5 py-1.5 text-[10px]">
+                        <span className="font-bold text-blue-900">{dc.customer.name}</span>
+                        <span className="font-black text-rose-700">{formatNum(dc.totalDebt)} ج.م</span>
+                      </div>
+                    ))}
+                    {debtorCustomers.length > 8 && (
+                      <span className="text-[9px] text-blue-500 text-center font-bold">+ {debtorCustomers.length - 8} عملاء آخرين</span>
+                    )}
+                  </div>
+                )}
+                {debtorCustomers.length > 0 && (
+                  <button
+                    onClick={() => { setActiveSubTab('finance'); setShowDebtorsModal(true); }}
+                    className="w-full bg-[#1A365D] hover:bg-[#2B6CB0] text-white text-[10px] font-black py-1.5 rounded-lg transition-colors cursor-pointer mt-1"
+                  >
+                    عرض تفاصيل جميع العملاء المدينين
+                  </button>
+                )}
               </div>
             )}
 
@@ -2085,8 +2138,8 @@ function ReportsTabComponent({
                       <span className="text-emerald-700" dir="rtl">+ {(salesStats.extraRevenues + salesStats.totalTripsCollectedProfit).toLocaleString('ar-EG')} ج.م</span>
                     </div>
                     <div className="flex justify-between border-b border-dashed border-emerald-200 pb-1.5">
-                      <span className="text-slate-600">يخصم: المبالغ المسددة للمصنع في هذه الفترة</span>
-                      <span className="text-rose-700" dir="rtl">- {(salesStats.totalPaidToFactoryInPeriod).toLocaleString('ar-EG')} ج.م</span>
+                      <span className="text-slate-600">يخصم: تكلفة البضاعة المباعة للمصنع (بعد الجرد)</span>
+                      <span className="text-rose-700" dir="rtl">- {(salesStats.factorySoldCost).toLocaleString('ar-EG')} ج.م</span>
                     </div>
                     <div className="flex justify-between border-b border-dashed border-emerald-200 pb-1.5">
                       <span className="text-slate-600">يخصم: إجمالي المصروفات الإدارية والتشغيلية المعتمدة</span>
@@ -2098,7 +2151,7 @@ function ReportsTabComponent({
                     </div>
                   </div>
                   <p className="text-[10px] text-emerald-600 leading-relaxed font-semibold">
-                    * يتم احتساب "الصافي" بناءً على التدفق النقدي الفعلي (إجمالي الكاش المحصل من المبيعات والمشاوير والإيرادات مخصوماً منه كل ما تم سداده للمصنع والمصروفات).
+                    * يتم احتساب "الصافي" بناءً على المحصل من العملاء + الإيرادات + أرباح المشاوير مخصوماً منها تكلفة البضاعة المباعة (بعد الجرد) والمصروفات التشغيلية.
                   </p>
                 </div>
               )}
@@ -2167,7 +2220,7 @@ function ReportsTabComponent({
                       هامش الربح: {(salesStats.operatingNetProfit / salesStats.totalSales * 100).toFixed(1)}%
                     </span>
                   )}
-                  <span className="text-[9px] text-white/85 font-semibold mt-1">المبيعات بعد طرح تكلفة سعر المصنع والمصروفات المعتمدة</span>
+                  <span className="text-[9px] text-white/85 font-semibold mt-1">إجمالي المبيعات + إيرادات + مشاوير - تكلفة المبيعات - مصروفات</span>
                 </div>
                 
                 <div className="bg-white/15 p-2.5 rounded-2xl z-10">
@@ -2192,7 +2245,7 @@ function ReportsTabComponent({
                       نسبة التدفق النقدي: {(salesStats.netProfit / salesStats.totalSales * 100).toFixed(1)}%
                     </span>
                   )}
-                  <span className="text-[9px] text-white/85 font-semibold mt-1">كاش محصل + إيرادات - مسدد للمصنع والمصروفات (السيولة)</span>
+                  <span className="text-[9px] text-white/85 font-semibold mt-1">المحصل + إيرادات + مشاوير - تكلفة المبيعات للمصنع(جرد) - مصروفات</span>
                 </div>
                 
                 <div className="bg-white/15 p-2.5 rounded-2xl z-10">
@@ -2201,12 +2254,12 @@ function ReportsTabComponent({
                 <div className="absolute -right-6 -bottom-6 h-24 w-24 bg-white/5 rounded-full blur-xl pointer-events-none"></div>
               </div>
 
-              {/* Monthly Reports Table */}
+              {/* Period Reports Table */}
               <div className="bg-[#FFFFFF] p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col gap-3">
                 <h3 className="font-bold text-[#1A365D] text-sm border-b border-slate-100 pb-2 flex items-center justify-between">
                   <span className="flex items-center gap-1.5 pb-1">
                     <Clock className="h-4.5 w-4.5 text-[#2B6CB0]" />
-                    تحليل شهري للفترة المحددة
+                    تحليل الفترة
                   </span>
                   
                   <button 
@@ -2218,6 +2271,41 @@ function ReportsTabComponent({
                     تحميل التقرير الشامل (PDF)
                   </button>
                 </h3>
+
+                <div className="flex flex-row flex-wrap items-center gap-2">
+                  <span className="text-xs font-black text-[#2B6CB0] ml-1 shrink-0">فترة التحليل:</span>
+                  <div className="flex flex-wrap items-center gap-1.5 flex-1 select-none">
+                    {(['all', 'today', 'week', 'month', 'custom'] as const).map((f) => (
+                      <button key={f} onClick={() => setPeriodFilter(f)} className={`py-1 px-3 rounded-lg text-[10px] font-black transition-colors cursor-pointer shrink-0 ${periodFilter === f ? 'bg-[#1A365D] text-white shadow-xs' : 'bg-[#F7FAFC] text-[#2B6CB0] border border-slate-200 hover:bg-slate-50'}`}>
+                        {f === 'all' ? 'الكل' : f === 'today' ? 'يومي' : f === 'week' ? 'أسبوعي' : f === 'month' ? 'شهري' : 'مخصص'}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                {periodFilter === 'week' && (
+                  <div className="flex flex-wrap gap-1.5 mt-1 animate-fade-in">
+                    {(['السبت', 'الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة'] as const).map((dayName, idx) => {
+                      const isSelected = selectedWeekDays.includes(idx);
+                      return (
+                        <button key={idx} onClick={() => { setSelectedWeekDays(prev => isSelected ? prev.filter(d => d !== idx) : [...prev, idx]); }} className={`py-1 px-2.5 rounded-lg text-[10px] font-black transition-all cursor-pointer border ${isSelected ? 'bg-[#1A365D] text-white border-[#1A365D] shadow-xs' : 'bg-white text-gray-400 border-gray-200 hover:bg-gray-50'}`}>
+                          {dayName}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+                {periodFilter === 'custom' && (
+                  <div className="grid grid-cols-2 gap-2 mt-1 animate-fade-in">
+                    <div>
+                      <label className="block text-[10px] text-gray-400 font-bold mb-0.5">من تاريخ</label>
+                      <input type="date" value={customStartDate} onChange={(e) => setCustomStartDate(e.target.value)} className="w-full bg-[#F7FAFC] border border-slate-200 rounded-lg py-1.5 px-2 text-[11px] font-bold text-[#1A365D]" />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] text-gray-400 font-bold mb-0.5">إلى تاريخ</label>
+                      <input type="date" value={customEndDate} onChange={(e) => setCustomEndDate(e.target.value)} className="w-full bg-[#F7FAFC] border border-slate-200 rounded-lg py-1.5 px-2 text-[11px] font-bold text-[#1A365D]" />
+                    </div>
+                  </div>
+                )}
 
                 <div className="flex flex-col gap-3.5 mt-1">
                   {monthlyBreakdown.length === 0 ? (
@@ -2300,7 +2388,13 @@ function ReportsTabComponent({
             {selectedInvoice && (() => {
               const customer = customers.find(c => c.id === selectedInvoice.customerId);
               const itemsList = Array.isArray(selectedInvoice.items) ? selectedInvoice.items.filter(it => it) : [];
-              const invoiceProfit = itemsList.reduce((sum, it) => sum + (((it.finalPrice || 0) - (it.factoryPrice || (it.originalPrice || 0) * 0.9)) * (it.quantity || 0)), 0);
+              const invoiceProfit = itemsList.reduce((sum, it) => {
+                const prod = products.find(p => String(p.id).trim() === String(it.productId).trim());
+                const weights = prod ? getProductWeightsFallback(prod) : [];
+                const weight = weights.find(w => String(w.id).trim() === String(it.weightId).trim()) || weights[0];
+                const fpPerUnit = getItemFactoryCost(it, weight, prod);
+                return sum + (((it.finalPrice || 0) - fpPerUnit) * (it.quantity || 0));
+              }, 0);
               const invoiceDate = selectedInvoice.date ? new Date(selectedInvoice.date) : new Date();
               
               return (
@@ -2340,13 +2434,14 @@ function ReportsTabComponent({
                           <span className="font-bold text-xs text-[#1A365D]">{prod?.name || 'منتج محذوف'} (حجم {weight?.size || 'مجهول'})</span>
                           <span className="text-[10px] text-slate-500 font-extrabold" dir="rtl">{cartonsText} {formatNum(cartonPrice)} ج.م</span>
                         </div>
-                        <span className="text-xs font-black text-[#DD6B20]">+ {formatNum(((it.finalPrice || 0) - (it.factoryPrice || (it.originalPrice || 0) * 0.9)) * (it.quantity || 0))} ج</span>
+                        <span className="text-xs font-black text-[#DD6B20]">+ {formatNum(((it.finalPrice || 0) - getItemFactoryCost(it, weight, prod)) * (it.quantity || 0))} ج</span>
                       </div>
                     );
                   })}
                 </div>
 
                 <div className="flex gap-2.5 mt-3 border-t border-slate-100 pt-3">
+                  {isManager && (
                   <button
                     onClick={() => {
                       setEditingInvoice(selectedInvoice);
@@ -2367,6 +2462,7 @@ function ReportsTabComponent({
                   >
                     ✍️ تعديل الفاتورة المؤرشفة
                   </button>
+                  )}
                   <button
                     onClick={() => setSelectedInvoice(null)}
                     className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-extrabold py-2 px-3 rounded-lg text-xs transition-all cursor-pointer text-center"
@@ -2405,7 +2501,14 @@ function ReportsTabComponent({
                         const discountValue = (inv.totalBeforeDiscount || 0) - (inv.totalAfterDiscount || 0);
                         const discountPerc = (inv.totalBeforeDiscount || 0) > 0 ? (discountValue / (inv.totalBeforeDiscount || 0)) * 100 : 0;
                         const invItems = Array.isArray(inv.items) ? inv.items.filter(it => it) : [];
-                        const profit = invItems.reduce((sum, item) => sum + (((item.finalPrice || 0) - (item.factoryPrice || (item.originalPrice || 0) * 0.9)) * (item.quantity || 0)), 0);
+                        const profit = invItems.reduce((sum, item) => {
+                          const p = products.find(pp => String(pp.id).trim() === String(item.productId).trim());
+                          const ws = p ? getProductWeightsFallback(p) : [];
+                          const w = ws.find(ww => String(ww.id).trim() === String(item.weightId).trim()) || ws[0];
+                          const fpPerUnit = getItemFactoryCost(item, w, p);
+                          const fp = fpPerUnit || 0;
+                          return sum + (((item.finalPrice || 0) - fp) * (item.quantity || 0));
+                        }, 0);
                         return (
                           <tr key={inv.id} onClick={() => setSelectedInvoice(inv)} className="hover:bg-indigo-50 cursor-pointer transition-colors border-b border-slate-200">
                             <td className="p-2 font-bold text-[#1A365D]">#{inv.invoiceNumber}</td>
@@ -2945,6 +3048,30 @@ function ReportsTabComponent({
                                   >
                                     <Check className="h-4 w-4" />
                                   </button>
+                                  {/* Edit invoice (manager only) */}
+                                  {isManager && (
+                                  <button
+                                    onClick={() => {
+                                      setShowDebtorsModal(false);
+                                      setEditingInvoice(inv);
+                                      setEditItems([...(inv.items || [])]);
+                                      setEditPaid(inv.paidAmount !== undefined ? inv.paidAmount : inv.totalAfterDiscount);
+                                      let safeDateStr = '';
+                                      if (inv.date) {
+                                        const parsed = new Date(inv.date);
+                                        if (!isNaN(parsed.getTime())) {
+                                          safeDateStr = parsed.toISOString().substring(0, 16);
+                                        }
+                                      }
+                                      setEditDate(safeDateStr);
+                                      setEditNotes(inv.notes || '');
+                                    }}
+                                    className="bg-sky-100 hover:bg-sky-150 border border-sky-250 text-sky-800 px-2 py-1 rounded-lg text-[10px] font-black cursor-pointer transition-all active:scale-95 whitespace-nowrap"
+                                    title="تعديل الفاتورة"
+                                  >
+                                    تعديل ✍️
+                                  </button>
+                                  )}
                                 </div>
                               </div>
                             );
@@ -3008,9 +3135,12 @@ function ReportsTabComponent({
           const multiplier = weight.unitsPerCarton || 12;
           const pieces = Math.round(parseFloat(editAddQty) * multiplier);
           if (isNaN(pieces) || pieces <= 0) {
-            alert('يرجى إدخال كمية صحيحة بالكرتونة!');
+            alert('يرجى إدخال كمية صحيحة!');
             return;
           }
+          
+          const retailCartonPrice = (weight.cartonPriceFromFactory || 0) + (weight.addedValue || 0);
+          const perPiecePrice = retailCartonPrice / multiplier;
           
           // Check if item is already present, if so, merge quantities
           const existingIdx = editItems.findIndex(it => it.productId === prod.id && it.weightId === weight.id);
@@ -3023,9 +3153,9 @@ function ReportsTabComponent({
               productId: prod.id,
               weightId: weight.id,
               quantity: pieces,
-              originalPrice: weight.retailPricePerUnit || 100,
+              originalPrice: perPiecePrice || 100,
               discountPercent: 0,
-              finalPrice: weight.retailPricePerUnit || 100,
+              finalPrice: perPiecePrice || 100,
               factoryPrice: weight.factoryPricePerUnit || (weight.retailPricePerUnit ? weight.retailPricePerUnit * 0.9 : 90)
             };
             setEditItems([...editItems, newItem]);
@@ -3146,7 +3276,7 @@ function ReportsTabComponent({
                                 />
                               </div>
 
-                              {/* Price per unit input */}
+                              {/* Discount input */}
                               <div className="flex flex-col gap-0.5">
                                 <label className="text-[9px] text-gray-500 font-bold">خصم الصنف %</label>
                                 <input 

@@ -5,7 +5,7 @@ import { confirmDialog } from '../utils/confirm';
  * SPDX-License-Identifier: Apache-2.0
  */
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { Product, AppSettings, Customer, Invoice, Expense, Trip, getProductWeightsFallback, UserAuth, formatNum, SyncLog, FactoryLoad } from '../types';
+import { Product, AppSettings, Customer, Invoice, Expense, Trip, getProductWeightsFallback, UserAuth, formatNum, SyncLog, FactoryLoad, getItemFactoryCost } from '../types';
 import { 
   Settings as SettingsIcon, 
   Save, 
@@ -197,7 +197,7 @@ function doGet(e) {
       return { 
         id: invId, date: getSafeString(row[1]), invoiceNumber: getSafeString(row[2]), // توافق مع invoiceNumber 
         customerName: getSafeString(row[3]), area: getSafeString(row[4]), total: getSafeNumber(row[5]), 
-        paidAmount: row[6] !== '' ? getSafeNumber(row[6]) : getSafeNumber(row[5]), 
+        paidAmount: row[6] !== '' ? getSafeNumber(row[6]) : 0, 
         delegateName: getSafeString(row[7]).replace(/\\s*\\(.*?\\)/g, '').trim(), notes: getSafeString(row[8]),
         items: items, delegatePhone: getSafePhone(row[10]),
         customerId: getSafeString(row[11]),
@@ -1670,8 +1670,8 @@ export default function ManageTab({
             warehouseKeeper: fl.warehouseKeeper || '',
             delegateName: fl.delegateName || 'مجهول',
             delegatePhone: fl.delegatePhone || '',
-            cartonPrice: fl.cartonPrice || wt?.cartonPriceFromFactory || (prod ? prod.price * (wt?.unitsPerCarton || 12) : 0),
-            unitPrice: fl.unitPrice || wt?.factoryPricePerUnit || (prod ? prod.price : 0)
+            cartonPrice: fl.cartonPrice || wt?.cartonPriceFromFactory || (prod ? prod.price : 0),
+            unitPrice: fl.unitPrice || (wt?.factoryPricePerUnit || (prod ? prod.price : 0))
           };
         }),
         discoveredLeads: discoveredLeads.map((l: any) => ({
@@ -3462,6 +3462,28 @@ export default function ManageTab({
                                 const totalRevenues = uExpenses.filter(e => e.type === 'revenue').reduce((sum, exp) => sum + (exp.amount || 0), 0);
                                 const totalExpenses = uExpenses.filter(e => e.type !== 'revenue').reduce((sum, exp) => sum + (exp.amount || 0), 0);
                                 const expectedWallet = totalCashCollected + totalRevenues - totalExpenses;
+                                const totalProfit = uInvoices.reduce((sum, inv) => {
+                                  const itemsProfit = Array.isArray(inv.items) ? inv.items.reduce((isum: number, it: any) => {
+                                    if (!it) return isum;
+                                    const prod = products.find(p => String(p.id).trim() === String(it.productId).trim());
+                                    const ws = prod ? getProductWeightsFallback(prod) : [];
+                                    const wt = ws.find(w => String(w.id).trim() === String(it.weightId).trim()) || ws[0];
+                                    const fpPerUnit = getItemFactoryCost(it, wt, prod);
+                                    return isum + (((it.finalPrice || 0) - fpPerUnit) * (it.quantity || 0));
+                                  }, 0) : 0;
+                                  return sum + itemsProfit;
+                                }, 0);
+                                const totalFactoryCost = uInvoices.reduce((sum, inv) => {
+                                  const itemsCost = Array.isArray(inv.items) ? inv.items.reduce((isum: number, it: any) => {
+                                    if (!it) return isum;
+                                    const prod = products.find(p => String(p.id).trim() === String(it.productId).trim());
+                                    const ws = prod ? getProductWeightsFallback(prod) : [];
+                                    const wt = ws.find(w => String(w.id).trim() === String(it.weightId).trim()) || ws[0];
+                                    const fpPerUnit = getItemFactoryCost(it, wt, prod);
+                                    return isum + (fpPerUnit * (it.quantity || 0));
+                                  }, 0) : 0;
+                                  return sum + itemsCost;
+                                }, 0);
                                 const activeTraceTab = delegateLogTabs[user.phone] || 'all';
                                 return (
                                   <div className="mt-6 border-t border-slate-200/80 pt-5 text-right w-full">
@@ -3488,6 +3510,17 @@ export default function ManageTab({
                                       <div className="p-2.5 bg-blue-50 border border-blue-100 rounded-xl text-right">
                                         <span className="block text-[8px] sm:text-[9px] text-blue-900 font-black">إيرادات / تحصيلات إضافية</span>
                                         <span className="text-xs font-black text-blue-700">{totalRevenues.toLocaleString()} {currency}</span>
+                                      </div>
+                                      <div className={`p-2.5 border rounded-xl text-right ${totalProfit >= 0 ? 'bg-emerald-50 border-emerald-150' : 'bg-red-50 border-red-100'}`}>
+                                        <span className={`block text-[8px] sm:text-[9px] font-black ${totalProfit >= 0 ? 'text-emerald-800' : 'text-red-800'}`}>هامش الربح الصافي (المبيع - حساب المصنع)</span>
+                                        <span className={`text-xs font-black ${totalProfit >= 0 ? 'text-emerald-700' : 'text-red-700'}`}>{totalProfit.toLocaleString()} {currency}</span>
+                                        <span className={`block text-[8px] font-bold ${totalProfit >= 0 ? 'text-emerald-600/80' : 'text-red-600/80'}`}>
+                                          {totalSales > 0 ? `نسبة: ${((totalProfit / totalSales) * 100).toFixed(1)}%` : 'لا توجد مبيعات'}
+                                        </span>
+                                      </div>
+                                      <div className={`p-2.5 border rounded-xl text-right ${totalFactoryCost >= 0 ? 'bg-slate-50 border-slate-150' : 'bg-red-50 border-red-100'}`}>
+                                        <span className="block text-[8px] sm:text-[9px] text-slate-700 font-black">حساب المصنع (تكلفة البضاعة المباعة)</span>
+                                        <span className="text-xs font-black text-slate-600">{totalFactoryCost.toLocaleString()} {currency}</span>
                                       </div>
                                       
                                       <div className="col-span-2 p-3 bg-gradient-to-r from-amber-50 to-orange-50 border border-orange-200 rounded-2xl text-center shadow-xs">
@@ -4097,7 +4130,7 @@ export default function ManageTab({
                         {/* Weights list of this product with inline edits */}
                         <div className="flex flex-col gap-3">
                           {activeWeights.map((weight) => {
-                            const singleFactoryCost = weight.cartonPriceFromFactory / (weight.unitsPerCarton || 1);
+                            const singleFactoryCost = weight.cartonPriceFromFactory;
                             const finalWithAddedValue = singleFactoryCost + (weight.addedValue || 0);
                             return (
                               <div key={weight.id} className="border border-slate-150 p-3 rounded-xl bg-[#F7FAFC]/30 flex flex-col gap-2">
