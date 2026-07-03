@@ -116,7 +116,7 @@ export default function App() {
     if (isCustomer) {
       setIsLockedByTimeout(false);
       setLockPassword('');
-      setLastActivity(Date.now());
+      lastActivityRef.current = Date.now();
       showToast(`مرحباً بك يا ${currentUser.name}`);
       return;
     }
@@ -147,7 +147,7 @@ export default function App() {
     if (entered === correct) {
       setIsLockedByTimeout(false);
       setLockPassword('');
-      setLastActivity(Date.now());
+      lastActivityRef.current = Date.now();
     setLockFailedAttempts(0);
       showToast(`مرحباً بك يا ${currentUser.name}`);
     } else {
@@ -402,13 +402,15 @@ export default function App() {
 
         const remaining = loaded - sold;
         if (loaded > 0 || sold > 0) {
-          stocks.push({
-            product: p,
-            weight: w,
-            loaded,
-            sold,
-            remaining
-          });
+          if (remaining > 0) {
+            stocks.push({
+              product: p,
+              weight: w,
+              loaded,
+              sold,
+              remaining
+            });
+          }
         }
       });
     });
@@ -947,6 +949,36 @@ export default function App() {
     promptForSync('حذف حمولة من السيارة');
   };
 
+  const handleArchiveFactoryCycle = (delegatePhone: string, delegateName: string) => {
+    const cleanName = (delegateName || '').replace(/\s*\(.*?\)/g, '').trim();
+    
+    setFactoryLoads(prev => prev.filter(l => {
+      const lPhone = (l.delegatePhone || '').trim();
+      const lName = (l.delegateName || '').replace(/\s*\(.*?\)/g, '').trim();
+      
+      const match = (delegatePhone && lPhone === delegatePhone) || (cleanName && lName === cleanName);
+      return !match;
+    }));
+
+    setExpenses(prev => prev.filter(e => {
+      if (e.category === 'سداد للمصنع' || e.type === 'factory_payment') {
+        const ePhone = (e.delegatePhone || '').trim();
+        const eName = (e.delegateName || '').replace(/\s*\(.*?\)/g, '').trim();
+        const eNotes = e.description || '';
+        
+        const matchByPhone = delegatePhone && ePhone === delegatePhone;
+        const matchByName = cleanName && eName === cleanName;
+        const matchByAdmin = ePhone === 'admin' || eName === 'المدير العام';
+        const matchByNote = eNotes.includes('نيابة عن') && delegateName && eNotes.includes(delegateName);
+        
+        return !(matchByPhone || matchByName || matchByAdmin || matchByNote);
+      }
+      return true;
+    }));
+
+    promptForSync('أرشفة دورة حساب المصنع');
+  };
+
   const handleAddCustomer = (newCustomer: Omit<Customer, 'id'>) => {
     if (checkSimulationGuard()) return;
     const id = `cust-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
@@ -1088,6 +1120,12 @@ export default function App() {
     setExpenses(prev => prev.filter(e => e.id !== id));
     markAsDeleted(id);
     promptForSync('حذف مصروف/إيراد');
+  };
+
+  const handleEditExpense = (id: string, updates: Partial<Omit<Expense, 'id'>>) => {
+    if (checkSimulationGuard()) return;
+    setExpenses(prev => prev.map(e => e.id === id ? { ...e, ...updates } : e));
+    promptForSync('تعديل مصروف/إيراد');
   };
 
   const handleAddTrip = (newTrip: Omit<Trip, 'id'>) => {
@@ -1595,7 +1633,7 @@ export default function App() {
         onUpdateUsers={handleUpdateUsersList}
         onSuccess={(user) => {
           setCurrentUser(user);
-          setLastActivity(Date.now());
+          lastActivityRef.current = Date.now();
           setIsLockedByTimeout(false);
           setLockPassword('');
           setLockError('');
@@ -2669,7 +2707,9 @@ export default function App() {
             canEditPrices={effectiveUser.canEditPrices !== false}
             onAddExpense={handleAddExpense}
             onDeleteExpense={handleDeleteExpense}
+            onEditExpense={handleEditExpense}
             currentUser={effectiveUser}
+            onArchiveFactoryCycle={handleArchiveFactoryCycle}
           />
         )}
 
@@ -2741,7 +2781,9 @@ export default function App() {
             canEditPrices={effectiveUser.canEditPrices !== false}
             onAddExpense={handleAddExpense}
             onDeleteExpense={handleDeleteExpense}
+            onEditExpense={handleEditExpense}
             currentUser={effectiveUser}
+            onArchiveFactoryCycle={handleArchiveFactoryCycle}
           />
         )}
 
@@ -2801,7 +2843,9 @@ export default function App() {
             canEditPrices={effectiveUser.canEditPrices !== false}
             onAddExpense={handleAddExpense}
             onDeleteExpense={handleDeleteExpense}
+            onEditExpense={handleEditExpense}
             currentUser={effectiveUser}
+            onArchiveFactoryCycle={handleArchiveFactoryCycle}
           />
         )}
 

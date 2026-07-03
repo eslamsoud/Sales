@@ -6,7 +6,7 @@
 
 import React, { useState } from 'react';
 import { Invoice, Expense, Product, Customer, Trip, AppSettings, formatNum, FactoryLoad, getProductWeightsFallback, UserAuth, InvoiceItem, getItemFactoryCost, getFactoryCartonPrice } from '../types';
-import { ArrowRight, FileSpreadsheet, Send, TrendingUp, TrendingDown, Clock, Search, Eye, Filter, Check, ShieldAlert, MapPin, Printer, ChevronDown, AlertCircle, Activity } from 'lucide-react';
+import { ArrowRight, FileSpreadsheet, Send, TrendingUp, TrendingDown, Clock, Search, Eye, Filter, Check, ShieldAlert, MapPin, Printer, ChevronDown, AlertCircle, Activity, Package, Wallet } from 'lucide-react';
 import { showToast } from '../utils/toast';
 import SecurePhoneDisplay from './SecurePhoneDisplay';
 
@@ -153,6 +153,10 @@ function ReportsTabComponent({
     });
   };
   const [delegateFilter, setDelegateFilter] = useState<string>('all');
+
+  // Factory report filter states
+  const [factoryReportFilter, setFactoryReportFilter] = useState<'all' | 'daily' | 'weekly' | 'monthly'>('all');
+  const [expandedFactoryCard, setExpandedFactoryCard] = useState<string | null>(null);
 
   // Activity filter states
   const [custDateFilter, setCustDateFilter] = useState<'all' | 'week' | 'month' | 'custom'>('all');
@@ -311,6 +315,19 @@ function ReportsTabComponent({
       return sum + itemsCost;
     }, 0);
 
+    // Value of goods loaded from factory in this period (matches "ما تم تحميله من المصنع" cards)
+    const periodLoadedValue = currentFilteredData.factoryLoads.reduce((sum, l) => {
+      const prod = products.find(p => String(p.id).trim() === String(l.productId).trim());
+      const weights = prod ? getProductWeightsFallback(prod) : [];
+      const weight = weights.find(w => String(w.id).trim() === String(l.weightId || '').trim());
+      const upc = weight?.unitsPerCarton || 12;
+      const cartons = l.cartonsCount !== undefined ? l.cartonsCount : Math.floor((l.quantity || 0) / upc);
+      const loose = l.looseUnitsCount !== undefined ? l.looseUnitsCount : (l.quantity || 0) % upc;
+      const cp = l.cartonPrice !== undefined ? Number(l.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) : 0) || 0);
+      const up = l.unitPrice !== undefined ? Number(l.unitPrice) : (cp / upc);
+      return sum + (cartons * cp) + (loose * up);
+    }, 0);
+
     // Factory stats calculations
     const periodAdvances = currentFilteredData.factoryLoads.reduce((sum, fl) => sum + (fl.advanceAmount ?? 0), 0);
     const periodExtraPayments = currentFilteredData.extraPayments.reduce((sum, ep) => sum + ((ep.amount || 0) - (ep.appliedToCarriedDebt || 0)), 0);
@@ -339,11 +356,9 @@ function ReportsTabComponent({
     const totalOverallPaidToFactory = currentAdvancesTotal + manualPaymentsSumTotal;
     const remainingDebtToFactory = Math.max(0, totalWithdrawnValue - totalOverallPaidToFactory);
 
-    // صافي الربح التشغيلي = المبيعات + إيرادات + مشاوير - تكلفة_المبيعات - المصروفات
-    const operatingNetProfit = trueTotalSales + extraRevenues + totalTripsCollectedProfit - factorySoldCost - totalSpent;
-
-    // صافي التدفق النقدي = المحصل + إيرادات + مشاوير - تكلفة المبيعات للمصنع(جرد) - مصروفات
-    const netProfit = totalCollected + extraRevenues + totalTripsCollectedProfit - factorySoldCost - totalSpent;
+    // صافي الربح = (المحصل + إيرادات + مشاوير) - (المسدد للمصنع + المصروفات)
+    const operatingNetProfit = trueTotalSales + extraRevenues + totalTripsCollectedProfit - totalPaidToFactoryInPeriod - totalSpent;
+    const netProfit = totalCollected + extraRevenues + totalTripsCollectedProfit - totalPaidToFactoryInPeriod - totalSpent;
 
     return {
       totalSales: trueTotalSales,
@@ -355,6 +370,7 @@ function ReportsTabComponent({
       totalSpent,
       totalTripsCollectedProfit,
       factorySoldCost,
+      periodLoadedValue,
       netProfit,
       operatingNetProfit,
       totalPaidToFactoryInPeriod,
@@ -368,21 +384,26 @@ function ReportsTabComponent({
     const periodExpenses = currentFilteredData.expenses.filter(e => e.type !== 'revenue' && e.category !== 'سداد للمصنع' && e.type !== 'factory_payment');
     const periodTrips = currentFilteredData.trips;
     const periodExtraRevenues = currentFilteredData.expenses.filter(e => e.type === 'revenue').reduce((s, e) => s + (e.amount || 0), 0);
+    const periodAdvances = currentFilteredData.factoryLoads.reduce((s, fl) => s + (fl.advanceAmount ?? 0), 0);
+    const periodExtraPay = currentFilteredData.extraPayments.reduce((s, ep) => s + ((ep.amount || 0) - (ep.appliedToCarriedDebt || 0)), 0);
+    const totalPaidToFactory = periodAdvances + periodExtraPay;
+    const totalLoadedValue = currentFilteredData.factoryLoads.reduce((s, l) => {
+      const prod = products.find(p => String(p.id).trim() === String(l.productId).trim());
+      const weights = prod ? getProductWeightsFallback(prod) : [];
+      const weight = weights.find(w => String(w.id).trim() === String(l.weightId || '').trim());
+      const upc = weight?.unitsPerCarton || 12;
+      const cartons = l.cartonsCount !== undefined ? l.cartonsCount : Math.floor((l.quantity || 0) / upc);
+      const loose = l.looseUnitsCount !== undefined ? l.looseUnitsCount : (l.quantity || 0) % upc;
+      const cp = l.cartonPrice !== undefined ? Number(l.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) : 0) || 0);
+      const up = l.unitPrice !== undefined ? Number(l.unitPrice) : (cp / upc);
+      return s + (cartons * cp) + (loose * up);
+    }, 0);
     return {
       invoiceCount: periodInvoices.length,
       totalCollected: periodInvoices.reduce((s, inv) => s + (inv.paidAmount !== undefined ? inv.paidAmount : (inv.totalAfterDiscount || 0)), 0),
       totalSales: periodInvoices.reduce((s, inv) => s + (inv.totalAfterDiscount || 0), 0),
-      factorySoldCost: periodInvoices.reduce((s, inv) => {
-        const itemsCost = Array.isArray(inv.items) ? inv.items.reduce((isum, it) => {
-          if (!it) return isum;
-          const prod = products.find(p => String(p.id).trim() === String(it.productId).trim());
-          const weights = prod ? getProductWeightsFallback(prod) : [];
-          const weight = weights.find(w => String(w.id).trim() === String(it.weightId).trim()) || weights[0];
-          const fpPerUnit = getItemFactoryCost(it, weight, prod);
-          return isum + (fpPerUnit * (it.quantity || 0));
-        }, 0) : 0;
-        return s + itemsCost;
-      }, 0),
+      totalPaidToFactory,
+      totalLoadedValue,
       tripsCount: periodTrips.filter(t => t.collected).length,
       tripsCollected: periodTrips.filter(t => t.collected).reduce((s, t) => s + (t.price || 0), 0),
       extraRevenues: periodExtraRevenues,
@@ -728,8 +749,8 @@ function ReportsTabComponent({
                 <strong>${salesStats.totalRemaining.toLocaleString('ar-EG')} ج.م</strong>
               </div>
               <div class="stat-box">
-                <span>تكلفة البضاعة المباعة</span>
-                <strong>${salesStats.factorySoldCost.toLocaleString('ar-EG')} ج.م</strong>
+                <span>المسدد للمصنع</span>
+                <strong>${salesStats.totalPaidToFactoryInPeriod.toLocaleString('ar-EG')} ج.م</strong>
               </div>
               <div class="stat-box">
                 <span>المصروفات التشغيلية</span>
@@ -1816,7 +1837,7 @@ function ReportsTabComponent({
               <div className="grid grid-cols-3 gap-2">
                 <div className="bg-white/10 rounded-xl p-2 text-center">
                   <span className="text-[9px] text-blue-200 font-bold block">صافي الربح</span>
-                  <span className="text-xs font-black">{formatNum(periodStats.totalCollected + periodStats.extraRevenues + periodStats.tripsCollected - periodStats.factorySoldCost - periodStats.expensesTotal)}</span>
+                  <span className="text-xs font-black">{formatNum(periodStats.totalCollected + periodStats.extraRevenues + periodStats.tripsCollected - periodStats.totalLoadedValue - periodStats.expensesTotal)}</span>
                 </div>
                 <div className="bg-white/10 rounded-xl p-2 text-center">
                   <span className="text-[9px] text-blue-200 font-bold block">المشاوير</span>
@@ -1833,7 +1854,7 @@ function ReportsTabComponent({
               <div className="bg-emerald-50 rounded-2xl p-4 border border-emerald-100 flex flex-col gap-1 text-center justify-between">
                 <div>
                   <span className="text-emerald-850 font-black text-xs block">إجمالي الإيرادات</span>
-                  <span className="text-emerald-600 font-bold text-[9px] block leading-tight mt-0.5">المحصل + إيرادات + مشاوير - تكلفة المبيعات - مصروفات</span>
+                  <span className="text-emerald-600 font-bold text-[9px] block leading-tight mt-0.5">المحصل + إيرادات + مشاوير - المسدد للمصنع - مصروفات</span>
                 </div>
                 <span className="text-xl font-black text-emerald-800 my-1 block">
                   {formatNum(salesStats.netProfit)}
@@ -1862,8 +1883,8 @@ function ReportsTabComponent({
                     </div>
                   )}
                   <div className="flex justify-between text-rose-600 font-bold">
-                    <span>تكلفة البضاعة المباعة:</span>
-                    <span>-{formatNum(salesStats.factorySoldCost)}ج</span>
+                    <span>المسدد للمصنع:</span>
+                    <span>-{formatNum(salesStats.totalPaidToFactoryInPeriod)}ج</span>
                   </div>
                   <div className="flex justify-between text-rose-600 font-bold">
                     <span>المصروفات التشغيلية:</span>
@@ -2138,8 +2159,8 @@ function ReportsTabComponent({
                       <span className="text-emerald-700" dir="rtl">+ {(salesStats.extraRevenues + salesStats.totalTripsCollectedProfit).toLocaleString('ar-EG')} ج.م</span>
                     </div>
                     <div className="flex justify-between border-b border-dashed border-emerald-200 pb-1.5">
-                      <span className="text-slate-600">يخصم: تكلفة البضاعة المباعة للمصنع (بعد الجرد)</span>
-                      <span className="text-rose-700" dir="rtl">- {(salesStats.factorySoldCost).toLocaleString('ar-EG')} ج.م</span>
+                      <span className="text-slate-600">يخصم: المسدد للمصنع</span>
+                      <span className="text-rose-700" dir="rtl">- {(salesStats.totalPaidToFactoryInPeriod).toLocaleString('ar-EG')} ج.م</span>
                     </div>
                     <div className="flex justify-between border-b border-dashed border-emerald-200 pb-1.5">
                       <span className="text-slate-600">يخصم: إجمالي المصروفات الإدارية والتشغيلية المعتمدة</span>
@@ -2151,7 +2172,7 @@ function ReportsTabComponent({
                     </div>
                   </div>
                   <p className="text-[10px] text-emerald-600 leading-relaxed font-semibold">
-                    * يتم احتساب "الصافي" بناءً على المحصل من العملاء + الإيرادات + أرباح المشاوير مخصوماً منها تكلفة البضاعة المباعة (بعد الجرد) والمصروفات التشغيلية.
+                    * يتم احتساب "الصافي" بناءً على المحصل من العملاء + الإيرادات + أرباح المشاوير مخصوماً منها المسدد للمصنع والمصروفات التشغيلية.
                   </p>
                 </div>
               )}
@@ -2204,55 +2225,116 @@ function ReportsTabComponent({
                 </div>
               )}
 
-              {/* True Operating Net Profit Card */}
-              <div className={`rounded-2xl p-5 text-white shadow-md flex items-center justify-between relative overflow-hidden bg-gradient-to-r ${
-                salesStats.operatingNetProfit >= 0 
-                  ? 'from-emerald-600 to-teal-500 border-b-4 border-b-emerald-800' 
-                  : 'from-rose-600 to-red-500 border-b-4 border-b-rose-800'
-              }`}>
-                <div className="flex flex-col gap-0.5 z-10 text-right">
-                  <span className="text-[10px] text-white/90 font-black">صافي الأرباح التشغيلية الحقيقية (أرباح الأصناف والخدمات)</span>
-                  <span className="text-3xl font-black font-mono">
-                    {salesStats.operatingNetProfit.toLocaleString('ar-EG')}<span className="text-xs font-bold mr-1">ج.م</span>
-                  </span>
-                  {salesStats.totalSales > 0 && (
-                    <span className="text-[10px] text-white/90 font-black bg-white/20 rounded-full px-2 py-0.5 inline-block w-fit">
-                      هامش الربح: {(salesStats.operatingNetProfit / salesStats.totalSales * 100).toFixed(1)}%
-                    </span>
-                  )}
-                  <span className="text-[9px] text-white/85 font-semibold mt-1">إجمالي المبيعات + إيرادات + مشاوير - تكلفة المبيعات - مصروفات</span>
+              {/* Factory Loaded & Paid Cards */}
+              <div className="bg-white p-3 rounded-2xl border border-slate-200 shadow-xs flex flex-col gap-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-bold text-slate-500">فترة تقارير المصنع:</span>
+                  <div className="grid grid-cols-4 bg-slate-50 border border-slate-200 p-1 rounded-xl text-center gap-1 flex-1">
+                    {([['all','الكل'],['daily','يومي'],['weekly','أسبوعي'],['monthly','شهري']] as const).map(([key, label]) => (
+                      <button key={key} type="button" onClick={() => setFactoryReportFilter(key)} className={`py-1 px-0.5 rounded-lg text-[10px] font-bold transition-all cursor-pointer ${factoryReportFilter === key ? 'bg-white text-[#1A365D] border-b-2 border-[#DD6B20] shadow-sm' : 'text-[#9CA3AF] hover:bg-slate-100'}`}>{label}</button>
+                    ))}
+                  </div>
                 </div>
-                
-                <div className="bg-white/15 p-2.5 rounded-2xl z-10">
-                  {salesStats.operatingNetProfit >= 0 ? <TrendingUp className="h-8 w-8 text-white" /> : <TrendingDown className="h-8 w-8 text-white" />}
-                </div>
-                <div className="absolute -right-6 -bottom-6 h-24 w-24 bg-white/5 rounded-full blur-xl pointer-events-none"></div>
               </div>
 
-              {/* Net Cash Flow Card */}
-              <div className={`rounded-2xl p-5 text-white shadow-md flex items-center justify-between relative overflow-hidden bg-gradient-to-r ${
-                salesStats.netProfit >= 0 
-                  ? 'from-sky-600 to-indigo-500 border-b-4 border-b-sky-850' 
-                  : 'from-amber-600 to-orange-500 border-b-4 border-b-amber-850'
-              }`}>
-                <div className="flex flex-col gap-0.5 z-10 text-right">
-                  <span className="text-[10px] text-white/90 font-black">صافي التدفق النقدي الفعلي للسيارة (حركة الخزينة)</span>
-                  <span className="text-3xl font-black font-mono">
-                    {salesStats.netProfit.toLocaleString('ar-EG')}<span className="text-xs font-bold mr-1">ج.م</span>
-                  </span>
-                  {salesStats.totalSales > 0 && (
-                    <span className="text-[10px] text-white/90 font-black bg-white/20 rounded-full px-2 py-0.5 inline-block w-fit">
-                      نسبة التدفق النقدي: {(salesStats.netProfit / salesStats.totalSales * 100).toFixed(1)}%
-                    </span>
-                  )}
-                  <span className="text-[9px] text-white/85 font-semibold mt-1">المحصل + إيرادات + مشاوير - تكلفة المبيعات للمصنع(جرد) - مصروفات</span>
-                </div>
-                
-                <div className="bg-white/15 p-2.5 rounded-2xl z-10">
-                  {salesStats.netProfit >= 0 ? <TrendingUp className="h-8 w-8 text-white" /> : <TrendingDown className="h-8 w-8 text-white" />}
-                </div>
-                <div className="absolute -right-6 -bottom-6 h-24 w-24 bg-white/5 rounded-full blur-xl pointer-events-none"></div>
-              </div>
+              {(() => {
+                const filteredLoads = currentFilteredData.factoryLoads.filter(l => {
+                  const d = new Date(l.date);
+                  if (isNaN(d.getTime())) return true;
+                  const now = new Date();
+                  if (factoryReportFilter === 'daily') return d.toDateString() === now.toDateString();
+                  if (factoryReportFilter === 'weekly') { const diff = Math.abs(now.getTime() - d.getTime()); return Math.ceil(diff / 86400000) <= 7; }
+                  if (factoryReportFilter === 'monthly') return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+                  return true;
+                });
+                const filteredPayments = currentFilteredData.extraPayments.filter(p => {
+                  const d = new Date(p.date);
+                  if (isNaN(d.getTime())) return true;
+                  const now = new Date();
+                  if (factoryReportFilter === 'daily') return d.toDateString() === now.toDateString();
+                  if (factoryReportFilter === 'weekly') { const diff = Math.abs(now.getTime() - d.getTime()); return Math.ceil(diff / 86400000) <= 7; }
+                  if (factoryReportFilter === 'monthly') return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+                  return true;
+                });
+
+                const totalLoadedCartons = filteredLoads.reduce((s, l) => {
+                  const prod = products.find(p => String(p.id).trim() === String(l.productId).trim());
+                  const weights = prod ? getProductWeightsFallback(prod) : [];
+                  const weight = weights.find(w => String(w.id).trim() === String(l.weightId || '').trim());
+                  const upc = weight?.unitsPerCarton || 12;
+                  return s + (l.cartonsCount !== undefined ? l.cartonsCount : Math.floor((l.quantity || 0) / upc));
+                }, 0);
+                const totalLoadedValue = filteredLoads.reduce((s, l) => {
+                  const prod = products.find(p => String(p.id).trim() === String(l.productId).trim());
+                  const weights = prod ? getProductWeightsFallback(prod) : [];
+                  const weight = weights.find(w => String(w.id).trim() === String(l.weightId || '').trim());
+                  const upc = weight?.unitsPerCarton || 12;
+                  const cartons = l.cartonsCount !== undefined ? l.cartonsCount : Math.floor((l.quantity || 0) / upc);
+                  const loose = l.looseUnitsCount !== undefined ? l.looseUnitsCount : (l.quantity || 0) % upc;
+                  const cp = l.cartonPrice !== undefined ? Number(l.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) : 0) || 0);
+                  const up = l.unitPrice !== undefined ? Number(l.unitPrice) : (cp / upc);
+                  return s + (cartons * cp) + (loose * up);
+                }, 0);
+                const totalPaid = filteredPayments.reduce((s, p) => s + (p.amount || 0), 0);
+
+                return (
+                  <>
+                    {/* Loaded from Factory Card */}
+                    <details open={expandedFactoryCard === 'loaded'} onToggle={(e) => setExpandedFactoryCard((e.target as HTMLDetailsElement).open ? 'loaded' : null)} className="bg-gradient-to-r from-violet-600 to-purple-500 rounded-2xl shadow-md overflow-hidden">
+                      <summary className="p-5 text-white cursor-pointer flex items-center justify-between select-none list-none">
+                        <div className="flex flex-col gap-0.5 text-right">
+                          <span className="text-[10px] text-white/90 font-black">ما تم تحميله من المصنع</span>
+                          <span className="text-3xl font-black font-mono">{totalLoadedCartons}<span className="text-xs font-bold mr-1">كرتونة</span></span>
+                          <span className="text-sm font-bold text-white/80">{formatNum(totalLoadedValue)} ج.م</span>
+                        </div>
+                        <div className="bg-white/15 p-2.5 rounded-2xl"><Package className="h-8 w-8 text-white" /></div>
+                      </summary>
+                      <div className="px-5 pb-4 flex flex-col gap-1.5">
+                        {filteredLoads.map((l, i) => {
+                          const prod = products.find(p => String(p.id).trim() === String(l.productId).trim());
+                          const weights = prod ? getProductWeightsFallback(prod) : [];
+                          const weight = weights.find(w => String(w.id).trim() === String(l.weightId || '').trim());
+                          const upc = weight?.unitsPerCarton || 12;
+                          const cartons = l.cartonsCount !== undefined ? l.cartonsCount : Math.floor((l.quantity || 0) / upc);
+                          const cp = l.cartonPrice !== undefined ? Number(l.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) : 0) || 0);
+                          return (
+                            <div key={i} className="flex justify-between items-center text-[10px] text-white/90 bg-white/10 rounded-lg px-3 py-2">
+                              <span>{prod?.name || l.productName || 'غير معروف'} ({weight?.size || ''})</span>
+                              <span className="font-black">{cartons} كرتونة — {formatNum(cartons * cp)} ج.م</span>
+                            </div>
+                          );
+                        })}
+                        {filteredLoads.length === 0 && <p className="text-white/60 text-center text-[10px] py-2">لا توجد حمولات في هذه الفترة</p>}
+                      </div>
+                    </details>
+
+                    {/* Paid to Factory Card */}
+                    <details open={expandedFactoryCard === 'paid'} onToggle={(e) => setExpandedFactoryCard((e.target as HTMLDetailsElement).open ? 'paid' : null)} className="bg-gradient-to-r from-emerald-600 to-teal-500 rounded-2xl shadow-md overflow-hidden">
+                      <summary className="p-5 text-white cursor-pointer flex items-center justify-between select-none list-none">
+                        <div className="flex flex-col gap-0.5 text-right">
+                          <span className="text-[10px] text-white/90 font-black">ما تم سداده للمصنع</span>
+                          <span className="text-3xl font-black font-mono">{formatNum(totalPaid)}<span className="text-xs font-bold mr-1">ج.م</span></span>
+                          {totalLoadedValue > 0 && (
+                            <span className="text-[10px] text-white/90 font-black bg-white/20 rounded-full px-2 py-0.5 inline-block w-fit">
+                              نسبة السداد: {((totalPaid / totalLoadedValue) * 100).toFixed(1)}%
+                            </span>
+                          )}
+                        </div>
+                        <div className="bg-white/15 p-2.5 rounded-2xl"><Wallet className="h-8 w-8 text-white" /></div>
+                      </summary>
+                      <div className="px-5 pb-4 flex flex-col gap-1.5">
+                        {filteredPayments.map((p, i) => (
+                          <div key={i} className="flex justify-between items-center text-[10px] text-white/90 bg-white/10 rounded-lg px-3 py-2">
+                            <span>{p.notes || 'تسديد مباشر'}{p.delegateName ? ` — ${p.delegateName}` : ''}</span>
+                            <span className="font-black">{formatNum(p.amount)} ج.م</span>
+                          </div>
+                        ))}
+                        {filteredPayments.length === 0 && <p className="text-white/60 text-center text-[10px] py-2">لا توجد دفعات في هذه الفترة</p>}
+                      </div>
+                    </details>
+                  </>
+                );
+              })()}
 
               {/* Period Reports Table */}
               <div className="bg-[#FFFFFF] p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col gap-3">
@@ -3030,7 +3112,7 @@ function ReportsTabComponent({
                                     }}
                                     className="bg-amber-100 hover:bg-amber-150 border border-amber-250 text-amber-800 px-2 py-1 rounded-lg text-[10px] font-black cursor-pointer transition-all active:scale-95 whitespace-nowrap"
                                   >
-                                    سداد جزئي 🪙
+                                    سداد جزئي
                                   </button>
                                   {/* Pay full */}
                                   <button
@@ -3047,6 +3129,52 @@ function ReportsTabComponent({
                                     title="سداد بالكامل"
                                   >
                                     <Check className="h-4 w-4" />
+                                  </button>
+                                  {/* Collection - adds to revenue */}
+                                  <button
+                                    onClick={async () => {
+                                      const confirmed = await confirmDialog(`تأكيد التحصيل: سيتم تسجيل مبلغ ${formatNum(remaining)} ج.م كتحصيل من العميل "${customer.name}" وإضافته للإيرادات.\n\nهل أنت متأكد؟`);
+                                      if (!confirmed) return;
+                                      if (onAddExpense) {
+                                        onAddExpense({
+                                          amount: remaining,
+                                          category: 'تحصيل من عميل',
+                                          type: 'revenue',
+                                          date: new Date().toISOString(),
+                                          description: JSON.stringify({ notes: `تحصيل كامل المتبقي من العميل: ${customer.name} — فاتورة #${inv.invoiceNumber}`, invoiceId: inv.id, customerName: customer.name }),
+                                          delegateName: customer.name,
+                                          delegatePhone: customer.phone || ''
+                                        });
+                                        showToast(`✓ تم تسجيل تحصيل ${formatNum(remaining)} ج.م من "${customer.name}" كإيراد!`);
+                                      }
+                                    }}
+                                    className="bg-blue-100 hover:bg-blue-150 border border-blue-250 text-blue-800 px-2 py-1 rounded-lg text-[10px] font-black cursor-pointer transition-all active:scale-95 whitespace-nowrap"
+                                    title="تم التحصيل — يُضاف للإيرادات"
+                                  >
+                                    تم التحصيل
+                                  </button>
+                                  {/* Write-off / Settlement - deducts from revenue */}
+                                  <button
+                                    onClick={async () => {
+                                      const confirmed = await confirmDialog(`تأكيد التنازل: سيتم تسوية مبلغ ${formatNum(remaining)} ج.م المتبقي من "${customer.name}" كتنازل/خصم.\n⚠️ هذا المبلغ سيُخصم من الإيرادات (لا يُضاف كإيراد).\n\nهل أنت متأكد؟`);
+                                      if (!confirmed) return;
+                                      if (onAddExpense) {
+                                        onAddExpense({
+                                          amount: remaining,
+                                          category: 'تنازل عن ديون',
+                                          type: 'expense',
+                                          date: new Date().toISOString(),
+                                          description: JSON.stringify({ notes: `تنازل/تسوية عن المتبقي: ${customer.name} — فاتورة #${inv.invoiceNumber}`, invoiceId: inv.id, customerName: customer.name, isWriteOff: true }),
+                                          delegateName: customer.name,
+                                          delegatePhone: customer.phone || ''
+                                        });
+                                        showToast(`✓ تم تسوية ${formatNum(remaining)} ج.م كتنازل من "${customer.name}" (يُخصم من الإيرادات)`);
+                                      }
+                                    }}
+                                    className="bg-rose-100 hover:bg-rose-150 border border-rose-250 text-rose-800 px-2 py-1 rounded-lg text-[10px] font-black cursor-pointer transition-all active:scale-95 whitespace-nowrap"
+                                    title="تم التسوية — يُخصم من الإيرادات"
+                                  >
+                                    تنازل
                                   </button>
                                   {/* Edit invoice (manager only) */}
                                   {isManager && (

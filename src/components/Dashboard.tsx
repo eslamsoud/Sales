@@ -99,66 +99,7 @@ export default function Dashboard({ products, factoryLoads, invoices, permittedT
   return (
     <div className="flex flex-col gap-4 px-2 py-4 w-full max-w-lg mx-auto min-h-screen bg-slate-50 text-right animate-fade-in" dir="rtl" id="dashboard-container">
       
-      {/* Car Stock Widget (رصيد السيارة) */}
-      {activeBalances.length > 0 && (
-        <div className="flex flex-col gap-1">
-          <button
-            onClick={() => setShowCarStock(!showCarStock)}
-            className="bg-indigo-700 rounded-xl p-3 shadow-md border border-indigo-600 flex items-center justify-between transition-all text-right group hover:bg-indigo-800 cursor-pointer text-white mx-1"
-          >
-            <div className="flex items-center gap-2">
-              <div className="bg-indigo-600 p-2 rounded-lg text-indigo-100">
-                <Truck className="h-5 w-5 animate-pulse" />
-              </div>
-              <span className="font-extrabold text-sm text-white flex items-center gap-2">
-                الجرد الحالي للسيارة
-                <span className="bg-rose-500 text-white text-[10px] px-1.5 py-0.5 rounded-full shadow-inner">{activeBalances.length} أصناف</span>
-              </span>
-            </div>
-            <svg className={`w-5 h-5 text-indigo-300 transition-transform ${showCarStock ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19 9l-7 7-7-7" />
-            </svg>
-          </button>
 
-          {showCarStock && (
-            <div className="bg-white rounded-xl p-3 shadow-sm border border-slate-200 animate-fade-in mx-1 mt-1">
-              {/* Header of Table */}
-              <div className="grid grid-cols-12 gap-1 border-b border-slate-200 pb-2 text-center text-[11px] font-black tracking-wider text-slate-500 uppercase">
-                <span className="col-span-6 text-right">الصنف</span>
-                <span className="col-span-3 text-emerald-600">التحميل</span>
-                <span className="col-span-3 text-rose-600">الباقي</span>
-              </div>
-
-              {/* List of Products */}
-              <div className="max-h-48 overflow-y-auto custom-scroll divide-y divide-slate-100 mt-1 pb-1">
-                {activeBalances.map(item => {
-                  const isLow = item.remaining <= item.minAlert;
-                  const loadedCartons = Math.floor(item.loaded / item.unitsPerCarton);
-                  const remainingCartons = Math.floor(item.remaining / item.unitsPerCarton);
-                  return (
-                    <div key={`${item.productId}_${item.weightId}`} className="grid grid-cols-12 gap-1 py-2 items-center text-center text-xs hover:bg-slate-50 transition-colors">
-                      <div className="col-span-6 text-right font-black text-slate-800 pr-1 flex flex-col justify-center">
-                        <span className="truncate">{item.productName} <span className="font-bold text-[10px] text-indigo-500 ml-1">({item.size})</span></span>
-                        {isLow && item.loaded > 0 && (
-                          <span className="text-[10px] text-rose-600 font-extrabold flex items-center gap-1 mt-0.5 bg-rose-50 w-max px-1.5 py-0.5 rounded">
-                            <AlertCircle className="h-3 w-3 inline" /> نقص
-                          </span>
-                        )}
-                      </div>
-                      <span className="col-span-3 font-bold text-slate-700 bg-slate-100 py-1 rounded-md text-[11px]">{loadedCartons} ك</span>
-                      <span className={`col-span-3 font-black py-1 rounded-md text-[11px] flex flex-col justify-center items-center ${
-                        isLow ? 'bg-rose-100 text-rose-700 shadow-inner border border-rose-200' : 'bg-emerald-100 text-emerald-700 shadow-inner border border-emerald-200'
-                      }`}>
-                        {remainingCartons} ك
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
 
       {/* AI Field Advisor Prominent Card Banner removed as requested */}
 

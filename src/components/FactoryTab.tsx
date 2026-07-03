@@ -8,7 +8,7 @@ import { jsPDF } from 'jspdf';
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { Product, FactoryLoad, CarBalance, ProductWeight, getProductWeightsFallback, Invoice, Trip, formatNum, Expense, UserAuth, getItemFactoryCost } from '../types';
-import { Truck, Plus, PackagePlus, Package, ArrowRight, History, Trash2, AlertCircle, Edit, Save, HelpCircle, FileText, Image, Scale, CirclePercent, DollarSign, Box, Clock, CheckCircle2, ShieldMinus, Wallet, Printer, Calendar, MapPin, Download, ScanLine, Archive, Landmark } from 'lucide-react';
+import { Truck, Plus, PackagePlus, Package, ArrowRight, History, Trash2, AlertCircle, Edit, Save, HelpCircle, FileText, Image, Scale, CirclePercent, DollarSign, Box, Clock, CheckCircle2, ShieldMinus, Wallet, Printer, Calendar, MapPin, Download, ScanLine, Archive, Landmark, RefreshCw } from 'lucide-react';
 import { showToast } from '../utils/toast';
 
 interface FactoryTabProps {
@@ -33,7 +33,9 @@ interface FactoryTabProps {
   canEditPrices?: boolean;
   onAddExpense: (expense: Omit<Expense, 'id'>) => void;
   onDeleteExpense: (id: string) => void;
+  onEditExpense?: (id: string, updates: Partial<Omit<Expense, 'id'>>) => void;
   currentUser?: UserAuth | null;
+  onArchiveFactoryCycle?: (delegatePhone: string, delegateName: string) => void;
 }
 
 export default function FactoryTab({
@@ -58,7 +60,9 @@ export default function FactoryTab({
   canEditPrices = true,
   onAddExpense,
   onDeleteExpense,
-  currentUser
+  onEditExpense,
+  currentUser,
+  onArchiveFactoryCycle
 }: FactoryTabProps) {
   const [activeSubTab, setActiveSubTab] = useState<'loads' | 'products' | 'previous_loads' | 'factory_account' | 'trips'>(() => {
     if (permittedSubTabs && permittedSubTabs.length > 0) {
@@ -86,6 +90,19 @@ export default function FactoryTab({
     window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
   }, [activeSubTab]);
 
+  // Helper: High-DPI canvas setup for crisp image downloads
+  const setupHiDPICanvas = (W: number, H: number): { canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D; dpr: number } => {
+    const dpr = window.devicePixelRatio || 1;
+    const canvas = document.createElement('canvas');
+    canvas.width = W * dpr;
+    canvas.height = H * dpr;
+    canvas.style.width = W + 'px';
+    canvas.style.height = H + 'px';
+    const ctx = canvas.getContext('2d')!;
+    ctx.scale(dpr, dpr);
+    return { canvas, ctx, dpr };
+  };
+
   // Filtering states for the previous loads archive tab
   const [archiveFilter, setArchiveFilter] = useState<'all' | 'daily' | 'weekly' | 'monthly' | 'custom'>('all');
   const [archiveStartDate, setArchiveStartDate] = useState('');
@@ -93,7 +110,15 @@ export default function FactoryTab({
   const [archiveSection, setArchiveSection] = useState<'factory' | 'trips'>('factory');
 
   const [archiveDelegateFilter, setArchiveDelegateFilter] = useState<string>('all');
+  const [openArchiveDay, setOpenArchiveDay] = useState<string | null>(null);
+  const [isArchiving, setIsArchiving] = useState(false);
   const [archiveDayFilters, setArchiveDayFilters] = useState<string[]>([]);
+  const [paymentTargetDelegate, setPaymentTargetDelegate] = useState<string>('');
+  const [editingPaymentId, setEditingPaymentId] = useState<string | null>(null);
+  const [editingPaymentAmount, setEditingPaymentAmount] = useState<string>('');
+  const [editingPaymentNotes, setEditingPaymentNotes] = useState<string>('');
+  const [editingPaymentRecipient, setEditingPaymentRecipient] = useState<string>('');
+  const [editingPaymentDelegate, setEditingPaymentDelegate] = useState<string>('');
 
   // States for live load filtering
   const [liveLoadFilter, setLiveLoadFilter] = useState<'all' | 'daily' | 'weekly' | 'monthly' | 'custom'>('daily');
@@ -101,6 +126,12 @@ export default function FactoryTab({
   const [liveLoadEndDate, setLiveLoadEndDate] = useState('');
   const [liveLoadDelegateFilter, setLiveLoadDelegateFilter] = useState<string>('all');
   const [liveLoadDayFilters, setLiveLoadDayFilters] = useState<string[]>([]);
+
+  // Filter for current cycle payments
+  const [currentPaymentsFilter, setCurrentPaymentsFilter] = useState<'all' | 'daily' | 'weekly' | 'monthly' | 'custom'>('all');
+  const [currentPaymentsDayFilters, setCurrentPaymentsDayFilters] = useState<string[]>([]);
+  const [currentPaymentsStartDate, setCurrentPaymentsStartDate] = useState('');
+  const [currentPaymentsEndDate, setCurrentPaymentsEndDate] = useState('');
 
   const archiveDelegates = React.useMemo(() => {
     const delegatesMap = new Map<string, { phone: string, name: string }>();
@@ -176,6 +207,14 @@ export default function FactoryTab({
     return selectedDelegatePhone || 'default';
   }, [selectedDelegatePhone]);
 
+  React.useEffect(() => {
+    if (factoryDelegateFilter !== 'all') {
+      setPaymentTargetDelegate(factoryDelegateFilter);
+    } else {
+      setPaymentTargetDelegate('');
+    }
+  }, [factoryDelegateFilter]);
+
   // Helper to check if a record belongs to the selected delegate
   const filterByFactoryDelegate = (item: any) => {
     if (!isManager) return true; // Already filtered at app level
@@ -222,18 +261,34 @@ export default function FactoryTab({
     }
   }, [carriedOverDebtDate, currentDelegateKey]);
 
-  // Archived cycles (settled zero-balance snapshots)
-  const [archiveCycles, setArchiveCycles] = useState<any[]>(() => {
+  const [archiveCycles, setArchiveCycles] = useState<any[]>([]);
+  useEffect(() => {
     if (currentDelegateKey) {
-      try { return JSON.parse(localStorage.getItem(`factory_archive_cycles_${currentDelegateKey}`) || '[]'); } catch (_) {}
+      try {
+        const saved = localStorage.getItem(`factory_archive_cycles_${currentDelegateKey}`);
+        setArchiveCycles(saved ? JSON.parse(saved) : []);
+      } catch (_) {
+        setArchiveCycles([]);
+      }
+    } else {
+      setArchiveCycles([]);
     }
-    return [];
-  });
+  }, [currentDelegateKey]);
+
   useEffect(() => {
     if (currentDelegateKey) {
       localStorage.setItem(`factory_archive_cycles_${currentDelegateKey}`, JSON.stringify(archiveCycles));
     }
   }, [archiveCycles, currentDelegateKey]);
+
+  const lastArchiveTimestamp = useMemo(() => {
+    if (!archiveCycles || archiveCycles.length === 0) return 0;
+    const timestamps = archiveCycles
+      .map(c => Number(c.id))
+      .filter(t => !isNaN(t));
+    if (timestamps.length === 0) return 0;
+    return Math.max(...timestamps);
+  }, [archiveCycles]);
 
   const [editingCycle, setEditingCycle] = useState<any>(null);
   const [editData, setEditData] = useState<any>(null);
@@ -261,6 +316,7 @@ export default function FactoryTab({
           date: e.date && e.date.includes('-') && !isNaN(new Date(e.date).getTime())
             ? new Date(e.date).toLocaleDateString('ar-EG') + ' ' + new Date(e.date).toLocaleTimeString('ar-EG')
             : e.date || '',
+          rawDate: e.date,
           notes,
           appliedToCarriedDebt,
           recipient,
@@ -269,6 +325,44 @@ export default function FactoryTab({
         };
       });
   }, [expenses, factoryDelegateFilter, isManager, currentUser, archiveDelegates]);
+
+  const currentCycleExtraPayments = useMemo(() => {
+    return extraPayments.filter(p => {
+      const timeVal = p.rawDate ? new Date(p.rawDate).getTime() : 0;
+      return timeVal > lastArchiveTimestamp;
+    });
+  }, [extraPayments, lastArchiveTimestamp]);
+
+  const filteredCurrentPayments = useMemo(() => {
+    return currentCycleExtraPayments.filter(pay => {
+      const payDate = new Date(pay.rawDate || pay.date);
+      if (isNaN(payDate.getTime())) return true;
+      const now = new Date();
+      if (currentPaymentsFilter === 'daily') {
+        return payDate.toDateString() === now.toDateString();
+      }
+      if (currentPaymentsFilter === 'weekly') {
+        const diffTime = Math.abs(now.getTime() - payDate.getTime());
+        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+        if (diffDays > 7) return false;
+        if (currentPaymentsDayFilters.length > 0) {
+          const englishDay = new Intl.DateTimeFormat('en-US', { weekday: 'long' }).format(payDate);
+          return currentPaymentsDayFilters.includes(englishDay);
+        }
+        return true;
+      }
+      if (currentPaymentsFilter === 'monthly') {
+        return payDate.getMonth() === now.getMonth() && payDate.getFullYear() === now.getFullYear();
+      }
+      if (currentPaymentsFilter === 'custom') {
+        const dStr = (pay.rawDate || pay.date).split('T')[0];
+        if (currentPaymentsStartDate && dStr < currentPaymentsStartDate) return false;
+        if (currentPaymentsEndDate && dStr > currentPaymentsEndDate) return false;
+        return true;
+      }
+      return true;
+    });
+  }, [currentCycleExtraPayments, currentPaymentsFilter, currentPaymentsDayFilters, currentPaymentsStartDate, currentPaymentsEndDate]);
 
   // حساب الأرصدة الحالية في السيارة لكل صنف ووزن لعرضها في شاشة التحميل
   const weightStocks = useMemo(() => {
@@ -280,15 +374,20 @@ export default function FactoryTab({
         const key = `${p.id}_${w.id}`;
         const loaded = factoryLoads
           .filter(l => String(l.productId).trim() === String(p.id).trim() && String(l.weightId || w.id).trim() === String(w.id).trim())
+          .filter(filterByFactoryDelegate)
+          .filter(l => new Date(l.date).getTime() > lastArchiveTimestamp)
           .reduce((sum, l) => sum + l.quantity, 0);
         let sold = 0;
-        invoices.forEach(inv => {
-          inv.items.forEach(item => {
-            if (String(item.productId).trim() === String(p.id).trim() && String(item.weightId || w.id).trim() === String(w.id).trim()) {
-              sold += item.quantity;
-            }
+        invoices
+          .filter(filterByFactoryDelegate)
+          .filter(inv => new Date(inv.date).getTime() > lastArchiveTimestamp)
+          .forEach(inv => {
+            inv.items.forEach(item => {
+              if (String(item.productId).trim() === String(p.id).trim() && String(item.weightId || w.id).trim() === String(w.id).trim()) {
+                sold += item.quantity;
+              }
+            });
           });
-        });
         stocks[key] = {
           loaded,
           sold,
@@ -297,32 +396,35 @@ export default function FactoryTab({
       });
     });
 
-    factoryLoads.forEach(load => {
-      const pid = String(load.productId).trim();
-      const wid = String(load.weightId || '').trim();
-      if (!wid) return;
-      const key = `${pid}_${wid}`;
-      if (stocks[key]) return;
-      const prod = products.find(p => String(p.id).trim() === pid);
-      if (!prod) {
-        stocks[key] = { loaded: load.quantity || 0, sold: 0, remaining: load.quantity || 0 };
-        return;
-      }
-      const weights = getProductWeightsFallback(prod);
-      const matched = weights.find(w => String(w.id).trim() === wid);
-      if (!matched) {
-        const fallbackKey = key;
-        if (!stocks[fallbackKey]) {
-          stocks[fallbackKey] = { loaded: load.quantity || 0, sold: 0, remaining: load.quantity || 0 };
-        } else {
-          stocks[fallbackKey].loaded += load.quantity || 0;
-          stocks[fallbackKey].remaining = Math.max(0, stocks[fallbackKey].loaded - stocks[fallbackKey].sold);
+    factoryLoads
+      .filter(filterByFactoryDelegate)
+      .filter(l => new Date(l.date).getTime() > lastArchiveTimestamp)
+      .forEach(load => {
+        const pid = String(load.productId).trim();
+        const wid = String(load.weightId || '').trim();
+        if (!wid) return;
+        const key = `${pid}_${wid}`;
+        if (stocks[key]) return;
+        const prod = products.find(p => String(p.id).trim() === pid);
+        if (!prod) {
+          stocks[key] = { loaded: load.quantity || 0, sold: 0, remaining: load.quantity || 0 };
+          return;
         }
-      }
-    });
+        const weights = getProductWeightsFallback(prod);
+        const matched = weights.find(w => String(w.id).trim() === wid);
+        if (!matched) {
+          const fallbackKey = key;
+          if (!stocks[fallbackKey]) {
+            stocks[fallbackKey] = { loaded: load.quantity || 0, sold: 0, remaining: load.quantity || 0 };
+          } else {
+            stocks[fallbackKey].loaded += load.quantity || 0;
+            stocks[fallbackKey].remaining = Math.max(0, stocks[fallbackKey].loaded - stocks[fallbackKey].sold);
+          }
+        }
+      });
 
     return stocks;
-  }, [products, factoryLoads, invoices]);
+  }, [products, factoryLoads, invoices, lastArchiveTimestamp, factoryDelegateFilter]);
 
   const [inventoryFilter, setInventoryFilter] = useState<'all' | 'daily' | 'weekly' | 'monthly' | 'custom'>('all');
   const [inventoryStartDate, setInventoryStartDate] = useState('');
@@ -394,16 +496,23 @@ export default function FactoryTab({
         const key = `${p.id}_${w.id}`;
         seenKeys.add(key);
         const unitsPerC = w.unitsPerCarton || 12;
-        const loaded = factoryLoads.filter(l => String(l.productId).trim() === String(p.id).trim() && String(l.weightId || w.id).trim() === String(w.id).trim() && isDateInRange(l.date)).reduce((sum, l) => sum + l.quantity, 0);
+        const loaded = factoryLoads
+          .filter(l => String(l.productId).trim() === String(p.id).trim() && String(l.weightId || w.id).trim() === String(w.id).trim() && isDateInRange(l.date))
+          .filter(filterByFactoryDelegate)
+          .filter(l => new Date(l.date).getTime() > lastArchiveTimestamp)
+          .reduce((sum, l) => sum + l.quantity, 0);
         let sold = 0;
-        invoices.forEach(inv => {
-          if (!isDateInRange(inv.date)) return;
-          inv.items.forEach(item => {
-            if (String(item.productId).trim() === String(p.id).trim() && String(item.weightId || w.id).trim() === String(w.id).trim()) {
-              sold += item.quantity;
-            }
+        invoices
+          .filter(filterByFactoryDelegate)
+          .filter(inv => new Date(inv.date).getTime() > lastArchiveTimestamp)
+          .forEach(inv => {
+            if (!isDateInRange(inv.date)) return;
+            inv.items.forEach(item => {
+              if (String(item.productId).trim() === String(p.id).trim() && String(item.weightId || w.id).trim() === String(w.id).trim()) {
+                sold += item.quantity;
+              }
+            });
           });
-        });
         stocks[key] = {
           loaded: Math.floor(loaded / unitsPerC),
           sold: Math.floor(sold / unitsPerC),
@@ -411,27 +520,34 @@ export default function FactoryTab({
         };
       });
     });
-    factoryLoads.filter(l => isDateInRange(l.date)).forEach(load => {
-      const pid = String(load.productId).trim();
-      const wid = String(load.weightId || '').trim();
-      if (!wid) return;
-      const key = `${pid}_${wid}`;
-      if (seenKeys.has(key)) return;
-      const unitsPerC = 12;
-      const loaded = load.quantity || 0;
-      let sold = 0;
-      invoices.forEach(inv => {
-        if (!isDateInRange(inv.date)) return;
-        inv.items.forEach(item => {
-          if (String(item.productId).trim() === pid && String(item.weightId || '').trim() === wid) {
-            sold += item.quantity;
-          }
-        });
+    factoryLoads
+      .filter(filterByFactoryDelegate)
+      .filter(l => new Date(l.date).getTime() > lastArchiveTimestamp)
+      .filter(l => isDateInRange(l.date))
+      .forEach(load => {
+        const pid = String(load.productId).trim();
+        const wid = String(load.weightId || '').trim();
+        if (!wid) return;
+        const key = `${pid}_${wid}`;
+        if (seenKeys.has(key)) return;
+        const unitsPerC = 12;
+        const loaded = load.quantity || 0;
+        let sold = 0;
+        invoices
+          .filter(filterByFactoryDelegate)
+          .filter(inv => new Date(inv.date).getTime() > lastArchiveTimestamp)
+          .forEach(inv => {
+            if (!isDateInRange(inv.date)) return;
+            inv.items.forEach(item => {
+              if (String(item.productId).trim() === pid && String(item.weightId || '').trim() === wid) {
+                sold += item.quantity;
+              }
+            });
+          });
+        stocks[key] = { loaded: Math.floor(loaded / unitsPerC), sold: Math.floor(sold / unitsPerC), remaining: Math.floor((loaded - sold) / unitsPerC) };
       });
-      stocks[key] = { loaded: Math.floor(loaded / unitsPerC), sold: Math.floor(sold / unitsPerC), remaining: Math.floor((loaded - sold) / unitsPerC) };
-    });
     return stocks;
-  }, [weightStocksInCartons, products, factoryLoads, invoices, inventoryFilter, inventoryStartDate, inventoryEndDate, inventoryDayFilters]);
+  }, [weightStocksInCartons, products, factoryLoads, invoices, inventoryFilter, inventoryStartDate, inventoryEndDate, inventoryDayFilters, lastArchiveTimestamp, factoryDelegateFilter]);
 
   const filteredLoads = React.useMemo(() => {
     return factoryLoads.filter(load => {
@@ -478,6 +594,18 @@ export default function FactoryTab({
       return true;
     });
   }, [factoryLoads, archiveFilter, archiveStartDate, archiveEndDate, archiveDelegateFilter, archiveDayFilters]);
+
+  const groupedLoadsByDate = React.useMemo(() => {
+    const groups: Record<string, typeof filteredLoads> = {};
+    filteredLoads.forEach(load => {
+      const dateKey = load.date ? load.date.split('T')[0] : 'date_missing';
+      if (!groups[dateKey]) {
+        groups[dateKey] = [];
+      }
+      groups[dateKey].push(load);
+    });
+    return Object.entries(groups).sort((a, b) => b[0].localeCompare(a[0]));
+  }, [filteredLoads]);
 
   const filteredArchiveExtraPayments = useMemo(() => {
     return extraPayments.filter(pay => {
@@ -1070,10 +1198,14 @@ export default function FactoryTab({
     const totalH = headerH + 10 + loadsTableH + summaryRowH + 15 + bottomBoxH + footerH + 30;
 
     const canvas = document.createElement('canvas');
-    canvas.width = W;
-    canvas.height = totalH;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = W * dpr;
+    canvas.height = totalH * dpr;
+    canvas.style.width = W + 'px';
+    canvas.style.height = totalH + 'px';
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
+    ctx.scale(dpr, dpr);
     ctx.direction = 'rtl';
 
     const roundRect = (c: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) => {
@@ -1290,10 +1422,14 @@ export default function FactoryTab({
     const totalH = headerH + 10 + loadsTableH + summaryRowH + 15 + bottomBoxH + footerH + 30;
 
     const canvas = document.createElement('canvas');
-    canvas.width = W;
-    canvas.height = totalH;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = W * dpr;
+    canvas.height = totalH * dpr;
+    canvas.style.width = W + 'px';
+    canvas.style.height = totalH + 'px';
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
+    ctx.scale(dpr, dpr);
     ctx.direction = 'rtl';
 
     const roundRect = (c: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) => {
@@ -1577,7 +1713,7 @@ export default function FactoryTab({
               <strong style="color: #16a34a;">مسوى ✔️</strong>
             </div>` : `
             <div class="card" style="border-color:#c7d2fe; background:#eef2ff;">
-              <span>رصيد دائن لصالح المصنع</span>
+              <span>رصيد دائن لصالحنا (دفعات زائدة)</span>
               <strong style="color: #4f46e5;">${Math.abs(factoryBalanceDetails.netRemainingDueToFactory).toLocaleString('ar-EG')} ج.م</strong>
             </div>`}
           </div>
@@ -1639,9 +1775,9 @@ export default function FactoryTab({
               </tr>
             </thead>
             <tbody>
-              ${extraPayments.length === 0 ? '<tr><td colspan="6" style="text-align:center; color:#94a3b8;">لم يتم تسجيل دفعات مباشرة إضافية.</td></tr>' : 
-                extraPayments.map((pay, idx) => {
-                  const cumPaymentsBefore = extraPayments.slice(0, idx).reduce((s, p) => s + p.amount, 0);
+              ${currentCycleExtraPayments.length === 0 ? '<tr><td colspan="6" style="text-align:center; color:#94a3b8;">لم يتم تسجيل دفعات مباشرة إضافية.</td></tr>' : 
+                currentCycleExtraPayments.map((pay, idx) => {
+                  const cumPaymentsBefore = currentCycleExtraPayments.slice(0, idx).reduce((s, p) => s + p.amount, 0);
                   const remainingAfterPayment = factoryBalanceDetails.totalWithdrawnValue - factoryBalanceDetails.currentAdvances - cumPaymentsBefore - pay.amount;
                   return `
                   <tr>
@@ -1680,8 +1816,13 @@ export default function FactoryTab({
     let rawLoadedValue = 0; // إجمالي قيمة البضاعة المحملة فعلياً بسعر المصنع في الحمولة الحالية
     let currentAdvances = 0; // إجمالي مقدمات البضاعة المدفوعة للمصنع المرتبطة بالتحميل
     
-    const filteredLoads = factoryLoads.filter(filterByFactoryDelegate).filter(l => !l.archivedAt);
-    const filteredInvoices = invoices.filter(filterByFactoryDelegate);
+    const filteredLoads = factoryLoads
+      .filter(filterByFactoryDelegate)
+      .filter(l => new Date(l.date).getTime() > lastArchiveTimestamp);
+      
+    const filteredInvoices = invoices
+      .filter(filterByFactoryDelegate)
+      .filter(inv => new Date(inv.date).getTime() > lastArchiveTimestamp);
 
     // Calculate total loaded costs from factoryLoads
     filteredLoads.forEach(load => {
@@ -1727,11 +1868,11 @@ export default function FactoryTab({
       });
     });
 
-    // المدين = إجمالي قيمة البضاعة المباع فقط بسعر المصنع (وليس المحمل كله)
-    const totalWithdrawnValue = totalSoldFactoryValue;
+    // المدين = إجمالي قيمة البضاعة المحملة من المصنع بسعر المصنع (كل ما تم سحبه من المصنع)
+    const totalWithdrawnValue = rawLoadedValue;
 
     // إجمالي الدفعات المسجلة - مع خصم ما تم تسديده من المديونية القديمة لتجنب ازدواج الخصم
-    const manualPaymentsSum = extraPayments.reduce((sum, p) => sum + (p.amount - (p.appliedToCarriedDebt || 0)), 0);
+    const manualPaymentsSum = currentCycleExtraPayments.reduce((sum, p) => sum + (p.amount - (p.appliedToCarriedDebt || 0)), 0);
 
     // المسدد = مقدمات الشحن بالسيارة + دفعات ميزان المصنع المباشرة
     const totalAdvancePayments = currentAdvances + manualPaymentsSum;
@@ -1749,7 +1890,7 @@ export default function FactoryTab({
       manualPaymentsSum,
       currentAdvances
     };
-  }, [factoryLoads, products, invoices, carriedOverDebt, extraPayments, factoryDelegateFilter, isManager]);
+  }, [factoryLoads, products, invoices, carriedOverDebt, currentCycleExtraPayments, factoryDelegateFilter, isManager, lastArchiveTimestamp]);
 
   // Filters for the withdrawn goods visual component (Box 1 in Factory Account)
   const [accountLoadsFilter, setAccountLoadsFilter] = useState<'all' | 'daily' | 'weekly' | 'monthly' | 'custom'>('all');
@@ -1762,6 +1903,8 @@ export default function FactoryTab({
       if (!filterByFactoryDelegate(load)) return false;
       const loadDateObj = new Date(load.date);
       if (isNaN(loadDateObj.getTime())) return false;
+      const loadTime = loadDateObj.getTime();
+      if (loadTime <= lastArchiveTimestamp) return false;
       const now = new Date();
       if (accountLoadsFilter === 'daily') return loadDateObj.toDateString() === now.toDateString();
       if (accountLoadsFilter === 'weekly') {
@@ -1780,7 +1923,7 @@ export default function FactoryTab({
       }
       return true;
     });
-  }, [factoryLoads, accountLoadsFilter, accountLoadsStartDate, accountLoadsEndDate, accountLoadsDayFilters, factoryDelegateFilter, isManager]);
+  }, [factoryLoads, accountLoadsFilter, accountLoadsStartDate, accountLoadsEndDate, accountLoadsDayFilters, factoryDelegateFilter, isManager, lastArchiveTimestamp]);
 
   const accountLoadsSummary = useMemo(() => {
     const totals: Record<string, { loaded: number; sold: number; remaining: number; loadedValue: number; soldValue: number; remainingValue: number; storedProductName?: string; storedWeightSize?: string }> = {};
@@ -1847,6 +1990,58 @@ export default function FactoryTab({
       };
     });
   }, [filteredAccountLoads, products, weightStocks]);
+
+  // فلترة بيانات المبيعات لنفس الفترة الزمنية المستخدمة في حركة البضاعة المسحوبة
+  const filteredSoldCounts = useMemo(() => {
+    const now = new Date();
+    const isDateInRange = (dateStr: string) => {
+      const d = new Date(dateStr);
+      if (isNaN(d.getTime())) return false;
+      if (accountLoadsFilter === 'all') return true;
+      if (accountLoadsFilter === 'daily') return d.toDateString() === now.toDateString();
+      if (accountLoadsFilter === 'weekly') {
+        if ((now.getTime() - d.getTime()) > 7 * 24 * 60 * 60 * 1000) return false;
+        if (accountLoadsDayFilters.length > 0) {
+          const dayName = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][d.getDay()];
+          if (!accountLoadsDayFilters.includes(dayName)) return false;
+        }
+        return true;
+      }
+      if (accountLoadsFilter === 'monthly') return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+      if (accountLoadsFilter === 'custom') {
+        const dStr = dateStr.split('T')[0];
+        if (accountLoadsStartDate && dStr < accountLoadsStartDate) return false;
+        if (accountLoadsEndDate && dStr > accountLoadsEndDate) return false;
+      }
+      return true;
+    };
+
+    const filtered = invoices
+      .filter(filterByFactoryDelegate)
+      .filter(inv => new Date(inv.date).getTime() > lastArchiveTimestamp)
+      .filter(inv => isDateInRange(inv.date));
+
+    const counts: Record<string, { cartons: number; units: number; value: number; factoryValue: number }> = {};
+    filtered.forEach(inv => {
+      inv.items.forEach(item => {
+        const prod = products.find(p => String(p.id).trim() === String(item.productId).trim());
+        if (!prod) return;
+        const weights = getProductWeightsFallback(prod);
+        const weight = weights.find(w => String(w.id).trim() === String(item.weightId).trim());
+        if (!weight) return;
+        const key = item.weightId || 'raw_' + item.productId;
+        const current = counts[key] || { cartons: 0, units: 0, value: 0, factoryValue: 0 };
+        const upc = weight.unitsPerCarton || 12;
+        current.units += item.quantity;
+        current.cartons += item.quantity / upc;
+        current.value += item.finalPrice * item.quantity;
+        const factoryCartonPrice = Number(weight.cartonPriceFromFactory) || Number(prod.price) || 0;
+        current.factoryValue += (item.quantity / upc) * factoryCartonPrice;
+        counts[key] = current;
+      });
+    });
+    return counts;
+  }, [invoices, products, accountLoadsFilter, accountLoadsStartDate, accountLoadsEndDate, accountLoadsDayFilters, factoryDelegateFilter, isManager, lastArchiveTimestamp]);
 
   const allAccountLoadsForExport = useMemo(() => {
     const allLoads = factoryLoads.filter(filterByFactoryDelegate).filter(l => !l.archivedAt);
@@ -1933,10 +2128,14 @@ export default function FactoryTab({
     const totalH = 24 + headerH + 32 + (list.length * rowH) + summaryRowH + 12 + bottomBoxH + footerH + 24;
 
     const canvas = document.createElement('canvas');
-    canvas.width = W;
-    canvas.height = totalH;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = W * dpr;
+    canvas.height = totalH * dpr;
+    canvas.style.width = W + 'px';
+    canvas.style.height = totalH + 'px';
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
+    ctx.scale(dpr, dpr);
     ctx.direction = 'rtl';
 
     const roundRect = (c: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) => {
@@ -2137,6 +2336,84 @@ export default function FactoryTab({
     }
   }, [factoryBalanceDetails.netRemainingDueToFactory, carriedOverDebtDate, carriedOverDebt]);
 
+  // Auto-archive when remaining balance becomes exactly 0 (after payment settles it)
+  const prevNetRemainingRef = React.useRef(factoryBalanceDetails.netRemainingDueToFactory);
+  useEffect(() => {
+    const prev = prevNetRemainingRef.current;
+    const curr = factoryBalanceDetails.netRemainingDueToFactory;
+    prevNetRemainingRef.current = curr;
+
+    // Only trigger when transitioning from > 0 to exactly 0
+    if (prev > 0 && curr === 0 && !isArchiving) {
+      const hasLoads = factoryLoads.filter(filterByFactoryDelegate).length > 0;
+      const hasPayments = currentCycleExtraPayments.length > 0;
+      if (hasLoads || hasPayments) {
+        showToast("✅ الحساب المتبقي صفر! جاري ترحيل الدورة تلقائياً للأرشيف...");
+        setTimeout(async () => {
+          setIsArchiving(true);
+          try {
+            const currentLoads = factoryLoads.filter(filterByFactoryDelegate).map(l => {
+              const prod = products.find(p => String(p.id).trim() === String(l.productId).trim());
+              const weights = prod ? getProductWeightsFallback(prod) : [];
+              const weight = weights.find(w => String(w.id).trim() === String(l.weightId).trim());
+              const unitsPerCarton = weight?.unitsPerCarton || 12;
+              const cartons = l.cartonsCount !== undefined ? l.cartonsCount : Math.floor(l.quantity / unitsPerCarton);
+              const loose = l.looseUnitsCount !== undefined ? l.looseUnitsCount : (l.quantity % unitsPerCarton);
+              const cartonPrice = l.cartonPrice !== undefined ? Number(l.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) : 0) || 0);
+              const unitPrice = l.unitPrice !== undefined ? Number(l.unitPrice) : (Number(weight?.factoryPricePerUnit) || (prod ? Number(prod.price) : 0) || 0);
+              return {
+                date: l.date, productName: prod?.name || l.productName || 'غير معروف',
+                weightSize: weight?.size || (l as any).weightSize || '', cartons, loose,
+                cartonPrice, subtotal: (cartons * cartonPrice) + (loose * unitPrice),
+                advanceAmount: l.advanceAmount ?? 0, delegateName: l.delegateName || ''
+              };
+            });
+            const currentPayments = currentCycleExtraPayments.map(p => ({
+              id: p.id, amount: p.amount, date: p.date, notes: p.notes,
+              recipient: p.recipient, delegateName: p.delegateName,
+              delegatePhone: p.delegatePhone, appliedToCarriedDebt: p.appliedToCarriedDebt
+            }));
+            const rawSum = currentLoads.reduce((s, l) => s + l.subtotal, 0);
+            const totalPaidAuto = currentPayments.reduce((s, p) => s + p.amount, 0);
+            const newCycle = {
+              id: Date.now().toString(),
+              settledAt: new Date().toLocaleDateString('ar-EG') + ' ' + new Date().toLocaleTimeString('ar-EG'),
+              loads: currentLoads,
+              payments: currentPayments,
+              rawLoadedValue: rawSum,
+              totalWithdrawnValue: factoryBalanceDetails.totalWithdrawnValue,
+              totalAdvancePayments: totalPaidAuto,
+              creditBalance: 0,
+              carriedOverDebtAtTime: carriedOverDebt,
+              settledFully: true
+            };
+            setArchiveCycles(prev => [...prev, newCycle]);
+            setCarriedOverDebt(0);
+            setCarriedOverDebtDate('');
+
+            if (onArchiveFactoryCycle) {
+              const finalPhone = selectedDelegatePhone || factoryDelegateFilter || currentUser?.phone || '';
+              const finalName = selectedDelegatePhone ? (archiveDelegates.find(d => d.phone === selectedDelegatePhone)?.name || currentUser?.name || 'مجهول') : (factoryDelegateFilter ? (archiveDelegates.find(d => d.phone === factoryDelegateFilter || d.name === factoryDelegateFilter)?.name || 'مجهول') : 'مجهول');
+              onArchiveFactoryCycle(finalPhone, finalName);
+            } else {
+              const loadsToArchive = factoryLoads.filter(filterByFactoryDelegate);
+              for (const load of loadsToArchive) { onDeleteLoad(load.id); }
+              const currentExpenses = expenses.filter(e =>
+                (e.category === 'سداد للمصنع' || e.type === 'factory_payment') && filterByFactoryDelegate(e));
+              for (const exp of currentExpenses) { onDeleteExpense(exp.id); }
+            }
+            showToast("✓ تم ترحيل الدورة تلقائياً للأرشيف!");
+          } catch (err) {
+            console.error(err);
+            showToast("❌ حدث خطأ أثناء الترحيل التلقائي!");
+          } finally {
+            setIsArchiving(false);
+          }
+        }, 1500);
+      }
+    }
+  }, [factoryBalanceDetails.netRemainingDueToFactory, isArchiving]);
+
   // Draw and download factory account statement image — clean professional invoice style
   const handleDownloadFactoryLedgerImage = () => {
     const { totalWithdrawnValue, totalAdvancePayments, netRemainingDueToFactory, currentAdvances, soldCounts, rawLoadedValue } = factoryBalanceDetails;
@@ -2174,10 +2451,14 @@ export default function FactoryTab({
     const totalH = headerH + 10 + loadsTableH + 15 + bottomBoxH + footerH + 40;
 
     const canvas = document.createElement('canvas');
-    canvas.width = W;
-    canvas.height = totalH;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = W * dpr;
+    canvas.height = totalH * dpr;
+    canvas.style.width = W + 'px';
+    canvas.style.height = totalH + 'px';
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
+    ctx.scale(dpr, dpr);
     ctx.direction = 'rtl';
 
     const roundRect = (c: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) => {
@@ -2429,7 +2710,7 @@ export default function FactoryTab({
       ctx.fillText(`${Math.abs(netRemainingDueToFactory).toLocaleString('ar-EG')} ج.م`, leftBoxX + leftBoxW / 2, netCenterY);
       ctx.font = 'bold 13px system-ui, sans-serif';
       ctx.fillStyle = '#4f46e5';
-      ctx.fillText('رصيد دائن لصالح المصنع', leftBoxX + leftBoxW / 2, netCenterY + 30);
+      ctx.fillText('رصيد دائن لصالحنا (دفعات زائدة)', leftBoxX + leftBoxW / 2, netCenterY + 30);
     }
 
     y += bottomBoxH + 20;
@@ -2478,10 +2759,14 @@ export default function FactoryTab({
     const totalH = headerH + 10 + loadsTableH + summaryRowH + 15 + bottomBoxH + footerH + 40;
 
     const canvas = document.createElement('canvas');
-    canvas.width = W;
-    canvas.height = totalH;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = W * dpr;
+    canvas.height = totalH * dpr;
+    canvas.style.width = W + 'px';
+    canvas.style.height = totalH + 'px';
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
+    ctx.scale(dpr, dpr);
     ctx.direction = 'rtl';
 
     const roundRect = (c: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) => {
@@ -2711,7 +2996,7 @@ export default function FactoryTab({
       ctx.textAlign = 'center';
       ctx.fillText(`${formatNum(Math.abs(netRemaining))} ج.م`, leftBoxX + leftBoxW / 2, netCenterY);
       ctx.font = 'bold 13px system-ui, sans-serif';
-      ctx.fillText('رصيد دائن لصالح المصنع', leftBoxX + leftBoxW / 2, netCenterY + 30);
+      ctx.fillText('رصيد دائن لصالحنا (دفعات زائدة)', leftBoxX + leftBoxW / 2, netCenterY + 30);
     }
 
     y += bottomBoxH + 20;
@@ -2765,7 +3050,7 @@ export default function FactoryTab({
     `).join('');
 
     const netColor = netRemaining > 0 ? '#dc2626' : netRemaining === 0 ? '#059669' : '#4f46e5';
-    const netText = netRemaining > 0 ? `${formatNum(netRemaining)} ج.م` : netRemaining === 0 ? '٠.٠٠ ج.م — *تم تسوية الحساب بالكامل*' : `${formatNum(Math.abs(netRemaining))} ج.م — رصيد دائن لصالح المصنع`;
+    const netText = netRemaining > 0 ? `${formatNum(netRemaining)} ج.م` : netRemaining === 0 ? '٠.٠٠ ج.م — *تم تسوية الحساب بالكامل*' : `${formatNum(Math.abs(netRemaining))} ج.م — رصيد دائن لصالحنا`;
     const settleNote = netRemaining === 0 ? '<div style="background:#ecfdf5;border:1px solid #a7f3d0;border-radius:6px;padding:8px 12px;color:#059669;font-weight:bold;font-size:13px;text-align:center;margin-top:8px">*تم تسوية الحساب بالكامل*</div>' : '';
 
     const html = `<html dir="rtl" lang="ar"><head><style>
@@ -2840,7 +3125,7 @@ export default function FactoryTab({
             <div class="box-body">
               <div class="net-box">
                 <div class="net-amount" style="color:${netColor}">${netRemaining === 0 ? '٠.٠٠ ج.م' : `${formatNum(Math.abs(netRemaining))} ج.م`}</div>
-                <div class="net-note" style="color:${netColor}">${netRemaining > 0 ? 'يجب سداد المبلغ أعلاه' : netRemaining === 0 ? '*تم تسوية الحساب بالكامل*' : 'رصيد دائن لصالح المصنع'}</div>
+                <div class="net-note" style="color:${netColor}">${netRemaining > 0 ? 'يجب سداد المبلغ أعلاه' : netRemaining === 0 ? '*تم تسوية الحساب بالكامل*' : 'رصيد دائن لصالحنا'}</div>
                 ${settleNote}
               </div>
             </div>
@@ -2995,10 +3280,14 @@ export default function FactoryTab({
     const totalH = headerH + 10 + totalContentH + footerH + 40;
 
     const canvas = document.createElement('canvas');
-    canvas.width = W;
-    canvas.height = totalH;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = W * dpr;
+    canvas.height = totalH * dpr;
+    canvas.style.width = W + 'px';
+    canvas.style.height = totalH + 'px';
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
+    ctx.scale(dpr, dpr);
     ctx.direction = 'rtl';
 
     const roundRect = (c: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) => {
@@ -3134,6 +3423,209 @@ export default function FactoryTab({
     link.click();
   };
 
+  // Filtered archive download - PDF
+  const downloadFilteredArchivePDF = () => {
+    const filtered = archiveCycles.filter(c => {
+      const settled = new Date(c.settledAt);
+      if (isNaN(settled.getTime())) return true;
+      const now = new Date();
+      if (archiveFilter === 'daily') return settled.toDateString() === now.toDateString();
+      if (archiveFilter === 'weekly') { const d = Math.abs(now.getTime() - settled.getTime()); return Math.ceil(d / 86400000) <= 7; }
+      if (archiveFilter === 'monthly') return settled.getMonth() === now.getMonth() && settled.getFullYear() === now.getFullYear();
+      if (archiveFilter === 'custom') {
+        const ds = settled.toISOString().substring(0, 10);
+        if (archiveStartDate && ds < archiveStartDate) return false;
+        if (archiveEndDate && ds > archiveEndDate) return false;
+      }
+      return true;
+    });
+    if (filtered.length === 0) { showToast('⚠️ لا توجد دورات في هذه الفترة!'); return; }
+
+    const filterLabel = archiveFilter === 'all' ? 'الكل' : archiveFilter === 'daily' ? 'يومي' : archiveFilter === 'weekly' ? 'أسبوعي' : archiveFilter === 'monthly' ? 'شهري' : 'مخصص';
+    let allLoadsHtml = '';
+    let allPaymentsHtml = '';
+    let grandTotalLoad = 0;
+    let grandTotalPayments = 0;
+
+    filtered.forEach((cycle, idx) => {
+      const loads = cycle.loads || [];
+      const pays = cycle.payments || [];
+      const totalLoadValue = loads.reduce((s: number, l: any) => s + (l.subtotal || 0), 0);
+      const totalPayments = pays.reduce((s: number, p: any) => s + (p.amount || 0), 0);
+      grandTotalLoad += totalLoadValue;
+      grandTotalPayments += totalPayments;
+
+      allLoadsHtml += `<tr style="background:#e0e7ff"><td colspan="5" style="font-weight:bold;text-align:center;padding:8px">دورة ${idx + 1} — ${cycle.settledAt} — (${loads.length} حمولة)</td></tr>`;
+      loads.forEach((l: any, i: number) => {
+        allLoadsHtml += `<tr><td style="text-align:center">${i + 1}</td><td style="text-align:right">${l.productName} (${l.weightSize})</td><td style="text-align:center">${l.cartons} كرتونة${l.loose > 0 ? ` + ${l.loose}` : ''}</td><td style="text-align:center">${formatNum(l.cartonPrice)} ج.م</td><td style="text-align:center;font-weight:bold">${formatNum(l.subtotal)} ج.م</td></tr>`;
+      });
+
+      allPaymentsHtml += `<tr style="background:#fef3c7"><td colspan="5" style="font-weight:bold;text-align:center;padding:8px">دفعات الدورة ${idx + 1}</td></tr>`;
+      pays.forEach((p: any, i: number) => {
+        allPaymentsHtml += `<tr><td style="text-align:center">${i + 1}</td><td style="text-align:right">${p.notes || 'تسديد مباشر'}</td><td style="text-align:center;font-weight:bold;color:#059669">${formatNum(p.amount)} ج.م</td><td style="text-align:center">${p.delegateName || '-'}</td><td style="text-align:center">${p.recipient || '-'}</td></tr>`;
+      });
+    });
+
+    const grandNet = grandTotalLoad - grandTotalPayments;
+    const html = `<!DOCTYPE html><html dir="rtl"><head><meta charset="utf-8"><style>body{font-family:system-ui,sans-serif;padding:20px;background:#f8fafc}table{width:100%;border-collapse:collapse;margin:10px 0}th,td{border:1px solid #cbd5e1;padding:6px 8px;font-size:12px}th{background:#1e2a4a;color:white}.summary{background:#f1f5f9;padding:15px;border-radius:12px;margin-top:15px;text-align:center;font-weight:bold}</style></head><body>
+    <h2 style="text-align:center;color:#1e2a4a">تقرير الدورات المؤرشفة — فلتر: ${filterLabel}</h2>
+    <p style="text-align:center;color:#64748b">عدد الدورات: ${filtered.length} | تاريخ الطباعة: ${new Date().toLocaleDateString('ar-EG')}</p>
+    <h3 style="color:#1e3a5f">📦 الحمولات</h3><table><thead><tr><th>م</th><th>الصنف</th><th>الكمية</th><th>السعر</th><th>القيمة</th></tr></thead><tbody>${allLoadsHtml}</tbody></table>
+    <h3 style="color:#1e3a5f">💳 الدفعات</h3><table><thead><tr><th>م</th><th>البيان</th><th>المبلغ</th><th>المندوب</th><th>المستلم</th></tr></thead><tbody>${allPaymentsHtml}</tbody></table>
+    <div class="summary">إجمالي الحمولات: ${formatNum(grandTotalLoad)} ج.م | إجمالي الدفعات: ${formatNum(grandTotalPayments)} ج.م | المتبقي: ${formatNum(grandNet)} ج.م</div>
+    <p style="text-align:center;color:#94a3b8;margin-top:20px;font-size:10px">تم التصدير من نظام تتبع المبيعات</p></body></html>`;
+    const w = window.open('', '_blank');
+    if (w) { w.document.write(html); w.document.close(); setTimeout(() => w.print(), 500); }
+    showToast('✓ تم فتح تقرير PDF للفترة المفلترة!');
+  };
+
+  // Filtered archive download - Image
+  const downloadFilteredArchiveImage = () => {
+    const filtered = archiveCycles.filter(c => {
+      const settled = new Date(c.settledAt);
+      if (isNaN(settled.getTime())) return true;
+      const now = new Date();
+      if (archiveFilter === 'daily') return settled.toDateString() === now.toDateString();
+      if (archiveFilter === 'weekly') { const d = Math.abs(now.getTime() - settled.getTime()); return Math.ceil(d / 86400000) <= 7; }
+      if (archiveFilter === 'monthly') return settled.getMonth() === now.getMonth() && settled.getFullYear() === now.getFullYear();
+      if (archiveFilter === 'custom') {
+        const ds = settled.toISOString().substring(0, 10);
+        if (archiveStartDate && ds < archiveStartDate) return false;
+        if (archiveEndDate && ds > archiveEndDate) return false;
+      }
+      return true;
+    });
+    if (filtered.length === 0) { showToast('⚠️ لا توجد دورات في هذه الفترة!'); return; }
+
+    const filterLabel = archiveFilter === 'all' ? 'الكل' : archiveFilter === 'daily' ? 'يومي' : archiveFilter === 'weekly' ? 'أسبوعي' : archiveFilter === 'monthly' ? 'شهري' : 'مخصص';
+    const W = 920;
+    const padX = 30;
+    const tableW = W - padX * 2;
+    const rowH = 30;
+    const headerH = 90;
+    const summaryRowH = 40;
+    const footerH = 50;
+
+    let totalRows = 0;
+    let grandTotalLoad = 0;
+    let grandTotalPayments = 0;
+    filtered.forEach(c => {
+      totalRows += (c.loads?.length || 0) + (c.payments?.length || 0) + 2;
+      grandTotalLoad += (c.loads || []).reduce((s: number, l: any) => s + (l.subtotal || 0), 0);
+      grandTotalPayments += (c.payments || []).reduce((s: number, p: any) => s + (p.amount || 0), 0);
+    });
+    const totalH = headerH + 10 + totalRows * rowH + summaryRowH + footerH + 40;
+
+    const canvas = document.createElement('canvas');
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = W * dpr;
+    canvas.height = totalH * dpr;
+    canvas.style.width = W + 'px';
+    canvas.style.height = totalH + 'px';
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.scale(dpr, dpr);
+
+    ctx.fillStyle = '#faf8f5';
+    ctx.fillRect(0, 0, W, totalH);
+    ctx.strokeStyle = '#1a1a1a';
+    ctx.lineWidth = 3;
+    ctx.strokeRect(8, 8, W - 16, totalH - 16);
+
+    ctx.fillStyle = '#1e2a4a';
+    ctx.fillRect(12, 12, W - 24, headerH);
+    ctx.fillStyle = '#d4a843';
+    ctx.fillRect(12, 12 + headerH - 4, W - 24, 4);
+
+    ctx.fillStyle = '#ffffff';
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 20px system-ui, sans-serif';
+    ctx.fillText(`الدورات المؤرشفة — فلتر: ${filterLabel}`, W / 2, 45);
+    ctx.font = '500 12px system-ui, sans-serif';
+    ctx.fillStyle = '#93c5fd';
+    ctx.fillText(`${filtered.length} دورة | إجمالي الحمولات: ${formatNum(grandTotalLoad)} ج.م`, W / 2, 65);
+    ctx.font = '11px system-ui, sans-serif';
+    ctx.fillStyle = '#cbd5e1';
+    ctx.fillText(`تاريخ الطباعة: ${new Date().toLocaleDateString('ar-EG')} — ${new Date().toLocaleTimeString('ar-EG')}`, W / 2, 82);
+
+    let y = headerH + 20;
+    ctx.font = 'bold 12px system-ui, sans-serif';
+
+    filtered.forEach((cycle, idx) => {
+      ctx.fillStyle = '#3b5998';
+      ctx.fillRect(padX, y, tableW, 24);
+      ctx.fillStyle = '#ffffff';
+      ctx.textAlign = 'center';
+      ctx.fillText(`دورة ${idx + 1} — ${cycle.settledAt}`, W / 2, y + 16);
+      y += 28;
+
+      ctx.fillStyle = '#1e2a4a';
+      ctx.fillRect(padX, y, tableW, 22);
+      ctx.fillStyle = '#ffffff';
+      ctx.textAlign = 'center';
+      ctx.font = 'bold 10px system-ui, sans-serif';
+      ctx.fillText('📦 الحمولات', W / 2, y + 15);
+      y += 24;
+
+      (cycle.loads || []).forEach((l: any, i: number) => {
+        ctx.fillStyle = i % 2 === 0 ? '#ffffff' : '#f1f5f9';
+        ctx.fillRect(padX, y, tableW, rowH);
+        ctx.strokeStyle = '#e2e8f0';
+        ctx.lineWidth = 0.5;
+        ctx.strokeRect(padX, y, tableW, rowH);
+        ctx.fillStyle = '#1a1a1a';
+        ctx.textAlign = 'right';
+        ctx.font = '11px system-ui, sans-serif';
+        ctx.fillText(`${l.productName} (${l.weightSize}) — ${l.cartons} كرتونة — ${formatNum(l.subtotal)} ج.م`, W - padX - 10, y + 19);
+        y += rowH;
+      });
+
+      if ((cycle.payments || []).length > 0) {
+        ctx.fillStyle = '#f59e0b';
+        ctx.fillRect(padX, y, tableW, 22);
+        ctx.fillStyle = '#ffffff';
+        ctx.textAlign = 'center';
+        ctx.font = 'bold 10px system-ui, sans-serif';
+        ctx.fillText('💳 الدفعات', W / 2, y + 15);
+        y += 24;
+
+        (cycle.payments || []).forEach((p: any, i: number) => {
+          ctx.fillStyle = i % 2 === 0 ? '#ffffff' : '#fef3c7';
+          ctx.fillRect(padX, y, tableW, rowH);
+          ctx.strokeStyle = '#e2e8f0';
+          ctx.strokeRect(padX, y, tableW, rowH);
+          ctx.fillStyle = '#059669';
+          ctx.textAlign = 'right';
+          ctx.font = 'bold 11px system-ui, sans-serif';
+          ctx.fillText(`${p.notes || 'تسديد مباشر'} — ${formatNum(p.amount)} ج.م`, W - padX - 10, y + 19);
+          y += rowH;
+        });
+      }
+      y += 10;
+    });
+
+    y += 10;
+    ctx.fillStyle = '#1e2a4a';
+    ctx.fillRect(padX, y, tableW, summaryRowH);
+    ctx.fillStyle = '#ffffff';
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 13px system-ui, sans-serif';
+    const net = grandTotalLoad - grandTotalPayments;
+    ctx.fillText(`إجمالي الحمولات: ${formatNum(grandTotalLoad)} ج.م | الدفعات: ${formatNum(grandTotalPayments)} ج.م | المتبقي: ${formatNum(net)} ج.م`, W / 2, y + 25);
+
+    y += summaryRowH + 15;
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = '11px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(`تم التصدير من نظام تتبع المبيعات — ${new Date().toLocaleDateString('ar-EG')}`, W / 2, y);
+
+    const link = document.createElement('a');
+    link.download = `الدورات_المؤرشفة_${filterLabel}_${new Date().toISOString().substring(0, 10)}.png`;
+    link.href = canvas.toDataURL('image/png');
+    link.click();
+    showToast('✓ تم تنزيل صورة الدورات المفلترة!');
+  };
+
   // ── Professional trips exports (pending) ──
   const downloadPendingTripsImage = () => {
     const pendingTrips = (trips || []).filter(t => !t.collected);
@@ -3149,10 +3641,14 @@ export default function FactoryTab({
     const totalH = headerH + 10 + 32 + pendingTrips.length * rowH + summaryRowH + 15 + 120 + footerH + 30;
 
     const canvas = document.createElement('canvas');
-    canvas.width = W;
-    canvas.height = totalH;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = W * dpr;
+    canvas.height = totalH * dpr;
+    canvas.style.width = W + 'px';
+    canvas.style.height = totalH + 'px';
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
+    ctx.scale(dpr, dpr);
     ctx.direction = 'rtl';
 
     const roundRect = (c: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) => {
@@ -3372,10 +3868,14 @@ export default function FactoryTab({
     const totalH = headerH + 10 + 32 + filteredArchiveTrips.length * rowH + summaryRowH + 15 + 120 + footerH + 30;
 
     const canvas = document.createElement('canvas');
-    canvas.width = W;
-    canvas.height = totalH;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = W * dpr;
+    canvas.height = totalH * dpr;
+    canvas.style.width = W + 'px';
+    canvas.style.height = totalH + 'px';
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
+    ctx.scale(dpr, dpr);
     ctx.direction = 'rtl';
 
     const roundRect = (c: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) => {
@@ -3600,10 +4100,14 @@ export default function FactoryTab({
     }
 
     const canvas = document.createElement('canvas');
-    canvas.width = 900;
-    canvas.height = 250 + list.length * 60 + 200; // Dynamic height with stable margins
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = W * dpr;
+    canvas.height = totalH * dpr;
+    canvas.style.width = W + 'px';
+    canvas.style.height = totalH + 'px';
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
+    ctx.scale(dpr, dpr);
     ctx.direction = 'rtl';
 
     // Build solid background
@@ -3805,10 +4309,14 @@ export default function FactoryTab({
     const totalH = headerH + 10 + loadsTableH + summaryRowH + 15 + bottomBoxH + footerH + 30;
 
     const canvas = document.createElement('canvas');
-    canvas.width = W;
-    canvas.height = totalH;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = W * dpr;
+    canvas.height = totalH * dpr;
+    canvas.style.width = W + 'px';
+    canvas.style.height = totalH + 'px';
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
+    ctx.scale(dpr, dpr);
     ctx.direction = 'rtl';
 
     const roundRect = (c: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) => {
@@ -4024,10 +4532,10 @@ export default function FactoryTab({
 
     ctx.font = 'bold 28px system-ui, sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillStyle = netDue > 0 ? '#dc2626' : '#059669';
+    ctx.fillStyle = netDue > 0 ? '#dc2626' : netDue === 0 ? '#059669' : '#4f46e5';
     ctx.fillText(`${Math.abs(netDue).toLocaleString('ar-EG')} ج.م`, leftBoxX + leftBoxW / 2, y + 80);
     ctx.font = 'bold 13px system-ui, sans-serif';
-    ctx.fillText(netDue > 0 ? 'يجب سداد المبلغ أعلاه' : netDue === 0 ? '*تم تسوية الحساب بالكامل*' : 'رصيد دائن لصالح المصنع', leftBoxX + leftBoxW / 2, y + 110);
+    ctx.fillText(netDue > 0 ? 'يجب سداد المبلغ أعلاه' : netDue === 0 ? '*تم تسوية الحساب بالكامل*' : 'رصيد دائن لصالحنا (دفعات زائدة)', leftBoxX + leftBoxW / 2, y + 110);
 
     y += bottomBoxH + 20;
 
@@ -4099,7 +4607,7 @@ export default function FactoryTab({
     const totalDirectPayments = filteredArchiveExtraPayments.reduce((sum, p) => sum + (p.amount - (p.appliedToCarriedDebt || 0)), 0);
     const netDue = totalSoldValue - totalAdvanceAmounts - totalDirectPayments;
     const netColor = netDue > 0 ? '#dc2626' : netDue === 0 ? '#059669' : '#4f46e5';
-    const netText = netDue > 0 ? `${netDue.toLocaleString('ar-EG')} ج.م — يجب سداد المبلغ` : netDue === 0 ? '٠.٠٠ ج.م — *تم تسوية الحساب بالكامل*' : `${Math.abs(netDue).toLocaleString('ar-EG')} ج.م — رصيد دائن لصالح المصنع`;
+    const netText = netDue > 0 ? `${netDue.toLocaleString('ar-EG')} ج.م — يجب سداد المبلغ` : netDue === 0 ? '٠.٠٠ ج.م — *تم تسوية الحساب بالكامل*' : `${Math.abs(netDue).toLocaleString('ar-EG')} ج.م — رصيد دائن لصالحنا (دفعات زائدة)`;
 
     const html = `<html dir="rtl" lang="ar"><head><style>
       @media print{@page{size:A4;margin:10mm}body{margin:0;-webkit-print-color-adjust:exact;print-color-adjust:exact}}
@@ -4181,7 +4689,7 @@ export default function FactoryTab({
             <div class="box-header">صافي المستحق (المتبقي)</div>
             <div class="box-body-white" style="display:flex;flex-direction:column;align-items:center;justify-content:center">
               <div style="font-size:32px;font-weight:bold;color:${netColor};margin:8px 0">${Math.abs(netDue).toLocaleString('ar-EG')} ج.م</div>
-              <div style="font-size:13px;font-weight:bold;color:${netColor}">${netDue > 0 ? 'يجب سداد المبلغ أعلاه' : netDue === 0 ? '*تم تسوية الحساب بالكامل*' : 'رصيد دائن لصالح المصنع'}</div>
+              <div style="font-size:13px;font-weight:bold;color:${netColor}">${netDue > 0 ? 'يجب سداد المبلغ أعلاه' : netDue === 0 ? '*تم تسوية الحساب بالكامل*' : 'رصيد دائن لصالحنا'}</div>
             </div>
           </div>
         </div>
@@ -4873,96 +5381,6 @@ export default function FactoryTab({
                     </select>
                   </div>
                 )}
-
-                <div className="grid grid-cols-5 bg-[#FFFFFF] border border-slate-205 p-1 rounded-xl text-center gap-1">
-                  <button
-                    type="button"
-                    onClick={() => { setArchiveFilter('all'); setArchiveDayFilters([]); }}
-                    className={`py-1.5 px-0.5 rounded-lg text-[10.5px] font-bold transition-all cursor-pointer ${
-                      archiveFilter === 'all' ? 'bg-[#FFFFFF] text-[#1A365D] border-b-2 border-[#DD6B20] shadow-sm' : 'text-[#9CA3AF] hover:bg-slate-55'
-                    }`}
-                  >
-                    الكل
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => { setArchiveFilter('daily'); setArchiveDayFilters([]); }}
-                    className={`py-1.5 px-0.5 rounded-lg text-[10.5px] font-bold transition-all cursor-pointer ${
-                      archiveFilter === 'daily' ? 'bg-[#FFFFFF] text-[#1A365D] border-b-2 border-[#DD6B20] shadow-sm' : 'text-[#9CA3AF] hover:bg-slate-55'
-                    }`}
-                  >
-                    يومي
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => { setArchiveFilter('weekly'); setArchiveDayFilters([]); }}
-                    className={`py-1.5 px-0.5 rounded-lg text-[10.5px] font-bold transition-all cursor-pointer ${
-                      archiveFilter === 'weekly' ? 'bg-[#FFFFFF] text-[#1A365D] border-b-2 border-[#DD6B20] shadow-sm' : 'text-[#9CA3AF] hover:bg-slate-55'
-                    }`}
-                  >
-                    أسبوعي
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => { setArchiveFilter('monthly'); setArchiveDayFilters([]); }}
-                    className={`py-1.5 px-0.5 rounded-lg text-[10.5px] font-bold transition-all cursor-pointer ${
-                      archiveFilter === 'monthly' ? 'bg-[#FFFFFF] text-[#1A365D] border-b-2 border-[#DD6B20] shadow-sm' : 'text-[#9CA3AF] hover:bg-slate-55'
-                    }`}
-                  >
-                    شهري
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => { setArchiveFilter('custom'); setArchiveDayFilters([]); }}
-                    className={`py-1.5 px-0.5 rounded-lg text-[10.5px] font-bold transition-all cursor-pointer ${
-                      archiveFilter === 'custom' ? 'bg-[#FFFFFF] text-[#1A365D] border-b-2 border-[#DD6B20] shadow-sm' : 'text-[#9CA3AF] hover:bg-slate-55'
-                    }`}
-                  >
-                    مخصص
-                  </button>
-                </div>
-
-                {archiveFilter === 'weekly' && (
-                  <div className="flex bg-[#FFFFFF] border border-slate-200 rounded-lg overflow-hidden flex-wrap gap-px p-0.5 animate-fade-in" dir="rtl">
-                    <button onClick={() => setArchiveDayFilters([])} className={`flex-1 text-[10px] py-1.5 rounded font-bold transition-colors ${archiveDayFilters.length === 0 ? 'bg-[#1A365D] text-white shadow-xs' : 'text-slate-600 hover:bg-slate-100 bg-white'}`}>الكل</button>
-                    {['Saturday', 'Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'].map(day => {
-                       const arabicDays: Record<string, string> = { 'Saturday':'السبت', 'Sunday':'الأحد', 'Monday':'الإثنين', 'Tuesday':'الثلاثاء', 'Wednesday':'الأربعاء', 'Thursday':'الخميس', 'Friday':'الجمعة' };
-                       return (
-                         <button
-                           key={day}
-                           onClick={() => setArchiveDayFilters(prev => prev.includes(day) ? prev.filter(d => d !== day) : [...prev, day])}
-                           className={`flex-1 text-[10px] py-1.5 rounded font-bold transition-colors ${archiveDayFilters.includes(day) ? 'bg-[#1A365D] text-white shadow-xs' : 'text-slate-600 hover:bg-slate-100 bg-white'}`}
-                         >
-                           {arabicDays[day]}
-                         </button>
-                       )
-                    })}
-                  </div>
-                )}
-
-                {/* Date Inputs if Custom is selected */}
-                {archiveFilter === 'custom' && (
-                  <div className="grid grid-cols-2 gap-2 animate-fade-in">
-                    <div>
-                      <label className="block text-[10px] text-gray-400 font-bold mb-0.5">من تاريخ</label>
-                      <input
-                        type="date"
-                        value={archiveStartDate}
-                        onChange={(e) => setArchiveStartDate(e.target.value)}
-                        className="w-full bg-[#FFFFFF] border border-slate-200 rounded-lg py-1 px-2 text-xs font-bold text-[#1A365D]"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[10px] text-gray-400 font-bold mb-0.5">إلى تاريخ</label>
-                      <input
-                        type="date"
-                        value={archiveEndDate}
-                        onChange={(e) => setArchiveEndDate(e.target.value)}
-                        className="w-full bg-[#FFFFFF] border border-slate-200 rounded-lg py-1 px-2 text-xs font-bold text-[#1A365D]"
-                      />
-                    </div>
-                  </div>
-                )}
               </div>
 
               {/* Archived cycles from localStorage (settled zero-balance snapshots) */}
@@ -4970,7 +5388,7 @@ export default function FactoryTab({
                 <div className="flex flex-col gap-3 animate-fade-in">
                   <span className="text-xs font-black text-indigo-800 flex items-center gap-1.5 border-b border-indigo-100 pb-2">
                     <Archive className="h-4 w-4 text-indigo-500" />
-                    الدورات المؤرشفة (تمت تسويتها بالكامل)
+                    الدورات المؤرشفة ({archiveCycles.length} دورة)
                   </span>
                   <span className="text-[10px] font-bold text-slate-500 block">بيانات التحميل والبيع</span>
                   {archiveCycles.length > 1 && (
@@ -4993,17 +5411,39 @@ export default function FactoryTab({
                       </button>
                     </div>
                   )}
-                  {archiveCycles.map(cycle => (
+                  {archiveFilter !== 'all' && (
+                    <div className="flex gap-2 w-full">
+                      <button
+                        type="button"
+                        onClick={downloadFilteredArchivePDF}
+                        className="flex-1 bg-indigo-700 hover:bg-indigo-800 text-white py-2 rounded-xl text-xs font-extrabold flex items-center justify-center gap-1.5 active:scale-95 transition-all shadow-xs cursor-pointer"
+                      >
+                        <Printer className="h-4 w-4" />
+                        <span>تنزيل الدورات المفلترة (PDF)</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={downloadFilteredArchiveImage}
+                        className="flex-1 bg-amber-600 hover:bg-amber-700 text-white py-2 rounded-xl text-xs font-extrabold flex items-center justify-center gap-1.5 active:scale-95 transition-all shadow-xs cursor-pointer"
+                      >
+                        <Image className="h-4 w-4" />
+                        <span>تنزيل صورة الدورات المفلترة</span>
+                      </button>
+                    </div>
+                  )}
+                  {archiveCycles.map((cycle, cycleIdx) => (
                     <details key={cycle.id} className="bg-gradient-to-r from-indigo-50 to-white border border-indigo-200 rounded-xl overflow-hidden shadow-sm">
                       <summary className="px-4 py-3 flex items-center justify-between gap-3 cursor-pointer hover:bg-indigo-100/50 transition-colors select-none">
                         <div className="flex items-center gap-2 text-xs font-bold">
                           <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
-                          <span className="text-indigo-900">دورة مؤرشفة — {cycle.settledAt}</span>
+                          <span className="bg-indigo-600 text-white px-2 py-0.5 rounded-full text-[10px] font-black ml-1">دورة {archiveCycles.length - cycleIdx}</span>
+                          <span className="text-indigo-900">{cycle.settledAt}</span>
                         </div>
                         <div className="flex items-center gap-3 text-[10px]">
                           <span className="text-slate-600">{cycle.loads?.length || 0} حمولة</span>
                           <span className="text-slate-600">{cycle.payments?.length || 0} دفعة</span>
                           {cycle.creditBalance > 0 && <span className="text-amber-600 font-extrabold">رصيد دائن: {formatNum(cycle.creditBalance)} ج.م</span>}
+                          {(cycle as any).waivedAmount > 0 && <span className="text-rose-600 font-extrabold">مبلغ مسموح: {formatNum((cycle as any).waivedAmount)} ج.م</span>}
                         </div>
                       </summary>
                       <div className="px-4 pb-4 pt-2 border-t border-indigo-100 flex flex-col gap-3">
@@ -5029,6 +5469,19 @@ export default function FactoryTab({
                             className="bg-[#6366F1] hover:bg-[#4F46E5] text-white font-extrabold text-[10px] py-1.5 px-3 rounded-lg transition-colors cursor-pointer active:scale-95 flex items-center gap-1"
                           >
                             <Edit className="h-3 w-3" /> تعديل
+                          </button>
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              const confirmed = await confirmDialog(`هل تريد رجوع الدورة رقم ${archiveCycles.length - cycleIdx} للدورة الحالية؟\n⚠️ سيتم حذف هذه الدورة من الأرشيف. الحمولات والدفعات ستظهر مجدداً في الحساب.`);
+                              if (confirmed) {
+                                setArchiveCycles(prev => prev.filter(c => c.id !== cycle.id));
+                                showToast('✓ تم رجوع الدورة من الأرشيف! الحمولات والدفعات ستظهر في الحساب.');
+                              }
+                            }}
+                            className="bg-amber-500 hover:bg-amber-600 text-white font-extrabold text-[10px] py-1.5 px-3 rounded-lg transition-colors cursor-pointer active:scale-95 flex items-center gap-1"
+                          >
+                            <RefreshCw className="h-3 w-3" /> رجوع
                           </button>
                         </div>
                         {/* Loads in this cycle */}
@@ -5076,6 +5529,7 @@ export default function FactoryTab({
                                     <th className="p-1.5 text-center">المبلغ</th>
                                     <th className="p-1.5 text-center">المندوب</th>
                                     <th className="p-1.5 text-center">المستلم</th>
+                                    <th className="p-1.5 text-center w-10">تعديل</th>
                                   </tr>
                                 </thead>
                                 <tbody>
@@ -5086,6 +5540,31 @@ export default function FactoryTab({
                                       <td className="p-1.5 text-center font-extrabold text-emerald-700">{formatNum(pay.amount)} ج.م</td>
                                       <td className="p-1.5 text-center">{pay.delegateName || '-'}</td>
                                       <td className="p-1.5 text-center">{pay.recipient ? `السيد / ${pay.recipient}` : '-'}</td>
+                                      <td className="p-1.5 text-center">
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            const newAmount = prompt('تعديل مبلغ السداد:', pay.amount);
+                                            if (newAmount === null) return;
+                                            const parsed = parseFloat(newAmount);
+                                            if (isNaN(parsed) || parsed < 0) { showToast('⚠️ مبلغ غير صحيح!'); return; }
+                                            const newNotes = prompt('تعديل البيان:', pay.notes || '') || pay.notes;
+                                            const newRecipient = prompt('تعديل المستلم:', pay.recipient || '') || pay.recipient;
+                                            setArchiveCycles(prev => prev.map(c => {
+                                              if (c.id !== cycle.id) return c;
+                                              const updatedPayments = [...(c.payments || [])];
+                                              updatedPayments[i] = { ...updatedPayments[i], amount: parsed, notes: newNotes, recipient: newRecipient };
+                                              const totalPayments = updatedPayments.reduce((s: number, p: any) => s + (p.amount || 0), 0);
+                                              return { ...c, payments: updatedPayments, totalAdvancePayments: totalPayments };
+                                            }));
+                                            showToast('✓ تم تعديل الدفعة في الدورة المؤرشفة!');
+                                          }}
+                                          className="text-indigo-600 hover:text-indigo-800 bg-white hover:bg-indigo-50 p-1 rounded border border-slate-200 cursor-pointer transition-all active:scale-95"
+                                          title="تعديل هذه الدفعة"
+                                        >
+                                          <Edit className="h-3 w-3" />
+                                        </button>
+                                      </td>
                                     </tr>
                                   ))}
                                 </tbody>
@@ -5094,14 +5573,20 @@ export default function FactoryTab({
                           </div>
                         )}
                         {/* Cycle summary */}
-                        <div className="bg-indigo-100/50 rounded-lg p-3 flex items-center justify-between text-xs font-bold">
-                          <span className="text-slate-600">مسحوبات خام: {formatNum(cycle.rawLoadedValue || cycle.loads?.reduce?.((s: number, l: any) => s + l.subtotal, 0) || 0)} ج.م</span>
-                          <span className="text-emerald-700">مسدد: {formatNum(cycle.totalAdvancePayments)} ج.م</span>
-                          {cycle.creditBalance > 0 ? (
-                            <span className="text-amber-600">رصيد دائن: {formatNum(cycle.creditBalance)} ج.م</span>
-                          ) : (
-                            <span className="text-green-700">✅ مصفاة</span>
-                          )}
+                        <div className="bg-indigo-100/50 rounded-lg p-3 flex flex-col gap-2 text-xs font-bold">
+                          <div className="flex items-center justify-between">
+                            <span className="text-slate-600">قيمة المحمل من المصنع: {formatNum(cycle.rawLoadedValue || cycle.loads?.reduce?.((s: number, l: any) => s + l.subtotal, 0) || 0)} ج.م</span>
+                            <span className="text-emerald-700">مسدد: {formatNum(cycle.totalAdvancePayments)} ج.م</span>
+                          </div>
+                          <div className="flex items-center justify-between">
+                            {cycle.creditBalance > 0 ? (
+                              <span className="text-amber-600">رصيد دائن منقول للدورة التالية: {formatNum(cycle.creditBalance)} ج.م</span>
+                            ) : (cycle as any).waivedAmount > 0 ? (
+                              <span className="text-rose-600">مبلغ مسموح به (أسقط من المديونية): {formatNum((cycle as any).waivedAmount)} ج.م</span>
+                            ) : (
+                              <span className="text-green-700">✅ تم التسوية بالكامل</span>
+                            )}
+                          </div>
                         </div>
                       </div>
                     </details>
@@ -5139,102 +5624,106 @@ export default function FactoryTab({
                     <p className="text-xs text-gray-400 mt-1">جرب تغيير محدد الفترة أو تسجيل شحنات جديدة.</p>
                   </div>
                 ) : (
-                  [...filteredLoads].map((load) => {
-                    const prod = products.find(p => String(p.id).trim() === String(load.productId).trim());
-                    const weights = prod ? getProductWeightsFallback(prod) : [];
-                    const weight = weights.find(w => String(w.id).trim() === String(load.weightId).trim()) || weights[0];
-                    const pName = prod ? prod.name : ((load as any).productName || 'صنف مجهول');
-                    const wSize = weight ? weight.size : ((load as any).weightSize || 'حجم مبدئي');
-                    const accountingUnitLabel = prod?.accountingUnit || 'كرتونة';
-
-                    const cartonPrice = load.cartonPrice !== undefined ? Number(load.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) : 0) || 0);
-                    const loadedCartons = Number((load.cartonsCount !== undefined ? load.cartonsCount : (load.quantity / (weight?.unitsPerCarton || 12))).toFixed(3));
-                    const totalLoadedValue = loadedCartons * cartonPrice;
-
-                    // Calculate total quantity sold for this specific product + weight variant in all client invoices
-                    let totalUnitsSold = 0;
-                    invoices.forEach(inv => {
-                      inv.items.forEach(item => {
-                        if (item.productId === load.productId && item.weightId === load.weightId) {
-                          totalUnitsSold += item.quantity;
-                        }
-                      });
-                    });
-
-                    // Format sold quantity in the configured unit format (cartons)
-                    const cartonsSold = Number((totalUnitsSold / (weight?.unitsPerCarton || 12)).toFixed(3));
-                    const soldStr = cartonsSold > 0
-                      ? `${cartonsSold} ${accountingUnitLabel}`
-                      : 'لم يتم بيع شيء بعد';
-
+                  groupedLoadsByDate.map(([dateKey, loadsForDay]) => {
                     const daysOfWeek = ["الأحد", "الاثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت"];
-                    const loadDateObj = new Date(load.date);
-                    const dayName = daysOfWeek[loadDateObj.getDay()];
-                    const formattedDate = loadDateObj.toLocaleDateString('ar-EG', {
+                    const dateObj = new Date(dateKey + 'T12:00:00');
+                    const dayName = daysOfWeek[dateObj.getDay()];
+                    const formattedDate = dateObj.toLocaleDateString('ar-EG', {
                       year: 'numeric',
                       month: 'long',
                       day: 'numeric'
                     });
-                    const formattedTime = loadDateObj.toLocaleTimeString('ar-EG', {
-                      hour: '2-digit',
-                      minute: '2-digit'
-                    });
+
+                    const dayTotalValue = loadsForDay.reduce((sum, load) => {
+                      const prod = products.find(p => String(p.id).trim() === String(load.productId).trim());
+                      const weights = prod ? getProductWeightsFallback(prod) : [];
+                      const weight = weights.find(w => String(w.id).trim() === String(load.weightId).trim()) || weights[0];
+                      const cartonPrice = load.cartonPrice !== undefined ? Number(load.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || 0);
+                      const loadedCartons = load.cartonsCount !== undefined ? load.cartonsCount : (load.quantity / (weight?.unitsPerCarton || 12));
+                      return sum + (loadedCartons * cartonPrice);
+                    }, 0);
+                    
+                    const dayTotalAdvance = loadsForDay.reduce((sum, load) => sum + (load.advanceAmount || 0), 0);
 
                     return (
-                      <div key={'prev_load_' + load.id} className="bg-[#F7FAFC] hover:bg-[#F7FAFC]/50 border border-slate-200 rounded-2xl p-4 flex flex-col gap-3.5 shadow-sm transition-all md:p-5">
-                        {/* Day and Date header */}
-                        <div className="flex justify-between items-center border-b border-slate-150 pb-2">
-                          <span className="text-[11px] font-black text-indigo-950 bg-indigo-50 border border-indigo-100 rounded-lg px-2.5 py-1 flex items-center gap-1">
-                            <span className="h-1.5 w-1.5 bg-indigo-500 rounded-full"></span>
-                            {dayName}، {formattedDate} • {formattedTime}
-                          </span>
-                          
-                          <button
-                            type="button"
-                            onClick={() => {
-                              onDeleteLoad(load.id);
-                            }}
-                            title="حذف الشحنة من الأرشيف"
-                            className="bg-rose-50 hover:bg-rose-100 text-rose-500 hover:text-rose-700 p-1.5 rounded-lg active:scale-95 transition-all cursor-pointer border border-rose-100"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </button>
-                        </div>
+                      <details
+                        key={'archive_day_' + dateKey}
+                        open={openArchiveDay === dateKey}
+                        className="bg-gradient-to-r from-slate-50 to-white border border-slate-200 rounded-xl overflow-hidden shadow-sm transition-all"
+                      >
+                        <summary
+                          onClick={(e) => {
+                            e.preventDefault();
+                            setOpenArchiveDay(openArchiveDay === dateKey ? null : dateKey);
+                          }}
+                          className="px-4 py-3 flex items-center justify-between gap-3 cursor-pointer hover:bg-slate-100/60 transition-colors select-none"
+                        >
+                          <div className="flex items-center gap-2 text-xs font-black text-indigo-950">
+                            <Clock className="h-4 w-4 text-indigo-600 shrink-0" />
+                            <span>شحنة يوم {dayName} — {formattedDate}</span>
+                            <span className="bg-indigo-100 text-indigo-800 text-[10px] px-2 py-0.5 rounded-full font-bold">{loadsForDay.length} أصناف</span>
+                          </div>
+                          <div className="flex items-center gap-4 text-[10.5px] font-bold">
+                            <span className="text-[#1A365D]">إجمالي: {formatNum(dayTotalValue)} ج.م</span>
+                            <span className="text-emerald-700">المقدم: {formatNum(dayTotalAdvance)} ج.م</span>
+                          </div>
+                        </summary>
+                        <div className="px-4 pb-4 pt-2 border-t border-slate-150/65 flex flex-col gap-3 bg-white">
+                          <div className="overflow-x-auto border border-slate-200 rounded-xl">
+                            <table className="w-full text-[10px] font-bold text-slate-800">
+                              <thead className="bg-slate-100 sticky top-0 text-slate-600">
+                                <tr>
+                                  <th className="p-2 text-right">الصنف</th>
+                                  <th className="p-2 text-center">الكمية</th>
+                                  <th className="p-2 text-center">سعر الكرتونة</th>
+                                  <th className="p-2 text-center">القيمة الإجمالية</th>
+                                  <th className="p-2 text-center">المقدم المدفوع</th>
+                                  <th className="p-2 text-center w-8">إجراء</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {loadsForDay.map((load, i) => {
+                                  const prod = products.find(p => String(p.id).trim() === String(load.productId).trim());
+                                  const weights = prod ? getProductWeightsFallback(prod) : [];
+                                  const weight = weights.find(w => String(w.id).trim() === String(load.weightId).trim()) || weights[0];
+                                  const pName = prod ? prod.name : ((load as any).productName || 'صنف مجهول');
+                                  const wSize = weight ? weight.size : ((load as any).weightSize || 'حجم مبدئي');
+                                  const accountingUnitLabel = prod?.accountingUnit || 'كرتونة';
 
-                        {/* Product info description */}
-                        <div className="flex justify-between items-start gap-2">
-                          <div>
-                            <span className="block font-black text-[#1A365D] text-sm">{pName}</span>
-                            <span className="block text-[11px] text-[#2B6CB0] font-bold mt-0.5">الوزن / الحجم: {wSize}</span>
-                            {load.delegateName && (
-                              <span className="inline-block text-[10px] text-indigo-700 bg-indigo-50 px-1.5 py-0.5 rounded font-bold mt-1 border border-indigo-100">
-                          المندوب: {load.delegateName.replace(/ \(.*?\)/g, '').trim()} {load.delegatePhone ? `(${load.delegatePhone})` : ''}
-                              </span>
-                            )}
-                          </div>
-                          <span className="text-xs bg-indigo-100/60 text-indigo-950 px-2.5 py-1 rounded-md font-extrabold border border-indigo-200/55 font-mono">
-                            سعر المصنع للكرتونة: {cartonPrice}ج.م
-                          </span>
-                        </div>
+                                  const cartonPrice = load.cartonPrice !== undefined ? Number(load.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || 0);
+                                  const loadedCartons = Number((load.cartonsCount !== undefined ? load.cartonsCount : (load.quantity / (weight?.unitsPerCarton || 12))).toFixed(3));
+                                  const totalLoadedValue = loadedCartons * cartonPrice;
 
-                        {/* Cargo analysis matrix: Drawn, Sold, Paid */}
-                        <div className="flex flex-wrap items-center justify-between gap-2 mt-1 border-t border-slate-100 pt-3">
-                          <div className="flex flex-col">
-                            <span className="text-[10px] text-[#2B6CB0] font-bold">الكمية المحملة</span>
-                            <span className="text-sm font-black text-[#1A365D]">{loadedCartons} {accountingUnitLabel}</span>
-                          </div>
-                          <div className="flex flex-col items-center">
-                            <span className="text-[10px] text-[#2B6CB0] font-bold">إجمالي السعر</span>
-                            <span className="text-sm font-black text-[#1A365D]">{totalLoadedValue.toLocaleString('ar-EG', {minimumFractionDigits: 2, maximumFractionDigits: 2})}ج.م</span>
-                          </div>
-                          <div className="flex flex-col items-end">
-                            <span className="text-[10px] text-[#2B6CB0] font-bold">المسدد (مقدم)</span>
-                            <span className="text-sm font-black text-[#DD6B20]">{(load.advanceAmount || 0).toLocaleString('ar-EG', {minimumFractionDigits: 2, maximumFractionDigits: 2})}ج.م</span>
+                                  return (
+                                    <tr key={load.id || i} className="border-t border-slate-100 hover:bg-slate-50/50">
+                                      <td className="p-2 text-right text-[#1A365D]">
+                                        <div>{pName}</div>
+                                        <div className="text-[9px] text-[#2B6CB0] font-medium">الوزن / الحجم: {wSize}</div>
+                                      </td>
+                                      <td className="p-2 text-center">{loadedCartons} {accountingUnitLabel}</td>
+                                      <td className="p-2 text-center">{formatNum(cartonPrice)} ج.م</td>
+                                      <td className="p-2 text-center font-extrabold text-indigo-950">{formatNum(totalLoadedValue)} ج.م</td>
+                                      <td className="p-2 text-center text-emerald-700">{formatNum(load.advanceAmount || 0)} ج.م</td>
+                                      <td className="p-2 text-center">
+                                        <button
+                                          type="button"
+                                          onClick={() => onDeleteLoad(load.id)}
+                                          title="حذف الشحنة"
+                                          className="text-rose-500 hover:text-rose-700 p-1 rounded hover:bg-rose-50 transition-colors"
+                                        >
+                                          <Trash2 className="h-3.5 w-3.5" />
+                                        </button>
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
                           </div>
                         </div>
-                      </div>
+                      </details>
                     );
-                  }                  )
+                  })
                 )}
 
                 {filteredArchiveExtraPayments.length > 0 && (
@@ -5243,16 +5732,147 @@ export default function FactoryTab({
                       <History className="h-4 w-4 text-emerald-500" />
                       أرشيف الدفعات النقدية والمسددات المباشرة للمورد
                     </span>
+                    <div className="grid grid-cols-5 bg-[#F7FAFC] border border-slate-200 p-1 rounded-xl text-center gap-1">
+                      <button type="button" onClick={() => { setArchiveFilter('all'); setArchiveDayFilters([]); }} className={`py-1.5 px-0.5 rounded-lg text-[10.5px] font-bold transition-all cursor-pointer ${archiveFilter === 'all' ? 'bg-[#FFFFFF] text-[#1A365D] border-b-2 border-[#DD6B20] shadow-sm' : 'text-[#9CA3AF] hover:bg-slate-55'}`}>الكل</button>
+                      <button type="button" onClick={() => { setArchiveFilter('daily'); setArchiveDayFilters([]); }} className={`py-1.5 px-0.5 rounded-lg text-[10.5px] font-bold transition-all cursor-pointer ${archiveFilter === 'daily' ? 'bg-[#FFFFFF] text-[#1A365D] border-b-2 border-[#DD6B20] shadow-sm' : 'text-[#9CA3AF] hover:bg-slate-55'}`}>يومي</button>
+                      <button type="button" onClick={() => { setArchiveFilter('weekly'); setArchiveDayFilters([]); }} className={`py-1.5 px-0.5 rounded-lg text-[10.5px] font-bold transition-all cursor-pointer ${archiveFilter === 'weekly' ? 'bg-[#FFFFFF] text-[#1A365D] border-b-2 border-[#DD6B20] shadow-sm' : 'text-[#9CA3AF] hover:bg-slate-55'}`}>أسبوعي</button>
+                      <button type="button" onClick={() => { setArchiveFilter('monthly'); setArchiveDayFilters([]); }} className={`py-1.5 px-0.5 rounded-lg text-[10.5px] font-bold transition-all cursor-pointer ${archiveFilter === 'monthly' ? 'bg-[#FFFFFF] text-[#1A365D] border-b-2 border-[#DD6B20] shadow-sm' : 'text-[#9CA3AF] hover:bg-slate-55'}`}>شهري</button>
+                      <button type="button" onClick={() => { setArchiveFilter('custom'); setArchiveDayFilters([]); }} className={`py-1.5 px-0.5 rounded-lg text-[10.5px] font-bold transition-all cursor-pointer ${archiveFilter === 'custom' ? 'bg-[#FFFFFF] text-[#1A365D] border-b-2 border-[#DD6B20] shadow-sm' : 'text-[#9CA3AF] hover:bg-slate-55'}`}>مخصص</button>
+                    </div>
+                    {archiveFilter === 'weekly' && (
+                      <div className="flex bg-[#F7FAFC] border border-slate-200 rounded-lg overflow-hidden flex-wrap gap-px p-0.5 animate-fade-in" dir="rtl">
+                        <button onClick={() => setArchiveDayFilters([])} className={`flex-1 text-[10px] py-1.5 rounded font-bold transition-colors ${archiveDayFilters.length === 0 ? 'bg-[#1A365D] text-white shadow-xs' : 'text-slate-600 hover:bg-slate-100 bg-white'}`}>الكل</button>
+                        {['Saturday', 'Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'].map(day => {
+                           const arabicDays: Record<string, string> = { 'Saturday':'السبت', 'Sunday':'الأحد', 'Monday':'الإثنين', 'Tuesday':'الثلاثاء', 'Wednesday':'الأربعاء', 'Thursday':'الخميس', 'Friday':'الجمعة' };
+                           return (
+                             <button key={day} onClick={() => setArchiveDayFilters(prev => prev.includes(day) ? prev.filter(d => d !== day) : [...prev, day])} className={`flex-1 text-[10px] py-1.5 rounded font-bold transition-colors ${archiveDayFilters.includes(day) ? 'bg-[#1A365D] text-white shadow-xs' : 'text-slate-600 hover:bg-slate-100 bg-white'}`}>{arabicDays[day]}</button>
+                           )
+                        })}
+                      </div>
+                    )}
+                    {archiveFilter === 'custom' && (
+                      <div className="grid grid-cols-2 gap-2 animate-fade-in">
+                        <div><label className="block text-[10px] text-gray-400 font-bold mb-0.5">من تاريخ</label><input type="date" value={archiveStartDate} onChange={(e) => setArchiveStartDate(e.target.value)} className="w-full bg-[#FFFFFF] border border-slate-200 rounded-lg py-1 px-2 text-xs font-bold text-[#1A365D]" /></div>
+                        <div><label className="block text-[10px] text-gray-400 font-bold mb-0.5">إلى تاريخ</label><input type="date" value={archiveEndDate} onChange={(e) => setArchiveEndDate(e.target.value)} className="w-full bg-[#FFFFFF] border border-slate-200 rounded-lg py-1 px-2 text-xs font-bold text-[#1A365D]" /></div>
+                      </div>
+                    )}
+                    {archiveFilter !== 'all' && (
+                      <div className="flex gap-2">
+                        <button type="button" onClick={() => {
+                          const filterLabel = archiveFilter === 'daily' ? 'يومي' : archiveFilter === 'weekly' ? 'أسبوعي' : archiveFilter === 'monthly' ? 'شهري' : 'مخصص';
+                          const total = filteredArchiveExtraPayments.reduce((s, p) => s + p.amount, 0);
+                          let html = `<!DOCTYPE html><html dir="rtl"><head><meta charset="utf-8"><style>body{font-family:system-ui,sans-serif;padding:20px;background:#f8fafc}table{width:100%;border-collapse:collapse;margin:10px 0}th,td{border:1px solid #cbd5e1;padding:6px 8px;font-size:12px}th{background:#1e2a4a;color:white}.summary{background:#f1f5f9;padding:15px;border-radius:12px;margin-top:15px;text-align:center;font-weight:bold}</style></head><body>
+                          <h2 style="text-align:center;color:#1e2a4a">سجل الدفعات المؤرشفة — فلتر: ${filterLabel}</h2>
+                          <p style="text-align:center;color:#64748b">عدد الدفعات: ${filteredArchiveExtraPayments.length} | تاريخ الطباعة: ${new Date().toLocaleDateString('ar-EG')}</p>
+                          <table><thead><tr><th>م</th><th>التاريخ</th><th>البيان</th><th>المبلغ</th><th>المندوب</th><th>المستلم</th></tr></thead><tbody>
+                          ${filteredArchiveExtraPayments.map((p, i) => `<tr><td style="text-align:center">${i + 1}</td><td style="text-align:center">${p.date}</td><td style="text-align:right">${p.notes || 'تسديد مباشر'}</td><td style="text-align:center;font-weight:bold;color:#059669">${formatNum(p.amount)} ج.م</td><td style="text-align:center">${p.delegateName || '-'}</td><td style="text-align:center">${p.recipient || '-'}</td></tr>`).join('')}
+                          </tbody></table>
+                          <div class="summary">إجمالي الدفعات: ${formatNum(total)} ج.م</div>
+                          <p style="text-align:center;color:#94a3b8;margin-top:20px;font-size:10px">تم التصدير من نظام تتبع المبيعات</p></body></html>`;
+                          const w = window.open('', '_blank'); if (w) { w.document.write(html); w.document.close(); setTimeout(() => w.print(), 500); }
+                        }} className="flex-1 bg-indigo-700 hover:bg-indigo-800 text-white py-1.5 rounded-lg text-[10px] font-extrabold flex items-center justify-center gap-1 active:scale-95 cursor-pointer"><Printer className="h-3 w-3" /> PDF</button>
+                        <button type="button" onClick={() => {
+                          const filterLabel = archiveFilter === 'daily' ? 'يومي' : archiveFilter === 'weekly' ? 'أسبوعي' : archiveFilter === 'monthly' ? 'شهري' : 'مخصص';
+                          const total = filteredArchiveExtraPayments.reduce((s, p) => s + p.amount, 0);
+                          const W = 700; const padX = 20; const rowH = 32; const headerH = 80; const footerH = 40;
+                          const totalH = headerH + 10 + filteredArchiveExtraPayments.length * rowH + 50 + footerH + 20;
+                          const canvas = document.createElement('canvas'); const dpr = window.devicePixelRatio || 1;
+                          canvas.width = W * dpr; canvas.height = totalH * dpr; canvas.style.width = W + 'px'; canvas.style.height = totalH + 'px';
+                          const ctx = canvas.getContext('2d'); if (!ctx) return; ctx.scale(dpr, dpr);
+                          ctx.fillStyle = '#faf8f5'; ctx.fillRect(0, 0, W, totalH); ctx.strokeStyle = '#1a1a1a'; ctx.lineWidth = 3; ctx.strokeRect(6, 6, W - 12, totalH - 12);
+                          ctx.fillStyle = '#1e2a4a'; ctx.fillRect(10, 10, W - 20, headerH); ctx.fillStyle = '#d4a843'; ctx.fillRect(10, 10 + headerH - 3, W - 20, 3);
+                          ctx.fillStyle = '#ffffff'; ctx.textAlign = 'center'; ctx.font = 'bold 18px system-ui, sans-serif';
+                          ctx.fillText(`سجل الدفعات المؤرشفة — فلتر: ${filterLabel}`, W / 2, 40);
+                          ctx.font = '500 11px system-ui, sans-serif'; ctx.fillStyle = '#93c5fd';
+                          ctx.fillText(`${filteredArchiveExtraPayments.length} دفعة | إجمالي: ${formatNum(total)} ج.م`, W / 2, 58);
+                          ctx.font = '10px system-ui, sans-serif'; ctx.fillStyle = '#cbd5e1';
+                          ctx.fillText(`تاريخ الطباعة: ${new Date().toLocaleDateString('ar-EG')}`, W / 2, 72);
+                          let y = headerH + 15;
+                          ctx.fillStyle = '#1e2a4a'; ctx.fillRect(padX, y, W - padX * 2, 20); ctx.fillStyle = '#ffffff';
+                          ctx.font = 'bold 9px system-ui, sans-serif'; ctx.textAlign = 'center';
+                          const cols = [padX + 20, padX + 100, padX + 250, padX + 370, padX + 470, padX + 560];
+                          ['م', 'التاريخ', 'البيان', 'المبلغ', 'المندوب', 'المستلم'].forEach((h, i) => { ctx.fillText(h, cols[i] + 40, y + 14); });
+                          y += 22;
+                          filteredArchiveExtraPayments.forEach((p, i) => {
+                            ctx.fillStyle = i % 2 === 0 ? '#ffffff' : '#f1f5f9';
+                            ctx.fillRect(padX, y, W - padX * 2, rowH); ctx.strokeStyle = '#e2e8f0'; ctx.lineWidth = 0.5; ctx.strokeRect(padX, y, W - padX * 2, rowH);
+                            ctx.fillStyle = '#1a1a1a'; ctx.textAlign = 'center'; ctx.font = '10px system-ui, sans-serif';
+                            ctx.fillText(String(i + 1), cols[0] + 40, y + 20); ctx.fillText(p.date || '', cols[1] + 40, y + 20);
+                            ctx.textAlign = 'right'; ctx.fillText(p.notes || 'تسديد مباشر', cols[2] + 80, y + 20);
+                            ctx.fillStyle = '#059669'; ctx.font = 'bold 10px system-ui, sans-serif'; ctx.textAlign = 'center';
+                            ctx.fillText(`${formatNum(p.amount)} ج.م`, cols[3] + 40, y + 20);
+                            ctx.fillStyle = '#1a1a1a'; ctx.font = '10px system-ui, sans-serif';
+                            ctx.fillText(p.delegateName || '-', cols[4] + 40, y + 20); ctx.fillText(p.recipient || '-', cols[5] + 40, y + 20);
+                            y += rowH;
+                          });
+                          y += 5; ctx.fillStyle = '#1e2a4a'; ctx.fillRect(padX, y, W - padX * 2, 30); ctx.fillStyle = '#ffffff';
+                          ctx.font = 'bold 11px system-ui, sans-serif'; ctx.textAlign = 'center';
+                          ctx.fillText(`إجمالي الدفعات: ${formatNum(total)} ج.م`, W / 2, y + 20);
+                          y += 40; ctx.fillStyle = '#94a3b8'; ctx.font = '10px system-ui, sans-serif';
+                          ctx.fillText(`تم التصدير من نظام تتبع المبيعات — ${new Date().toLocaleDateString('ar-EG')}`, W / 2, y);
+                          const link = document.createElement('a'); link.download = `دفعات_مؤرشفة_${filterLabel}_${new Date().toISOString().substring(0, 10)}.png`;
+                          link.href = canvas.toDataURL('image/png'); link.click();
+                        }} className="flex-1 bg-amber-600 hover:bg-amber-700 text-white py-1.5 rounded-lg text-[10px] font-extrabold flex items-center justify-center gap-1 active:scale-95 cursor-pointer"><Image className="h-3 w-3" /> صورة</button>
+                      </div>
+                    )}
                     <div className="max-h-40 overflow-y-auto custom-scroll flex flex-col gap-2">
                       {filteredArchiveExtraPayments.map(pay => (
                         <div key={pay.id} className="bg-[#F7FAFC] border border-slate-100 px-3 py-2.5 rounded-xl flex items-center justify-between text-xs font-bold text-[#1A365D] shadow-inner">
-                          <div className="flex flex-col gap-0.5">
-                            <span className="text-[#DD6B20] font-extrabold">{Number(pay.amount).toLocaleString('ar-EG', {minimumFractionDigits: 2, maximumFractionDigits: 2})}ج.م</span>
-                            <span className="text-[10px] text-[#2B6CB0] font-medium">{pay.date}</span>
-                            <span className="text-[9.5px] text-slate-600 leading-relaxed">📝 {pay.notes || 'تسديد مباشر'}{pay.delegateName ? ` • 👤 ${pay.delegateName}` : ''}</span>
-                            {pay.recipient ? <span className="text-[9px] text-indigo-600">👤 مستلم: السيد / {pay.recipient}</span> : null}
-                            {(pay.appliedToCarriedDebt || 0) > 0 && <span className="text-[9px] text-amber-600">🔄 مسدد من المديونية السابقة: {Number(pay.appliedToCarriedDebt).toLocaleString('ar-EG', {minimumFractionDigits: 2, maximumFractionDigits: 2})}ج.م</span>}
-                          </div>
+                          {editingPaymentId === pay.id ? (
+                            <div className="flex flex-col gap-2 w-full p-2 bg-indigo-50/40 rounded-lg border border-indigo-100 animate-fade-in text-right">
+                              <div className="flex gap-2">
+                                <div className="w-1/3 flex flex-col gap-1">
+                                  <label className="text-[9px] text-slate-500 font-bold">مبلغ السداد:</label>
+                                  <input type="number" placeholder="المبلغ" value={editingPaymentAmount} onChange={(e) => setEditingPaymentAmount(e.target.value)} className="w-full bg-white border border-slate-200 rounded p-1.5 text-xs text-center font-bold text-[#1A365D] focus:ring-1 focus:ring-indigo-500" />
+                                </div>
+                                <div className="w-2/3 flex flex-col gap-1">
+                                  <label className="text-[9px] text-slate-500 font-bold">البيان / ملاحظات:</label>
+                                  <input type="text" placeholder="البيان" value={editingPaymentNotes} onChange={(e) => setEditingPaymentNotes(e.target.value)} className="w-full bg-white border border-slate-200 rounded p-1.5 text-xs font-bold text-[#1A365D] focus:ring-1 focus:ring-indigo-500" />
+                                </div>
+                              </div>
+                              <div className="flex gap-2 justify-end mt-1">
+                                <button type="button" onClick={() => setEditingPaymentId(null)} className="px-3 py-1 rounded bg-slate-200 hover:bg-slate-300 text-slate-700 text-[10px] font-bold cursor-pointer transition-all active:scale-95">إلغاء</button>
+                                <button type="button" onClick={() => {
+                                  const newAmount = parseFloat(editingPaymentAmount);
+                                  if (!newAmount || newAmount <= 0) { showToast("⚠️ يرجى إدخال قيمة صحيحة!"); return; }
+                                  const oldAmount = pay.amount;
+                                  const diff = newAmount - oldAmount;
+                                  setArchiveCycles(prev => prev.map(c => {
+                                    if (c.id !== cycle.id) return c;
+                                    const updatedPayments = (c.payments || []).map((p: any) => p.id === pay.id ? { ...p, amount: newAmount, notes: editingPaymentNotes || p.notes } : p);
+                                    const totalPayments = updatedPayments.reduce((s: number, p: any) => s + (p.amount || 0), 0);
+                                    return { ...c, payments: updatedPayments, totalAdvancePayments: totalPayments };
+                                  }));
+                                  setEditingPaymentId(null);
+                                  showToast(diff > 0 ? `✓ تم تعديل الدفعة. المصنع مدين بـ ${formatNum(diff)} ج.م إضافية` : diff < 0 ? `✓ تم تعديل الدفعة. تم خصم ${formatNum(Math.abs(diff))} ج.م من المصنع` : '✓ تم تعديل الدفعة!');
+                                }} className="px-3 py-1 rounded bg-[#DD6B20] hover:bg-[#C05621] text-white text-[10px] font-bold cursor-pointer transition-all active:scale-95">حفظ</button>
+                              </div>
+                            </div>
+                          ) : (
+                            <>
+                              <div className="flex flex-col gap-0.5">
+                                <span className="text-[#DD6B20] font-extrabold">{Number(pay.amount).toLocaleString('ar-EG', {minimumFractionDigits: 2, maximumFractionDigits: 2})}ج.م</span>
+                                <span className="text-[10px] text-[#2B6CB0] font-medium">{pay.date}</span>
+                                <span className="text-[9.5px] text-slate-600 leading-relaxed">📝 {pay.notes || 'تسديد مباشر'}{pay.delegateName ? ` • 👤 ${pay.delegateName}` : ''}</span>
+                                {pay.recipient ? <span className="text-[9px] text-indigo-600">👤 مستلم: السيد / {pay.recipient}</span> : null}
+                                {(pay.appliedToCarriedDebt || 0) > 0 && <span className="text-[9px] text-amber-600">🔄 مسدد من المديونية السابقة: {Number(pay.appliedToCarriedDebt).toLocaleString('ar-EG', {minimumFractionDigits: 2, maximumFractionDigits: 2})}ج.م</span>}
+                              </div>
+                              <div className="flex gap-1">
+                                <button type="button" onClick={() => { setEditingPaymentId(pay.id); setEditingPaymentAmount(String(pay.amount)); setEditingPaymentNotes(pay.notes || ''); setEditingPaymentRecipient(pay.recipient || ''); }} className="text-indigo-600 hover:text-indigo-800 bg-white hover:bg-indigo-50 p-1.5 rounded-lg border border-slate-200 cursor-pointer transition-all active:scale-95" title="تعديل"><Edit className="h-3.5 w-3.5" /></button>
+                                <button type="button" onClick={async () => {
+                                  const confirmed = await confirmDialog(`هل تريد حذف هذه الدفعة بقيمة ${formatNum(pay.amount)}ج.م؟\n⚠️ سيتم خصم هذا المبلغ من إجمالي الدفعات (المصنع سيصبح مديناً بهذا المبلغ).`);
+                                  if (!confirmed) return;
+                                  setArchiveCycles(prev => prev.map(c => {
+                                    if (c.id !== cycle.id) return c;
+                                    const updatedPayments = (c.payments || []).filter((p: any) => p.id !== pay.id);
+                                    const totalPayments = updatedPayments.reduce((s: number, p: any) => s + (p.amount || 0), 0);
+                                    return { ...c, payments: updatedPayments, totalAdvancePayments: totalPayments };
+                                  }));
+                                  showToast(`✓ تم حذف الدفعة. الم_factory مدين بـ ${formatNum(pay.amount)} ج.م`);
+                                }} className="text-rose-500 hover:text-rose-700 bg-white hover:bg-rose-50 p-1.5 rounded-lg border border-slate-200 cursor-pointer transition-all active:scale-95" title="حذف"><Trash2 className="h-3.5 w-3.5" /></button>
+                              </div>
+                            </>
+                          )}
                         </div>
                       ))}
                     </div>
@@ -6089,7 +6709,7 @@ export default function FactoryTab({
                 </div>
               ) : (
                 <div className="bg-indigo-600 text-white p-3 rounded-2xl shadow-sm flex flex-col justify-between">
-                  <span className="text-[10px] text-indigo-100 font-bold">رصيد دائن لصالح المصنع</span>
+                  <span className="text-[10px] text-indigo-100 font-bold">رصيد دائن لصالحنا (دفعات زائدة)</span>
                   <span className="text-sm font-black mt-2 font-mono">
                     {formatNum(Math.abs(factoryBalanceDetails.netRemainingDueToFactory))} <span className="text-[10px]">ج.م</span>
                   </span>
@@ -6136,6 +6756,32 @@ export default function FactoryTab({
                       />
                     </div>
                   </div>
+                  {isManager && (
+                    <div className="flex flex-col gap-1 mt-1">
+                      <label className="text-[10px] text-slate-500 font-bold">المندوب المستهدف بالسداد:</label>
+                      <select
+                        value={paymentTargetDelegate}
+                        onChange={(e) => setPaymentTargetDelegate(e.target.value)}
+                        className="w-full bg-white border border-slate-200 rounded-lg p-2 text-xs font-bold text-[#1A365D] focus:ring-1 focus:ring-indigo-500"
+                      >
+                        <option value="">-- اختر المندوب المستهدف بالسداد --</option>
+                        <option value="admin">المدير العام (سداد عام مباشر)</option>
+                        {archiveDelegates.map(d => {
+                          const phoneKey = d.phone !== 'مجهول' ? d.phone : d.name;
+                          return (
+                            <React.Fragment key={phoneKey}>
+                              <option value={phoneKey}>
+                                المندوب: {d.name} (سداد مباشر)
+                              </option>
+                              <option value={`gm_on_behalf_${phoneKey}`}>
+                                المدير العام (نيابة عن المندوب: {d.name})
+                              </option>
+                            </React.Fragment>
+                          );
+                        })}
+                      </select>
+                    </div>
+                  )}
                   <button
                     type="button"
                     onClick={() => {
@@ -6145,6 +6791,11 @@ export default function FactoryTab({
                         return;
                       }
                       
+                      if (isManager && !paymentTargetDelegate) {
+                        showToast("⚠️ يرجى اختيار المندوب المستهدف بالسداد أولاً!");
+                        return;
+                      }
+
                       let appliedToCarriedDebt = 0;
                       let newCarried = carriedOverDebt;
                       if (newCarried > 0) {
@@ -6158,20 +6809,43 @@ export default function FactoryTab({
                         }
                       }
 
+                      let finalPhone = '';
+                      let finalName = '';
+                      let noteText = newPaymentNotes.trim();
+
+                      if (!isManager) {
+                        finalPhone = currentUser?.phone || '';
+                        finalName = currentUser?.name || 'مجهول';
+                      } else {
+                        if (paymentTargetDelegate === 'admin') {
+                          finalPhone = 'admin';
+                          finalName = 'المدير العام';
+                        } else if (paymentTargetDelegate.startsWith('gm_on_behalf_')) {
+                          const actualPhone = paymentTargetDelegate.replace('gm_on_behalf_', '');
+                          const targetDel = archiveDelegates.find(d => d.phone === actualPhone || d.name === actualPhone);
+                          finalPhone = targetDel ? targetDel.phone : actualPhone;
+                          finalName = targetDel ? targetDel.name : 'مجهول';
+                          const cleanNote = noteText.replace(/\s*\(سداد بواسطة المدير العام نيابة عن المندوب\)/g, '').trim();
+                          noteText = `${cleanNote || 'تسديد مباشر'} (سداد بواسطة المدير العام نيابة عن المندوب)`;
+                        } else {
+                          const targetDel = archiveDelegates.find(d => d.phone === paymentTargetDelegate || d.name === paymentTargetDelegate);
+                          finalPhone = targetDel ? targetDel.phone : paymentTargetDelegate;
+                          finalName = targetDel ? targetDel.name : 'مجهول';
+                        }
+                      }
+
                       onAddExpense({
                         amount,
                         category: 'سداد للمصنع',
                         type: 'factory_payment',
                         date: new Date().toISOString(),
                         description: JSON.stringify({
-                          notes: newPaymentNotes.trim() || 'تسديد مباشر',
+                          notes: noteText || 'تسديد مباشر',
                           appliedToCarriedDebt,
                           recipient: newPaymentRecipient.trim()
                         }),
-                        delegateName: selectedDelegatePhone 
-                          ? (archiveDelegates.find(d => d.phone === selectedDelegatePhone)?.name || 'مجهول')
-                          : currentUser?.name || 'مجهول',
-                        delegatePhone: selectedDelegatePhone || currentUser?.phone || ''
+                        delegateName: finalName,
+                        delegatePhone: finalPhone
                       });
                       setNewPaymentAmount('');
                       setNewPaymentNotes('');
@@ -6206,28 +6880,170 @@ export default function FactoryTab({
                             {formatNum(netRemaining)} <span className="text-xs">ج.م</span>
                           </span>
                         </div>
+                        <div className="bg-rose-50 border border-rose-100 p-2.5 rounded-xl text-center">
+                          <span className="text-[10px] block font-bold text-rose-700">⚠️ لا يمكن الترحيل للأرشيف - يجب سداد كامل المبلغ أولاً</span>
+                        </div>
                         <button
                           type="button"
                           onClick={async () => {
                             const remainingAmount = netRemaining;
-                            const confirmed = await confirmDialog(`تأكيد السداد: هل تم بالفعل سداد كامل المبلغ الملاحظ للمصنع وهو بقيمة ${formatNum(remainingAmount)}ج.م، تمهيداً لترحيل وتصفير العملية كاملة للأرشيف المغلق؟`);
+                            const confirmed = await confirmDialog(`تأكيد السداد بالكامل: سيتم تسجيل دفعة بقيمة ${formatNum(remainingAmount)}ج.م ثم ترحيل الدورة بالكامل للأرشيف.\n\nهل أنت متأكد؟`);
                             if (confirmed) {
-                              onAddExpense({
-                                amount: remainingAmount,
-                                category: 'سداد للمصنع',
-                                type: 'factory_payment',
-                                date: new Date().toISOString(),
-                                description: JSON.stringify({ notes: 'سداد كامل المبلغ المتبقي وتصفية الحساب', appliedToCarriedDebt: 0 }),
-                                delegateName: selectedDelegatePhone ? (archiveDelegates.find(d => d.phone === selectedDelegatePhone)?.name || 'مجهول') : currentUser?.name || 'مجهول',
-                                delegatePhone: selectedDelegatePhone || currentUser?.phone || ''
-                              });
-                              showToast("✓ تم تسجيل دفعة تسوية الحساب بنجاح!");
+                              setIsArchiving(true);
+                              try {
+                                // 1. Add the final settlement payment to expenses
+                                onAddExpense({
+                                  amount: remainingAmount,
+                                  category: 'سداد للمصنع',
+                                  type: 'factory_payment',
+                                  date: new Date().toISOString(),
+                                  description: JSON.stringify({ notes: 'سداد كامل المبلغ المتبقي وتصفية الحساب', appliedToCarriedDebt: 0 }),
+                                  delegateName: selectedDelegatePhone ? (archiveDelegates.find(d => d.phone === selectedDelegatePhone)?.name || 'مجهول') : currentUser?.name || 'مجهول',
+                                  delegatePhone: selectedDelegatePhone || currentUser?.phone || ''
+                                });
+
+                                // 2. Build archive snapshot — include existing payments + settle payment (don't use currentCycleExtraPayments to avoid double-counting)
+                                const currentLoads = factoryLoads.filter(filterByFactoryDelegate).map(l => {
+                                  const prod = products.find(p => String(p.id).trim() === String(l.productId).trim());
+                                  const weights = prod ? getProductWeightsFallback(prod) : [];
+                                  const weight = weights.find(w => String(w.id).trim() === String(l.weightId).trim());
+                                  const unitsPerCarton = weight?.unitsPerCarton || 12;
+                                  const cartons = l.cartonsCount !== undefined ? l.cartonsCount : Math.floor(l.quantity / unitsPerCarton);
+                                  const loose = l.looseUnitsCount !== undefined ? l.looseUnitsCount : (l.quantity % unitsPerCarton);
+                                  const cartonPrice = l.cartonPrice !== undefined ? Number(l.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) : 0) || 0);
+                                  const unitPrice = l.unitPrice !== undefined ? Number(l.unitPrice) : (Number(weight?.factoryPricePerUnit) || (prod ? Number(prod.price) : 0) || 0);
+                                  return {
+                                    date: l.date, productName: prod?.name || l.productName || 'غير معروف',
+                                    weightSize: weight?.size || (l as any).weightSize || '', cartons, loose,
+                                    cartonPrice, subtotal: (cartons * cartonPrice) + (loose * unitPrice),
+                                    advanceAmount: l.advanceAmount ?? 0, delegateName: l.delegateName || ''
+                                  };
+                                });
+                                // Build payments list from CURRENT state snapshot (before expense state update)
+                                const existingPayments = currentCycleExtraPayments.map(p => ({
+                                  id: p.id, amount: p.amount, date: p.date, notes: p.notes,
+                                  recipient: p.recipient, delegateName: p.delegateName,
+                                  delegatePhone: p.delegatePhone, appliedToCarriedDebt: p.appliedToCarriedDebt
+                                }));
+                                const settlePayment = {
+                                  id: 'settle_' + Date.now(), amount: remainingAmount,
+                                  date: new Date().toLocaleDateString('ar-EG') + ' ' + new Date().toLocaleTimeString('ar-EG'),
+                                  notes: 'سداد كامل المبلغ المتبقي وتصفية الحساب', recipient: '',
+                                  delegateName: selectedDelegatePhone ? (archiveDelegates.find(d => d.phone === selectedDelegatePhone)?.name || 'مجهول') : currentUser?.name || 'مجهول',
+                                  delegatePhone: selectedDelegatePhone || currentUser?.phone || '',
+                                  appliedToCarriedDebt: 0
+                                };
+                                const allPayments = [...existingPayments, settlePayment];
+                                const rawSum = currentLoads.reduce((s, l) => s + l.subtotal, 0);
+                                const totalPaid = allPayments.reduce((s, p) => s + p.amount, 0);
+                                const newCycle = {
+                                  id: Date.now().toString(),
+                                  settledAt: new Date().toLocaleDateString('ar-EG') + ' ' + new Date().toLocaleTimeString('ar-EG'),
+                                  loads: currentLoads,
+                                  payments: allPayments,
+                                  rawLoadedValue: rawSum,
+                                  totalWithdrawnValue: factoryBalanceDetails.totalWithdrawnValue,
+                                  totalAdvancePayments: totalPaid,
+                                  creditBalance: 0,
+                                  carriedOverDebtAtTime: carriedOverDebt,
+                                  settledFully: true
+                                };
+                                setArchiveCycles(prev => [...prev, newCycle]);
+                                setCarriedOverDebt(0);
+                                setCarriedOverDebtDate('');
+
+                                if (onArchiveFactoryCycle) {
+                                  const finalPhone = selectedDelegatePhone || factoryDelegateFilter || currentUser?.phone || '';
+                                  const finalName = selectedDelegatePhone ? (archiveDelegates.find(d => d.phone === selectedDelegatePhone)?.name || currentUser?.name || 'مجهول') : (factoryDelegateFilter ? (archiveDelegates.find(d => d.phone === factoryDelegateFilter || d.name === factoryDelegateFilter)?.name || 'مجهول') : 'مجهول');
+                                  onArchiveFactoryCycle(finalPhone, finalName);
+                                } else {
+                                  const loadsToArchive = factoryLoads.filter(filterByFactoryDelegate);
+                                  for (const load of loadsToArchive) { onDeleteLoad(load.id); }
+                                  const currentExpenses = expenses.filter(e =>
+                                    (e.category === 'سداد للمصنع' || e.type === 'factory_payment') && filterByFactoryDelegate(e));
+                                  for (const exp of currentExpenses) { onDeleteExpense(exp.id); }
+                                }
+                                showToast("✓ تم تسجيل الدفعة النهائية وترحيل الدورة للأرشيف بنجاح!");
+                              } catch (err) {
+                                console.error(err);
+                                showToast("❌ حدث خطأ أثناء الترحيل!");
+                              } finally {
+                                setIsArchiving(false);
+                              }
                             }
                           }}
                           className="bg-[#10B981] hover:bg-[#10B981] text-white active:scale-95 text-xs font-black py-2 rounded-xl cursor-pointer transition-all text-center flex items-center justify-center gap-1.5 shadow-md"
                         >
                           <CheckCircle2 className="h-4.5 w-4.5 text-emerald-100 shrink-0" />
                           <span>تم السداد بالكامل</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            const confirmed = await confirmDialog(`سماح بالمبلغ المتبقي: سيتم ترحيل الدورة الحالية مع إسقاط المبلغ المتبقي ${formatNum(netRemaining)}ج.م من المديونية (لن يُضاف كدين في الدورة التالية). هل أنت متأكد؟`);
+                            if (confirmed) {
+                              setIsArchiving(true);
+                              try {
+                                const currentLoads = factoryLoads.filter(filterByFactoryDelegate).map(l => {
+                                  const prod = products.find(p => String(p.id).trim() === String(l.productId).trim());
+                                  const weights = prod ? getProductWeightsFallback(prod) : [];
+                                  const weight = weights.find(w => String(w.id).trim() === String(l.weightId).trim());
+                                  const unitsPerCarton = weight?.unitsPerCarton || 12;
+                                  const cartons = l.cartonsCount !== undefined ? l.cartonsCount : Math.floor(l.quantity / unitsPerCarton);
+                                  const loose = l.looseUnitsCount !== undefined ? l.looseUnitsCount : (l.quantity % unitsPerCarton);
+                                  const cartonPrice = l.cartonPrice !== undefined ? Number(l.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) : 0) || 0);
+                                  const unitPrice = l.unitPrice !== undefined ? Number(l.unitPrice) : (Number(weight?.factoryPricePerUnit) || (prod ? Number(prod.price) : 0) || 0);
+                                  return {
+                                    date: l.date, productName: prod?.name || l.productName || 'غير معروف',
+                                    weightSize: weight?.size || (l as any).weightSize || '', cartons, loose,
+                                    cartonPrice, subtotal: (cartons * cartonPrice) + (loose * unitPrice),
+                                    advanceAmount: l.advanceAmount ?? 0, delegateName: l.delegateName || ''
+                                  };
+                                });
+                                const currentPayments = currentCycleExtraPayments.map(p => ({
+                                  id: p.id, amount: p.amount, date: p.date, notes: p.notes,
+                                  recipient: p.recipient, delegateName: p.delegateName,
+                                  delegatePhone: p.delegatePhone, appliedToCarriedDebt: p.appliedToCarriedDebt
+                                }));
+                                const rawSum = currentLoads.reduce((s, l) => s + l.subtotal, 0);
+                                const newCycle = {
+                                  id: Date.now().toString(),
+                                  settledAt: new Date().toLocaleDateString('ar-EG') + ' ' + new Date().toLocaleTimeString('ar-EG'),
+                                  loads: currentLoads,
+                                  payments: currentPayments,
+                                  rawLoadedValue: rawSum,
+                                  totalWithdrawnValue: factoryBalanceDetails.totalWithdrawnValue,
+                                  totalAdvancePayments: factoryBalanceDetails.totalAdvancePayments,
+                                  creditBalance: 0,
+                                  carriedOverDebtAtTime: carriedOverDebt,
+                                  waivedAmount: netRemaining
+                                };
+                                setArchiveCycles(prev => [...prev, newCycle]);
+                                setCarriedOverDebt(0);
+                                setCarriedOverDebtDate('');
+                                if (onArchiveFactoryCycle) {
+                                  const finalPhone = selectedDelegatePhone || factoryDelegateFilter || currentUser?.phone || '';
+                                  const finalName = selectedDelegatePhone ? (archiveDelegates.find(d => d.phone === selectedDelegatePhone)?.name || currentUser?.name || 'مجهول') : (factoryDelegateFilter ? (archiveDelegates.find(d => d.phone === factoryDelegateFilter || d.name === factoryDelegateFilter)?.name || 'مجهول') : 'مجهول');
+                                  onArchiveFactoryCycle(finalPhone, finalName);
+                                } else {
+                                  const loadsToArchive = factoryLoads.filter(filterByFactoryDelegate);
+                                  for (const load of loadsToArchive) { onDeleteLoad(load.id); }
+                                  const currentExpenses = expenses.filter(e =>
+                                    (e.category === 'سداد للمصنع' || e.type === 'factory_payment') && filterByFactoryDelegate(e));
+                                  for (const exp of currentExpenses) { onDeleteExpense(exp.id); }
+                                }
+                                showToast("✓ تم ترحيل الدورة مع السماح بالمبلغ المتبقي!");
+                              } catch (err) {
+                                console.error(err);
+                                showToast("❌ حدث خطأ أثناء الترحيل!");
+                              } finally {
+                                setIsArchiving(false);
+                              }
+                            }
+                          }}
+                          className="bg-amber-500 hover:bg-amber-600 text-white active:scale-95 text-xs font-black py-2 rounded-xl cursor-pointer transition-all text-center flex items-center justify-center gap-1.5 shadow-md"
+                        >
+                          <span>سماح بالمبلغ المتبقي وترحيل</span>
                         </button>
                       </div>
                     </div>
@@ -6256,70 +7072,92 @@ export default function FactoryTab({
                       </div>
                     )}
 
-                    {isSettledAndCanArchive && (
-                      <button
-                        type="button"
-                        onClick={async () => {
-                          const credit = creditBalance;
-                          const confirmed = await confirmDialog(credit > 0
-                            ? `حساب المصنع صفر ويوجد رصيد دائن ${formatNum(credit)}ج.م. هل أنت متأكد من الترحيل للأرشيف؟ سيتم حفظ الدورة الحالية كاملة ومسح الشاشات للبدء بدورة جديدة.`
-                            : `حساب المصنع صفر. هل أنت متأكد من الترحيل للأرشيف؟ سيتم حفظ الدورة الحالية كاملة ومسح الشاشات للبدء بدورة جديدة.`
-                          );
-                          if (confirmed) {
-                            // Build archive snapshot from current data
-                            const currentLoads = factoryLoads.filter(filterByFactoryDelegate).map(l => {
-                              const prod = products.find(p => String(p.id).trim() === String(l.productId).trim());
-                              const weights = prod ? getProductWeightsFallback(prod) : [];
-                              const weight = weights.find(w => String(w.id).trim() === String(l.weightId).trim());
-                              const unitsPerCarton = weight?.unitsPerCarton || 12;
-                              const cartons = l.cartonsCount !== undefined ? l.cartonsCount : Math.floor(l.quantity / unitsPerCarton);
-                              const loose = l.looseUnitsCount !== undefined ? l.looseUnitsCount : (l.quantity % unitsPerCarton);
-                              const cartonPrice = l.cartonPrice !== undefined ? Number(l.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) : 0) || 0);
-                              const unitPrice = l.unitPrice !== undefined ? Number(l.unitPrice) : (Number(weight?.factoryPricePerUnit) || (prod ? Number(prod.price) : 0) || 0);
-                              return {
-                                date: l.date, productName: prod?.name || l.productName || 'غير معروف',
-                                weightSize: weight?.size || (l as any).weightSize || '', cartons, loose,
-                                cartonPrice, subtotal: (cartons * cartonPrice) + (loose * unitPrice),
-                                advanceAmount: l.advanceAmount ?? 0, delegateName: l.delegateName || ''
-                              };
-                            });
-                            const currentPayments = extraPayments.map(p => ({
-                              id: p.id, amount: p.amount, date: p.date, notes: p.notes,
-                              recipient: p.recipient, delegateName: p.delegateName,
-                              delegatePhone: p.delegatePhone, appliedToCarriedDebt: p.appliedToCarriedDebt
-                            }));
-                            const rawSum = currentLoads.reduce((s, l) => s + l.subtotal, 0);
-                            const trueCredit = Math.max(0, factoryBalanceDetails.totalAdvancePayments - factoryBalanceDetails.totalWithdrawnValue - carriedOverDebt);
-                            const newCycle = {
-                              id: Date.now().toString(),
-                              settledAt: new Date().toLocaleDateString('ar-EG') + ' ' + new Date().toLocaleTimeString('ar-EG'),
-                              loads: currentLoads,
-                              payments: currentPayments,
-                              rawLoadedValue: rawSum,
-                              totalWithdrawnValue: factoryBalanceDetails.totalWithdrawnValue,
-                              totalAdvancePayments: factoryBalanceDetails.totalAdvancePayments,
-                              creditBalance: trueCredit,
-                              carriedOverDebtAtTime: carriedOverDebt
-                            };
-                            setArchiveCycles(prev => [...prev, newCycle]);
-                            setCarriedOverDebt(trueCredit > 0 ? -trueCredit : 0);
-                            setCarriedOverDebtDate('');
-                            // Mark all current factory loads as archived via parent handler
-                            const nowArchiveTs = new Date().toISOString();
-                            const loadsToArchive = factoryLoads.filter(filterByFactoryDelegate);
-                            for (const load of loadsToArchive) { onDeleteLoad(load.id); }
-                            // Delete current extra payment expenses
-                            const currentExpenses = expenses.filter(e =>
-                              (e.category === 'سداد للمصنع' || e.type === 'factory_payment') && filterByFactoryDelegate(e));
-                            for (const exp of currentExpenses) { onDeleteExpense(exp.id); }
-                            showToast("✓ تم أرشفة دورة المصنع بنجاح! الشاشات جاهزة لدورة جديدة.");
-                          }
-                        }}
-                        className="bg-[#8B5CF6] hover:bg-[#7C3AED] text-white active:scale-95 text-xs font-black py-2.5 rounded-xl cursor-pointer transition-all text-center flex items-center justify-center gap-1.5 shadow-md"
-                      >
-                        <Archive className="h-4 w-4 text-violet-200 shrink-0" />
-                        <span>ترحيل للأرشيف</span>
-                      </button>
+                    {isManager && factoryDelegateFilter === 'all' ? (
+                      <div className="bg-amber-50 border border-amber-200 p-3 rounded-xl text-center text-xs font-bold text-amber-800">
+                        ⚠️ يرجى تحديد مندوب معين لتتمكن من ترحيل دورته الماليّة للأرشيف. لا يمكن ترحيل حسابات كل المناديب معاً.
+                      </div>
+                    ) : (
+                      isSettledAndCanArchive && (
+                        <button
+                          type="button"
+                          disabled={isArchiving}
+                          onClick={async () => {
+                            if (isArchiving) return;
+                            const credit = creditBalance;
+                            const confirmed = await confirmDialog(credit > 0
+                              ? `ترحيل الدورة للأرشيف:\n• سيتم حفظ جميع البيانات الحالية (حمولات + مبيعات + دفعات)\n• سيتم صفراء الشاشات للبدء بدورة جديدة\n• الفائض ${formatNum(credit)}ج.م سيُضاف كرصيد يخصم من الدورة التالية\n\nهل أنت متأكد؟`
+                              : `ترحيل الدورة للأرشيف:\n• سيتم حفظ جميع البيانات الحالية (حمولات + مبيعات + دفعات)\n• سيتم صفراء الشاشات للبدء بدورة جديدة\n\nهل أنت متأكد؟`
+                            );
+                            if (confirmed) {
+                              setIsArchiving(true);
+                              try {
+                                // Build archive snapshot from current data
+                                const currentLoads = factoryLoads.filter(filterByFactoryDelegate).map(l => {
+                                  const prod = products.find(p => String(p.id).trim() === String(l.productId).trim());
+                                  const weights = prod ? getProductWeightsFallback(prod) : [];
+                                  const weight = weights.find(w => String(w.id).trim() === String(l.weightId).trim());
+                                  const unitsPerCarton = weight?.unitsPerCarton || 12;
+                                  const cartons = l.cartonsCount !== undefined ? l.cartonsCount : Math.floor(l.quantity / unitsPerCarton);
+                                  const loose = l.looseUnitsCount !== undefined ? l.looseUnitsCount : (l.quantity % unitsPerCarton);
+                                  const cartonPrice = l.cartonPrice !== undefined ? Number(l.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) : 0) || 0);
+                                  const unitPrice = l.unitPrice !== undefined ? Number(l.unitPrice) : (Number(weight?.factoryPricePerUnit) || (prod ? Number(prod.price) : 0) || 0);
+                                  return {
+                                    date: l.date, productName: prod?.name || l.productName || 'غير معروف',
+                                    weightSize: weight?.size || (l as any).weightSize || '', cartons, loose,
+                                    cartonPrice, subtotal: (cartons * cartonPrice) + (loose * unitPrice),
+                                    advanceAmount: l.advanceAmount ?? 0, delegateName: l.delegateName || ''
+                                  };
+                                });
+                                const currentPayments = currentCycleExtraPayments.map(p => ({
+                                  id: p.id, amount: p.amount, date: p.date, notes: p.notes,
+                                  recipient: p.recipient, delegateName: p.delegateName,
+                                  delegatePhone: p.delegatePhone, appliedToCarriedDebt: p.appliedToCarriedDebt
+                                }));
+                                const rawSum = currentLoads.reduce((s, l) => s + l.subtotal, 0);
+                                const trueCredit = Math.max(0, factoryBalanceDetails.totalAdvancePayments - factoryBalanceDetails.totalWithdrawnValue - carriedOverDebt);
+                                const newCycle = {
+                                  id: Date.now().toString(),
+                                  settledAt: new Date().toLocaleDateString('ar-EG') + ' ' + new Date().toLocaleTimeString('ar-EG'),
+                                  loads: currentLoads,
+                                  payments: currentPayments,
+                                  rawLoadedValue: rawSum,
+                                  totalWithdrawnValue: factoryBalanceDetails.totalWithdrawnValue,
+                                  totalAdvancePayments: factoryBalanceDetails.totalAdvancePayments,
+                                  creditBalance: trueCredit,
+                                  carriedOverDebtAtTime: carriedOverDebt
+                                };
+                                setArchiveCycles(prev => [...prev, newCycle]);
+                                setCarriedOverDebt(trueCredit > 0 ? -trueCredit : 0);
+                                setCarriedOverDebtDate('');
+                                
+                                if (onArchiveFactoryCycle) {
+                                  const finalPhone = selectedDelegatePhone || factoryDelegateFilter || currentUser?.phone || '';
+                                  const finalName = selectedDelegatePhone ? (archiveDelegates.find(d => d.phone === selectedDelegatePhone)?.name || currentUser?.name || 'مجهول') : (factoryDelegateFilter ? (archiveDelegates.find(d => d.phone === factoryDelegateFilter || d.name === factoryDelegateFilter)?.name || 'مجهول') : 'مجهول');
+                                  onArchiveFactoryCycle(finalPhone, finalName);
+                                } else {
+                                  // Mark all current factory loads as archived via parent handler (fallback)
+                                  const loadsToArchive = factoryLoads.filter(filterByFactoryDelegate);
+                                  for (const load of loadsToArchive) { onDeleteLoad(load.id); }
+                                  // Delete current extra payment expenses
+                                  const currentExpenses = expenses.filter(e =>
+                                    (e.category === 'سداد للمصنع' || e.type === 'factory_payment') && filterByFactoryDelegate(e));
+                                  for (const exp of currentExpenses) { onDeleteExpense(exp.id); }
+                                }
+                                showToast("✓ تم أرشفة الدورة بنجاح! الشاشات جاهزة لدورة جديدة. يمكنك مراجعة الدورة في تبويب الأرشيف.");
+                              } catch (err) {
+                                console.error(err);
+                                showToast("❌ حدث خطأ أثناء الأرشفة!");
+                              } finally {
+                                setIsArchiving(false);
+                              }
+                            }
+                          }}
+                          className="bg-[#8B5CF6] hover:bg-[#7C3AED] text-white active:scale-95 text-xs font-black py-2.5 rounded-xl cursor-pointer transition-all text-center flex items-center justify-center gap-1.5 shadow-md animate-pulse"
+                        >
+                          <Archive className="h-4 w-4 text-violet-200 shrink-0" />
+                          <span>ترحيل للأرشيف</span>
+                        </button>
+                      )
                     )}
                   </div>
                 );
@@ -6328,32 +7166,281 @@ export default function FactoryTab({
             </div>
 
             {/* List of registered Payments to Factory direct */}
-            {extraPayments.length > 0 && (
+            {currentCycleExtraPayments.length > 0 && (
               <div className="bg-[#FFFFFF] p-4.5 rounded-2xl border border-slate-200 shadow-sm flex flex-col gap-3">
                 <span className="text-xs font-black text-[#1A365D] flex items-center gap-1.5 border-b border-slate-100 pb-2">
                   <History className="h-4.5 w-4.5 text-emerald-505 animate-pulse" />
                   أرشيف الدفعات النقدية والمسددات المباشرة للمورد
                 </span>
+                <div className="grid grid-cols-5 bg-slate-50 border border-slate-200 p-1 rounded-xl text-center gap-1">
+                  <button type="button" onClick={() => { setCurrentPaymentsFilter('all'); setCurrentPaymentsDayFilters([]); }} className={`py-1 px-0.5 rounded-lg text-[10px] font-bold transition-all cursor-pointer ${currentPaymentsFilter === 'all' ? 'bg-white text-[#1A365D] border-b-2 border-[#DD6B20] shadow-sm' : 'text-[#9CA3AF] hover:bg-slate-100'}`}>الكل ({currentCycleExtraPayments.length})</button>
+                  <button type="button" onClick={() => { setCurrentPaymentsFilter('daily'); setCurrentPaymentsDayFilters([]); }} className={`py-1 px-0.5 rounded-lg text-[10px] font-bold transition-all cursor-pointer ${currentPaymentsFilter === 'daily' ? 'bg-white text-[#1A365D] border-b-2 border-[#DD6B20] shadow-sm' : 'text-[#9CA3AF] hover:bg-slate-100'}`}>يومي</button>
+                  <button type="button" onClick={() => { setCurrentPaymentsFilter('weekly'); setCurrentPaymentsDayFilters([]); }} className={`py-1 px-0.5 rounded-lg text-[10px] font-bold transition-all cursor-pointer ${currentPaymentsFilter === 'weekly' ? 'bg-white text-[#1A365D] border-b-2 border-[#DD6B20] shadow-sm' : 'text-[#9CA3AF] hover:bg-slate-100'}`}>أسبوعي</button>
+                  <button type="button" onClick={() => { setCurrentPaymentsFilter('monthly'); setCurrentPaymentsDayFilters([]); }} className={`py-1 px-0.5 rounded-lg text-[10px] font-bold transition-all cursor-pointer ${currentPaymentsFilter === 'monthly' ? 'bg-white text-[#1A365D] border-b-2 border-[#DD6B20] shadow-sm' : 'text-[#9CA3AF] hover:bg-slate-100'}`}>شهري</button>
+                  <button type="button" onClick={() => { setCurrentPaymentsFilter('custom'); setCurrentPaymentsDayFilters([]); }} className={`py-1 px-0.5 rounded-lg text-[10px] font-bold transition-all cursor-pointer ${currentPaymentsFilter === 'custom' ? 'bg-white text-[#1A365D] border-b-2 border-[#DD6B20] shadow-sm' : 'text-[#9CA3AF] hover:bg-slate-100'}`}>مخصص</button>
+                </div>
+                {currentPaymentsFilter === 'weekly' && (
+                  <div className="flex flex-wrap gap-1">
+                    {['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'].map(day => {
+                      const arDay = day === 'Sunday' ? 'أحد' : day === 'Monday' ? 'إثنين' : day === 'Tuesday' ? 'ثلاثاء' : day === 'Wednesday' ? 'أربعاء' : day === 'Thursday' ? 'خميس' : day === 'Friday' ? 'جمعة' : 'سبت';
+                      const isActive = currentPaymentsDayFilters.includes(day);
+                      return (
+                        <button key={day} type="button" onClick={() => {
+                          setCurrentPaymentsDayFilters(prev => isActive ? prev.filter(d => d !== day) : [...prev, day]);
+                        }} className={`px-2 py-1 rounded-lg text-[9px] font-bold transition-all cursor-pointer ${isActive ? 'bg-[#DD6B20] text-white' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}>{arDay}</button>
+                      );
+                    })}
+                  </div>
+                )}
+                {currentPaymentsFilter === 'custom' && (
+                  <div className="flex gap-2">
+                    <div className="flex-1"><label className="block text-[9px] text-gray-400 font-bold mb-0.5">من تاريخ</label><input type="date" value={currentPaymentsStartDate} onChange={(e) => setCurrentPaymentsStartDate(e.target.value)} className="w-full bg-white border border-slate-200 rounded-lg py-1 px-2 text-[10px] font-bold text-[#1A365D]" /></div>
+                    <div className="flex-1"><label className="block text-[9px] text-gray-400 font-bold mb-0.5">إلى تاريخ</label><input type="date" value={currentPaymentsEndDate} onChange={(e) => setCurrentPaymentsEndDate(e.target.value)} className="w-full bg-white border border-slate-200 rounded-lg py-1 px-2 text-[10px] font-bold text-[#1A365D]" /></div>
+                  </div>
+                )}
+                {currentPaymentsFilter !== 'all' && filteredCurrentPayments.length > 0 && (
+                  <div className="flex gap-2">
+                    <button type="button" onClick={() => {
+                      const filterLabel = currentPaymentsFilter === 'daily' ? 'يومي' : currentPaymentsFilter === 'weekly' ? 'أسبوعي' : currentPaymentsFilter === 'monthly' ? 'شهري' : 'مخصص';
+                      const total = filteredCurrentPayments.reduce((s, p) => s + p.amount, 0);
+                      let html = `<!DOCTYPE html><html dir="rtl"><head><meta charset="utf-8"><style>body{font-family:system-ui,sans-serif;padding:20px;background:#f8fafc}table{width:100%;border-collapse:collapse;margin:10px 0}th,td{border:1px solid #cbd5e1;padding:6px 8px;font-size:12px}th{background:#1e2a4a;color:white}.summary{background:#f1f5f9;padding:15px;border-radius:12px;margin-top:15px;text-align:center;font-weight:bold}</style></head><body>
+                      <h2 style="text-align:center;color:#1e2a4a">سجل الدفعات — فلتر: ${filterLabel}</h2>
+                      <p style="text-align:center;color:#64748b">عدد الدفعات: ${filteredCurrentPayments.length} | تاريخ الطباعة: ${new Date().toLocaleDateString('ar-EG')}</p>
+                      <table><thead><tr><th>م</th><th>التاريخ</th><th>البيان</th><th>المبلغ</th><th>المندوب</th><th>المستلم</th></tr></thead><tbody>
+                      ${filteredCurrentPayments.map((p, i) => `<tr><td style="text-align:center">${i + 1}</td><td style="text-align:center">${p.date}</td><td style="text-align:right">${p.notes || 'تسديد مباشر'}</td><td style="text-align:center;font-weight:bold;color:#059669">${formatNum(p.amount)} ج.م</td><td style="text-align:center">${p.delegateName || '-'}</td><td style="text-align:center">${p.recipient || '-'}</td></tr>`).join('')}
+                      </tbody></table>
+                      <div class="summary">إجمالي الدفعات: ${formatNum(total)} ج.م</div>
+                      <p style="text-align:center;color:#94a3b8;margin-top:20px;font-size:10px">تم التصدير من نظام تتبع المبيعات</p></body></html>`;
+                      const w = window.open('', '_blank'); if (w) { w.document.write(html); w.document.close(); setTimeout(() => w.print(), 500); }
+                    }} className="flex-1 bg-indigo-700 hover:bg-indigo-800 text-white py-1.5 rounded-lg text-[10px] font-extrabold flex items-center justify-center gap-1 active:scale-95 cursor-pointer"><Printer className="h-3 w-3" /> PDF</button>
+                    <button type="button" onClick={() => {
+                      const filterLabel = currentPaymentsFilter === 'daily' ? 'يومي' : currentPaymentsFilter === 'weekly' ? 'أسبوعي' : currentPaymentsFilter === 'monthly' ? 'شهري' : 'مخصص';
+                      const total = filteredCurrentPayments.reduce((s, p) => s + p.amount, 0);
+                      const W = 700; const padX = 20; const rowH = 32; const headerH = 80; const footerH = 40;
+                      const totalH = headerH + 10 + filteredCurrentPayments.length * rowH + 50 + footerH + 20;
+                      const canvas = document.createElement('canvas'); const dpr = window.devicePixelRatio || 1;
+                      canvas.width = W * dpr; canvas.height = totalH * dpr; canvas.style.width = W + 'px'; canvas.style.height = totalH + 'px';
+                      const ctx = canvas.getContext('2d'); if (!ctx) return; ctx.scale(dpr, dpr);
+                      ctx.fillStyle = '#faf8f5'; ctx.fillRect(0, 0, W, totalH); ctx.strokeStyle = '#1a1a1a'; ctx.lineWidth = 3; ctx.strokeRect(6, 6, W - 12, totalH - 12);
+                      ctx.fillStyle = '#1e2a4a'; ctx.fillRect(10, 10, W - 20, headerH); ctx.fillStyle = '#d4a843'; ctx.fillRect(10, 10 + headerH - 3, W - 20, 3);
+                      ctx.fillStyle = '#ffffff'; ctx.textAlign = 'center'; ctx.font = 'bold 18px system-ui, sans-serif';
+                      ctx.fillText(`سجل الدفعات — فلتر: ${filterLabel}`, W / 2, 40);
+                      ctx.font = '500 11px system-ui, sans-serif'; ctx.fillStyle = '#93c5fd';
+                      ctx.fillText(`${filteredCurrentPayments.length} دفعة | إجمالي: ${formatNum(total)} ج.م`, W / 2, 58);
+                      ctx.font = '10px system-ui, sans-serif'; ctx.fillStyle = '#cbd5e1';
+                      ctx.fillText(`تاريخ الطباعة: ${new Date().toLocaleDateString('ar-EG')}`, W / 2, 72);
+                      let y = headerH + 15;
+                      ctx.fillStyle = '#1e2a4a'; ctx.fillRect(padX, y, W - padX * 2, 20); ctx.fillStyle = '#ffffff';
+                      ctx.font = 'bold 9px system-ui, sans-serif'; ctx.textAlign = 'center';
+                      const cols = [padX + 20, padX + 100, padX + 250, padX + 370, padX + 470, padX + 560];
+                      ['م', 'التاريخ', 'البيان', 'المبلغ', 'المندوب', 'المستلم'].forEach((h, i) => { ctx.fillText(h, cols[i] + 40, y + 14); });
+                      y += 22;
+                      filteredCurrentPayments.forEach((p, i) => {
+                        ctx.fillStyle = i % 2 === 0 ? '#ffffff' : '#f1f5f9';
+                        ctx.fillRect(padX, y, W - padX * 2, rowH); ctx.strokeStyle = '#e2e8f0'; ctx.lineWidth = 0.5; ctx.strokeRect(padX, y, W - padX * 2, rowH);
+                        ctx.fillStyle = '#1a1a1a'; ctx.textAlign = 'center'; ctx.font = '10px system-ui, sans-serif';
+                        ctx.fillText(String(i + 1), cols[0] + 40, y + 20); ctx.fillText(p.date || '', cols[1] + 40, y + 20);
+                        ctx.textAlign = 'right'; ctx.fillText(p.notes || 'تسديد مباشر', cols[2] + 80, y + 20);
+                        ctx.fillStyle = '#059669'; ctx.font = 'bold 10px system-ui, sans-serif'; ctx.textAlign = 'center';
+                        ctx.fillText(`${formatNum(p.amount)} ج.م`, cols[3] + 40, y + 20);
+                        ctx.fillStyle = '#1a1a1a'; ctx.font = '10px system-ui, sans-serif';
+                        ctx.fillText(p.delegateName || '-', cols[4] + 40, y + 20); ctx.fillText(p.recipient || '-', cols[5] + 40, y + 20);
+                        y += rowH;
+                      });
+                      y += 5; ctx.fillStyle = '#1e2a4a'; ctx.fillRect(padX, y, W - padX * 2, 30); ctx.fillStyle = '#ffffff';
+                      ctx.font = 'bold 11px system-ui, sans-serif'; ctx.textAlign = 'center';
+                      ctx.fillText(`إجمالي الدفعات: ${formatNum(total)} ج.م`, W / 2, y + 20);
+                      y += 40; ctx.fillStyle = '#94a3b8'; ctx.font = '10px system-ui, sans-serif';
+                      ctx.fillText(`تم التصدير من نظام تتبع المبيعات — ${new Date().toLocaleDateString('ar-EG')}`, W / 2, y);
+                      const link = document.createElement('a'); link.download = `دفعات_${filterLabel}_${new Date().toISOString().substring(0, 10)}.png`;
+                      link.href = canvas.toDataURL('image/png'); link.click();
+                    }} className="flex-1 bg-amber-600 hover:bg-amber-700 text-white py-1.5 rounded-lg text-[10px] font-extrabold flex items-center justify-center gap-1 active:scale-95 cursor-pointer"><Image className="h-3 w-3" /> صورة</button>
+                  </div>
+                )}
                 <div className="max-h-36 overflow-y-auto custom-scroll flex flex-col gap-2">
-                  {extraPayments.map(pay => (
+                  {filteredCurrentPayments.map(pay => (
                     <div key={pay.id} className="bg-[#F7FAFC] border border-slate-100 px-3 py-2.5 rounded-xl flex items-center justify-between text-xs font-bold text-[#1A365D] shadow-inner">
-                      <div className="flex flex-col gap-0.5">
-                        <span className="text-[#DD6B20] font-extrabold">{formatNum(pay.amount)}ج.م</span>
-                        <span className="text-[10px] text-[#2B6CB0] font-medium">{pay.date}</span>
-                        <span className="text-[9.5px] text-slate-600 leading-relaxed">📝 {pay.notes || 'تسديد مباشر'}{pay.delegateName ? ` • 👤 ${pay.delegateName}` : ''}</span>
-                        {pay.recipient ? <span className="text-[9px] text-indigo-600">👤 مستلم: السيد / {pay.recipient}</span> : null}
-                        {(pay.appliedToCarriedDebt || 0) > 0 && <span className="text-[9px] text-amber-600">🔄 مسدد من المديونية السابقة: {formatNum(pay.appliedToCarriedDebt)}ج.م</span>}
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          onDeleteExpense(pay.id);
-                        }}
-                        className="text-rose-500 hover:text-rose-700 bg-[#FFFFFF] hover:bg-rose-50 p-1.5 rounded-lg border border-slate-200"
-                        title="حذف دفعة السداد"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </button>
+                      {editingPaymentId === pay.id ? (
+                        <div className="flex flex-col gap-2 w-full p-2 bg-indigo-50/40 rounded-lg border border-indigo-100 animate-fade-in text-right">
+                          <div className="flex gap-2">
+                            <div className="w-1/3 flex flex-col gap-1">
+                              <label className="text-[9px] text-slate-500 font-bold">مبلغ السداد:</label>
+                              <input
+                                type="number"
+                                placeholder="مبلغ السداد"
+                                value={editingPaymentAmount}
+                                onChange={(e) => setEditingPaymentAmount(e.target.value)}
+                                className="w-full bg-white border border-slate-200 rounded p-1.5 text-xs text-center font-bold text-[#1A365D] focus:ring-1 focus:ring-indigo-500"
+                              />
+                            </div>
+                            <div className="w-2/3 flex flex-col gap-1">
+                              <label className="text-[9px] text-slate-500 font-bold">البيان / ملاحظات:</label>
+                              <input
+                                type="text"
+                                placeholder="البيان"
+                                value={editingPaymentNotes}
+                                onChange={(e) => setEditingPaymentNotes(e.target.value)}
+                                className="w-full bg-white border border-slate-200 rounded p-1.5 text-xs font-bold text-[#1A365D] focus:ring-1 focus:ring-indigo-500"
+                              />
+                            </div>
+                          </div>
+                          <div className="flex gap-2">
+                            <div className="w-1/2 flex flex-col gap-1">
+                              <label className="text-[9px] text-slate-500 font-bold">مستلم السداد:</label>
+                              <input
+                                type="text"
+                                placeholder="مستلم السداد"
+                                value={editingPaymentRecipient}
+                                onChange={(e) => setEditingPaymentRecipient(e.target.value)}
+                                className="w-full bg-white border border-slate-200 rounded p-1.5 text-xs font-bold text-[#1A365D] focus:ring-1 focus:ring-indigo-500"
+                              />
+                            </div>
+                            <div className="w-1/2 flex flex-col gap-1">
+                              <label className="text-[9px] text-slate-500 font-bold">تغيير المندوب المستهدف:</label>
+                              {isManager ? (
+                                <select
+                                  value={editingPaymentDelegate}
+                                  onChange={(e) => setEditingPaymentDelegate(e.target.value)}
+                                  className="w-full bg-white border border-slate-200 rounded p-1.5 text-xs font-bold text-[#1A365D] focus:ring-1 focus:ring-indigo-500"
+                                >
+                                  <option value="">-- اختر المندوب --</option>
+                                  <option value="admin">المدير العام (سداد عام مباشر)</option>
+                                  {archiveDelegates.map(d => {
+                                    const phoneKey = d.phone !== 'مجهول' ? d.phone : d.name;
+                                    return (
+                                      <React.Fragment key={phoneKey}>
+                                        <option value={phoneKey}>
+                                          المندوب: {d.name} (سداد مباشر)
+                                        </option>
+                                        <option value={`gm_on_behalf_${phoneKey}`}>
+                                          المدير العام (نيابة عن: {d.name})
+                                        </option>
+                                      </React.Fragment>
+                                    );
+                                  })}
+                                </select>
+                              ) : (
+                                <div className="p-1.5 text-slate-500 text-xs font-bold bg-slate-100 rounded border border-slate-200">{pay.delegateName}</div>
+                              )}
+                            </div>
+                          </div>
+                          <div className="flex gap-2 justify-end mt-1">
+                            <button
+                              type="button"
+                              onClick={() => setEditingPaymentId(null)}
+                              className="px-3 py-1 rounded bg-slate-200 hover:bg-slate-300 text-slate-700 text-[10px] font-bold cursor-pointer transition-all active:scale-95"
+                            >
+                              إلغاء
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const amount = parseFloat(editingPaymentAmount);
+                                if (!amount || amount <= 0) {
+                                  showToast("⚠️ يرجى إدخال قيمة صحيحة للدفعة المالية!");
+                                  return;
+                                }
+
+                                if (isManager && !editingPaymentDelegate) {
+                                  showToast("⚠️ يرجى اختيار المندوب المستهدف بالسداد!");
+                                  return;
+                                }
+
+                                if (onEditExpense) {
+                                  let finalPhone = '';
+                                  let finalName = '';
+                                  let noteText = editingPaymentNotes.trim();
+
+                                  if (!isManager) {
+                                    finalPhone = pay.delegatePhone || '';
+                                    finalName = pay.delegateName || 'مجهول';
+                                  } else {
+                                    if (editingPaymentDelegate === 'admin') {
+                                      finalPhone = 'admin';
+                                      finalName = 'المدير العام';
+                                    } else if (editingPaymentDelegate.startsWith('gm_on_behalf_')) {
+                                      const actualPhone = editingPaymentDelegate.replace('gm_on_behalf_', '');
+                                      const targetDel = archiveDelegates.find(d => d.phone === actualPhone || d.name === actualPhone);
+                                      finalPhone = targetDel ? targetDel.phone : actualPhone;
+                                      finalName = targetDel ? targetDel.name : 'مجهول';
+                                      
+                                      const baseNote = noteText.replace(/\s*\(سداد بواسطة المدير العام نيابة عن المندوب\)/g, '').trim();
+                                      noteText = `${baseNote || 'تسديد مباشر'} (سداد بواسطة المدير العام نيابة عن المندوب)`;
+                                    } else {
+                                      const targetDel = archiveDelegates.find(d => d.phone === editingPaymentDelegate || d.name === editingPaymentDelegate);
+                                      finalPhone = targetDel ? targetDel.phone : editingPaymentDelegate;
+                                      finalName = targetDel ? targetDel.name : 'مجهول';
+                                      noteText = noteText.replace(/\s*\(سداد بواسطة المدير العام نيابة عن المندوب\)/g, '').trim();
+                                    }
+                                  }
+
+                                  onEditExpense(pay.id, {
+                                    amount,
+                                    description: JSON.stringify({
+                                      notes: noteText || 'تسديد مباشر',
+                                      appliedToCarriedDebt: pay.appliedToCarriedDebt || 0,
+                                      recipient: editingPaymentRecipient.trim()
+                                    }),
+                                    delegateName: finalName,
+                                    delegatePhone: finalPhone
+                                  });
+
+                                  setEditingPaymentId(null);
+                                  showToast("✓ تم تعديل دفعة السداد بنجاح!");
+                                } else {
+                                  showToast("⚠️ غير مسموح بتعديل الدفعات في هذا الوضع!");
+                                }
+                              }}
+                              className="px-3 py-1 rounded bg-[#DD6B20] hover:bg-[#C05621] text-white text-[10px] font-bold cursor-pointer transition-all active:scale-95"
+                            >
+                              حفظ التعديل
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="flex flex-col gap-0.5 text-right">
+                            <span className="text-[#DD6B20] font-extrabold">{formatNum(pay.amount)}ج.م</span>
+                            <span className="text-[10px] text-[#2B6CB0] font-medium">{pay.date}</span>
+                            <span className="text-[9.5px] text-slate-600 leading-relaxed">📝 {pay.notes || 'تسديد مباشر'}{pay.delegateName ? ` • 👤 ${pay.delegateName}` : ''}</span>
+                            {pay.recipient ? <span className="text-[9px] text-indigo-600">👤 مستلم: السيد / {pay.recipient}</span> : null}
+                            {(pay.appliedToCarriedDebt || 0) > 0 && <span className="text-[9px] text-amber-600">🔄 مسدد من المديونية السابقة: {formatNum(pay.appliedToCarriedDebt)}ج.م</span>}
+                          </div>
+                          <div className="flex gap-1">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingPaymentId(pay.id);
+                                setEditingPaymentAmount(String(pay.amount));
+                                setEditingPaymentNotes(pay.notes || '');
+                                setEditingPaymentRecipient(pay.recipient || '');
+                                
+                                const isGmOnBehalf = pay.notes && pay.notes.includes('نيابة عن المندوب');
+                                let currentVal = pay.delegatePhone || pay.delegateName || '';
+                                if (currentVal === 'admin') {
+                                  setEditingPaymentDelegate('admin');
+                                } else if (isGmOnBehalf) {
+                                  setEditingPaymentDelegate(`gm_on_behalf_${currentVal}`);
+                                } else {
+                                  setEditingPaymentDelegate(currentVal);
+                                }
+                              }}
+                              className="text-indigo-600 hover:text-indigo-800 bg-[#FFFFFF] hover:bg-indigo-50 p-1.5 rounded-lg border border-slate-200 cursor-pointer transition-all active:scale-95"
+                              title="تعديل دفعة السداد"
+                            >
+                              <Edit className="h-3.5 w-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => onDeleteExpense(pay.id)}
+                              className="text-rose-500 hover:text-rose-700 bg-[#FFFFFF] hover:bg-rose-50 p-1.5 rounded-lg border border-slate-200 cursor-pointer transition-all active:scale-95"
+                              title="حذف دفعة السداد"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                        </>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -6370,44 +7457,35 @@ export default function FactoryTab({
               <span>تنزيل كشف حساب المصنع المالي للإدارة (صورة)</span>
             </button>
 
-            {/* Withdrawn vs Sold Breakdown Grid */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-5 font-sans">
+            {/* حركة البضاعة - فلتر مشترك + لوحتين */}
+            <div className="flex flex-col gap-4 font-sans">
               
-              {/* Box 1: Detailed Loads / Withdrawals */}
-              <div className="bg-[#FFFFFF] p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col gap-3">
-                <h4 className="font-bold text-[#1A365D] text-sm flex items-center gap-1.5 border-b border-slate-100 pb-2">
-                  <Truck className="h-4.5 w-4.5 text-[#2B6CB0]" />
-                  حركة البضاعة المسحوبة من المصنع
-                </h4>
-                
-                <div className="flex flex-col gap-2 mb-2 bg-slate-50 p-2 rounded-xl border border-slate-150 text-right">
-                  <div className="flex items-center gap-2">
-                    <span className="text-[10px] font-bold text-slate-500">الفترة:</span>
-                    <div className="grid grid-cols-5 bg-white border border-slate-200 p-1 rounded-xl text-center gap-1 flex-1">
-                      <button type="button" onClick={() => { setAccountLoadsFilter('all'); setAccountLoadsDayFilters([]); }} className={`py-1.5 px-0.5 rounded-lg text-[10.5px] font-bold transition-all cursor-pointer ${accountLoadsFilter === 'all' ? 'bg-[#FFFFFF] text-[#1A365D] border-b-2 border-[#DD6B20] shadow-sm' : 'text-[#9CA3AF] hover:bg-slate-55'}`}>الكل</button>
-                      <button type="button" onClick={() => { setAccountLoadsFilter('daily'); setAccountLoadsDayFilters([]); }} className={`py-1.5 px-0.5 rounded-lg text-[10.5px] font-bold transition-all cursor-pointer ${accountLoadsFilter === 'daily' ? 'bg-[#FFFFFF] text-[#1A365D] border-b-2 border-[#DD6B20] shadow-sm' : 'text-[#9CA3AF] hover:bg-slate-55'}`}>يومي</button>
-                      <button type="button" onClick={() => { setAccountLoadsFilter('weekly'); setAccountLoadsDayFilters([]); }} className={`py-1.5 px-0.5 rounded-lg text-[10.5px] font-bold transition-all cursor-pointer ${accountLoadsFilter === 'weekly' ? 'bg-[#FFFFFF] text-[#1A365D] border-b-2 border-[#DD6B20] shadow-sm' : 'text-[#9CA3AF] hover:bg-slate-55'}`}>أسبوعي</button>
-                      <button type="button" onClick={() => { setAccountLoadsFilter('monthly'); setAccountLoadsDayFilters([]); }} className={`py-1.5 px-0.5 rounded-lg text-[10.5px] font-bold transition-all cursor-pointer ${accountLoadsFilter === 'monthly' ? 'bg-[#FFFFFF] text-[#1A365D] border-b-2 border-[#DD6B20] shadow-sm' : 'text-[#9CA3AF] hover:bg-slate-55'}`}>شهري</button>
-                      <button type="button" onClick={() => { setAccountLoadsFilter('custom'); setAccountLoadsDayFilters([]); }} className={`py-1.5 px-0.5 rounded-lg text-[10.5px] font-bold transition-all cursor-pointer ${accountLoadsFilter === 'custom' ? 'bg-[#FFFFFF] text-[#1A365D] border-b-2 border-[#DD6B20] shadow-sm' : 'text-[#9CA3AF] hover:bg-slate-55'}`}>مخصص</button>
-                    </div>
-                    <div className="flex gap-1.5 mr-auto">
-                      <button type="button" onClick={() => exportAccountLoads('png')} className="bg-indigo-50 text-indigo-700 p-1.5 rounded-lg border border-indigo-100 hover:bg-indigo-100 transition-colors" title="تنزيل صورة">
-                        <Image className="w-3.5 h-3.5"/>
-                      </button>
-                      <button type="button" onClick={() => exportAccountLoads('pdf')} className="bg-rose-50 text-rose-700 p-1.5 rounded-lg border border-rose-100 hover:bg-rose-100 transition-colors" title="تنزيل PDF">
-                        <FileText className="w-3.5 h-3.5"/>
-                      </button>
-                    </div>
+              {/* فلتر الفترة الزمنية المشترك */}
+              <div className="bg-white p-3.5 rounded-2xl border border-slate-200 shadow-xs flex flex-col gap-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-bold text-slate-500">الفترة الزمنية:</span>
+                  <div className="grid grid-cols-5 bg-slate-50 border border-slate-200 p-1 rounded-xl text-center gap-1 flex-1">
+                    <button type="button" onClick={() => { setAccountLoadsFilter('all'); setAccountLoadsDayFilters([]); }} className={`py-1.5 px-0.5 rounded-lg text-[10.5px] font-bold transition-all cursor-pointer ${accountLoadsFilter === 'all' ? 'bg-white text-[#1A365D] border-b-2 border-[#DD6B20] shadow-sm' : 'text-[#9CA3AF] hover:bg-slate-100'}`}>الكل</button>
+                    <button type="button" onClick={() => { setAccountLoadsFilter('daily'); setAccountLoadsDayFilters([]); }} className={`py-1.5 px-0.5 rounded-lg text-[10.5px] font-bold transition-all cursor-pointer ${accountLoadsFilter === 'daily' ? 'bg-white text-[#1A365D] border-b-2 border-[#DD6B20] shadow-sm' : 'text-[#9CA3AF] hover:bg-slate-100'}`}>يومي</button>
+                    <button type="button" onClick={() => { setAccountLoadsFilter('weekly'); setAccountLoadsDayFilters([]); }} className={`py-1.5 px-0.5 rounded-lg text-[10.5px] font-bold transition-all cursor-pointer ${accountLoadsFilter === 'weekly' ? 'bg-white text-[#1A365D] border-b-2 border-[#DD6B20] shadow-sm' : 'text-[#9CA3AF] hover:bg-slate-100'}`}>أسبوعي</button>
+                    <button type="button" onClick={() => { setAccountLoadsFilter('monthly'); setAccountLoadsDayFilters([]); }} className={`py-1.5 px-0.5 rounded-lg text-[10.5px] font-bold transition-all cursor-pointer ${accountLoadsFilter === 'monthly' ? 'bg-white text-[#1A365D] border-b-2 border-[#DD6B20] shadow-sm' : 'text-[#9CA3AF] hover:bg-slate-100'}`}>شهري</button>
+                    <button type="button" onClick={() => { setAccountLoadsFilter('custom'); setAccountLoadsDayFilters([]); }} className={`py-1.5 px-0.5 rounded-lg text-[10.5px] font-bold transition-all cursor-pointer ${accountLoadsFilter === 'custom' ? 'bg-white text-[#1A365D] border-b-2 border-[#DD6B20] shadow-sm' : 'text-[#9CA3AF] hover:bg-slate-100'}`}>مخصص</button>
                   </div>
-
-                  {accountLoadsFilter === 'custom' && (
-                    <div className="flex gap-1.5">
-                      <input type="date" value={accountLoadsStartDate} onChange={e => setAccountLoadsStartDate(e.target.value)} className="bg-white border border-slate-200 rounded p-1 text-[10px]" />
-                      <input type="date" value={accountLoadsEndDate} onChange={e => setAccountLoadsEndDate(e.target.value)} className="bg-white border border-slate-200 rounded p-1 text-[10px]" />
-                    </div>
-                  )}
+                  <div className="flex gap-1.5 mr-auto">
+                    <button type="button" onClick={() => exportAccountLoads('png')} className="bg-indigo-50 text-indigo-700 p-1.5 rounded-lg border border-indigo-100 hover:bg-indigo-100 transition-colors" title="تنزيل صورة">
+                      <Image className="w-3.5 h-3.5"/>
+                    </button>
+                    <button type="button" onClick={() => exportAccountLoads('pdf')} className="bg-rose-50 text-rose-700 p-1.5 rounded-lg border border-rose-100 hover:bg-rose-100 transition-colors" title="تنزيل PDF">
+                      <FileText className="w-3.5 h-3.5"/>
+                    </button>
+                  </div>
                 </div>
-
+                {accountLoadsFilter === 'custom' && (
+                  <div className="flex gap-1.5">
+                    <input type="date" value={accountLoadsStartDate} onChange={e => setAccountLoadsStartDate(e.target.value)} className="bg-white border border-slate-200 rounded p-1 text-[10px]" />
+                    <input type="date" value={accountLoadsEndDate} onChange={e => setAccountLoadsEndDate(e.target.value)} className="bg-white border border-slate-200 rounded p-1 text-[10px]" />
+                  </div>
+                )}
                 {accountLoadsFilter === 'weekly' && (
                   <div className="flex bg-white border border-slate-200 rounded-lg overflow-hidden flex-wrap gap-px p-0.5 animate-fade-in" dir="rtl">
                     <button type="button" onClick={() => setAccountLoadsDayFilters([])} className={`flex-1 text-[10px] py-1.5 rounded font-bold transition-colors ${accountLoadsDayFilters.length === 0 ? 'bg-[#1A365D] text-white shadow-xs' : 'text-slate-600 hover:bg-slate-100 bg-white'}`}>الكل</button>
@@ -6416,77 +7494,98 @@ export default function FactoryTab({
                     ))}
                   </div>
                 )}
-
-                <div className="max-h-80 overflow-y-auto custom-scroll flex flex-col gap-2.5">
-                  {accountLoadsSummary.length === 0 ? (
-                    <p className="text-center text-gray-400 py-6 text-xs font-medium">لا توجد مسحوبات مسجلة.</p>
-                  ) : (
-                    accountLoadsSummary.map((item, idx) => (
-                      <div key={'with_' + item.id + '_' + idx} className="bg-[#F7FAFC] border border-slate-100 rounded-xl p-3.5 flex flex-col gap-1 text-xs">
-                        <div className="flex justify-between items-center font-bold text-[#1A365D]">
-                          <span>{item.productName} ({item.size})</span>
-                          <span className="text-[10px] text-slate-500">محمل: {item.loaded} | مبيع: <span className="text-emerald-600">{item.sold}</span> | متبقي: <span className={item.remaining > 0 ? 'text-[#DD6B20]' : 'text-emerald-600'}>{item.remaining}</span></span>
-                        </div>
-                        <div className="flex justify-between items-center text-[10px] mt-0.5 font-medium">
-                          <span className="text-[#2B6CB0]">قيمة المبيع بسعر المصنع: <strong className="text-[#1A365D]">{formatNum(item.soldValue)}ج.م</strong></span>
-                          {item.remaining > 0 && <span className="text-[#DD6B20]">المتبقي في السيارة: {item.remaining} كرتونة</span>}
-                        </div>
-                      </div>
-                    ))
-                  )}
-                </div>
               </div>
 
-              {/* Box 2: Detailed Sales / Sold Items */}
-              <div className="bg-[#FFFFFF] p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col gap-3">
-                <h4 className="font-bold text-[#1A365D] text-sm flex items-center gap-1.5 border-b border-slate-100 pb-2">
-                  <CirclePercent className="h-4.5 w-4.5 text-emerald-500" />
-                  حركة البضاعة المباعة للعملاء بالسيارة
-                </h4>
+              {/* اللوحات */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+              
+                {/* لوحة 1: حركة البضاعة المسحوبة من المصنع */}
+                <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col gap-3">
+                  <h4 className="font-bold text-[#1A365D] text-sm flex items-center gap-1.5 border-b border-slate-100 pb-2">
+                    <Truck className="h-4.5 w-4.5 text-[#2B6CB0]" />
+                    حركة البضاعة المسحوبة من المصنع
+                  </h4>
 
-                <div className="max-h-80 overflow-y-auto custom-scroll flex flex-col gap-2.5">
-                  {Object.keys(factoryBalanceDetails.soldCounts).length === 0 ? (
-                    <p className="text-center text-gray-400 py-6 text-xs font-medium">لا توجد مبيعات مسجلة في الفواتير حتى الآن.</p>
-                  ) : (
-                    Object.entries(factoryBalanceDetails.soldCounts).map(([weightId, val]) => {
-                      const info = val as { cartons: number; units: number; value: number };
-                      let pName = 'منتج غير محدد';
-                      let sizeStr = 'عبوة مجهولة';
-                      let accountingUnitLabel = 'كرتونة';
-                      let unitsPerC = 12;
-
-                      products.forEach(p => {
-                        const weights = getProductWeightsFallback(p);
-                        const weight = weights.find(w => w.id === weightId);
-                        if (weight) {
-                          pName = p.name;
-                          sizeStr = weight.size;
-                          accountingUnitLabel = p.accountingUnit || 'كرتونة';
-                          unitsPerC = weight.unitsPerCarton || 12;
-                        }
-                      });
-                      
-                      const fullC = Math.floor(info.units / unitsPerC);
-                      const loose = info.units % unitsPerC;
-                      const qtyText = `${fullC > 0 ? fullC + ' ' + accountingUnitLabel : ''} ${loose > 0 ? (fullC > 0 ? 'و ' : '') + loose + ' عبوة' : ''}`.trim() || '0 عبوة';
-
-                      return (
-                        <div key={'sold_' + weightId} className="bg-emerald-50/40 border border-emerald-100 rounded-xl p-3.5 flex flex-col gap-1 text-xs">
-                          <div className="flex justify-between items-center font-bold">
-                            <span className="text-emerald-950">{pName} ({sizeStr})</span>
-                            <span className="text-emerald-800">{qtyText}</span>
+                  <div className="max-h-80 overflow-y-auto custom-scroll flex flex-col gap-2.5">
+                    {accountLoadsSummary.length === 0 ? (
+                      <p className="text-center text-gray-400 py-6 text-xs font-medium">لا توجد مسحوبات مسجلة.</p>
+                    ) : (
+                      accountLoadsSummary.map((item, idx) => (
+                        <div key={'with_' + item.id + '_' + idx} className="bg-[#F7FAFC] border border-slate-100 rounded-xl p-3.5 flex flex-col gap-2 text-xs">
+                          <div className="font-bold text-[#1A365D] text-[11px]">{item.productName} ({item.size})</div>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="bg-blue-50 text-blue-700 border border-blue-100 px-2 py-0.5 rounded-full text-[10px] font-bold">مُحمّل: {item.loaded}</span>
+                            <span className="bg-emerald-50 text-emerald-700 border border-emerald-100 px-2 py-0.5 rounded-full text-[10px] font-bold">مُبيعي: {item.sold}</span>
+                            <span className={`${item.remaining > 0 ? 'bg-amber-50 text-amber-700 border border-amber-100' : 'bg-emerald-50 text-emerald-700 border border-emerald-100'} px-2 py-0.5 rounded-full text-[10px] font-bold`}>مُتبقي: {item.remaining}</span>
                           </div>
-                          <div className="flex justify-between items-center text-[10px] text-[#2B6CB0] mt-0.5 font-medium">
-                            <span>إجمالي المبيعات الفردية: {info.units} عبوة</span>
-                            <span className="font-mono text-[#DD6B20] font-extrabold">قيمة البيع: {formatNum(info.value)}ج.م</span>
+                          <div className="text-[10px] text-slate-500 font-medium">
+                            سعر الكرتونة من المصنع: <strong className="text-[#1A365D]">{formatNum(item.loaded > 0 ? item.loadedValue / item.loaded : 0)} ج.م</strong>
                           </div>
                         </div>
-                      );
-                    })
+                      ))
+                    )}
+                  </div>
+
+                  {accountLoadsSummary.length > 0 && (
+                    <div className="bg-[#1A365D] text-white rounded-xl p-3 flex justify-between items-center text-xs font-bold">
+                      <span>إجمالي قيمة البضاعة المسحوبة</span>
+                      <span className="font-mono">{formatNum(accountLoadsSummary.reduce((s, i) => s + i.loadedValue, 0))} ج.م</span>
+                    </div>
                   )}
                 </div>
-              </div>
 
+                {/* لوحة 2: حركة البضاعة المباعة للعملاء بالسيارة */}
+                <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col gap-3">
+                  <h4 className="font-bold text-[#1A365D] text-sm flex items-center gap-1.5 border-b border-slate-100 pb-2">
+                    <CirclePercent className="h-4.5 w-4.5 text-emerald-500" />
+                    حركة البضاعة المباعة للعملاء بالسيارة
+                  </h4>
+
+                  <div className="max-h-80 overflow-y-auto custom-scroll flex flex-col gap-2.5">
+                    {Object.keys(filteredSoldCounts).length === 0 ? (
+                      <p className="text-center text-gray-400 py-6 text-xs font-medium">لا توجد مبيعات مسجلة في الفواتير حتى الآن.</p>
+                    ) : (
+                      Object.entries(filteredSoldCounts).map(([weightId, val]) => {
+                        const info = val as { cartons: number; units: number; value: number; factoryValue: number };
+                        let pName = 'منتج غير محدد';
+                        let sizeStr = 'عبوة مجهولة';
+                        let unitsPerC = 12;
+
+                        products.forEach(p => {
+                          const weights = getProductWeightsFallback(p);
+                          const weight = weights.find(w => w.id === weightId);
+                          if (weight) {
+                            pName = p.name;
+                            sizeStr = weight.size;
+                            unitsPerC = weight.unitsPerCarton || 12;
+                          }
+                        });
+
+                        return (
+                          <div key={'sold_' + weightId} className="bg-emerald-50/40 border border-emerald-100 rounded-xl p-3.5 flex flex-col gap-2 text-xs">
+                            <div className="font-bold text-emerald-950 text-[11px]">{pName} ({sizeStr})</div>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="bg-emerald-100 text-emerald-800 border border-emerald-200 px-2 py-0.5 rounded-full text-[10px] font-bold">إجمالي المبيعات: {Math.floor(info.units / unitsPerC)} كرتونة</span>
+                              <span className="bg-blue-50 text-blue-700 border border-blue-100 px-2 py-0.5 rounded-full text-[10px] font-bold">المبيع الفردي: {info.units} عبوة</span>
+                            </div>
+                            <div className="text-[10px] text-slate-500 font-medium">
+                              تقيئة البيع: الإجمالي <strong className="text-[#DD6B20] font-mono">{formatNum(info.value)} ج.م</strong>
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+
+                  {Object.keys(filteredSoldCounts).length > 0 && (
+                    <div className="bg-emerald-600 text-white rounded-xl p-3 flex justify-between items-center text-xs font-bold">
+                      <span>إجمالي قيمة المبيعات</span>
+                      <span className="font-mono">{formatNum(Object.values(filteredSoldCounts).reduce((s, v) => s + (v as any).value, 0))} ج.م</span>
+                    </div>
+                  )}
+                </div>
+
+              </div>
             </div>
 
             {/* ⭐ قسم جرد السيارة */}
@@ -6524,10 +7623,8 @@ export default function FactoryTab({
                   type="button"
                   onClick={() => {
                     const canvas = document.createElement('canvas');
+                    const dpr = window.devicePixelRatio || 1;
                     const W = 920;
-                    canvas.width = W;
-                    const ctx = canvas.getContext('2d');
-                    if (!ctx) return;
                     const padX = 30;
                     const tableW = W - padX * 2;
                     const rowH = 38;
@@ -6542,7 +7639,13 @@ export default function FactoryTab({
                     });
                     const dataRows = visibleRows.length;
                     const totalH = 24 + headerH + 32 + (dataRows * rowH) + summaryRowH + 12 + bottomBoxH + footerH + 24;
-                    canvas.height = totalH;
+                    canvas.width = W * dpr;
+                    canvas.height = totalH * dpr;
+                    canvas.style.width = W + 'px';
+                    canvas.style.height = totalH + 'px';
+                    const ctx = canvas.getContext('2d');
+                    if (!ctx) return;
+                    ctx.scale(dpr, dpr);
 
                     const roundRect = (c: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) => {
                       c.beginPath(); c.moveTo(x+r, y); c.lineTo(x+w-r, y);
