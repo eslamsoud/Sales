@@ -1,6 +1,7 @@
 // @ts-nocheck
 import { confirmDialog, duaConfirmDialog } from '../utils/confirm';
 import { jsPDF } from 'jspdf';
+import { COMPACT_PRO_CSS } from '../utils/reportStyles';
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -1414,7 +1415,7 @@ export default function FactoryTab({
     const tableW = W - padX * 2;
     const loadRowH = 38;
 
-    const headerH = 110;
+    const headerH = 120;
     const loadsTableH = 36 + list.length * loadRowH + 36;
     const summaryRowH = 36;
     const bottomBoxH = 120;
@@ -1468,7 +1469,9 @@ export default function FactoryTab({
     ctx.font = '12px system-ui, sans-serif';
     ctx.fillStyle = '#cbd5e1';
     ctx.textAlign = 'right';
-    ctx.fillText(`تاريخ ووقت البيان: ${new Date().toLocaleDateString('ar-EG')} — ${new Date().toLocaleTimeString('ar-EG')}`, W - 55, 92);
+    ctx.fillText(`تاريخ ووقت البيان: ${new Date().toLocaleDateString('ar-EG')} — ${new Date().toLocaleTimeString('ar-EG')}`, W - 55, 86);
+    const loadDates = [...new Set(list.map((it: any) => it.date ? new Date(it.date).toLocaleDateString('ar-EG') : '').filter(Boolean))];
+    ctx.fillText(`يوم التحميل: ${loadDates.length > 0 ? loadDates.join(' — ') : 'غير محدد'}`, W - 55, 102);
     ctx.textAlign = 'left';
     ctx.fillStyle = '#fbbf24';
     ctx.font = 'bold 12px system-ui, sans-serif';
@@ -1596,7 +1599,7 @@ export default function FactoryTab({
     ctx.textAlign = 'right';
     ctx.fillText(`تاريخ البيان: ${new Date().toLocaleDateString('ar-EG')}`, leftBoxX + leftBoxW - 20, infoY);
     infoY += 22;
-    ctx.fillText(`وقت الطباعة: ${new Date().toLocaleTimeString('ar-EG')}`, leftBoxX + leftBoxW - 20, infoY);
+    ctx.fillText(`يوم التحميل: ${loadDates.length > 0 ? loadDates[0] : 'غير محدد'}`, leftBoxX + leftBoxW - 20, infoY);
 
     y += bottomBoxH + 20;
 
@@ -1634,9 +1637,8 @@ export default function FactoryTab({
     if (!doc) return;
 
     const selectedDel = archiveDelegates.find(d => d.phone === factoryDelegateFilter || d.name === factoryDelegateFilter);
-    const delegateHeader = selectedDel ? `<p style="font-size: 14px; margin-top: 5px; color: #1e3a8a; font-weight: bold;">المندوب: ${selectedDel.name} ${selectedDel.phone !== 'مجهول' ? `(${selectedDel.phone})` : ''}</p>` : '';
+    const delegateHeader = selectedDel ? `<div style="display:inline-block;background:#e0e7ff;color:#3730a3;padding:4px 16px;border-radius:20px;font-size:12px;font-weight:700;margin-top:8px;">المندوب: ${selectedDel.name} ${selectedDel.phone !== 'مجهول' ? `(${selectedDel.phone})` : ''}</div>` : '';
 
-    const filteredLoadsPdf = factoryLoads.filter(filterByFactoryDelegate).filter(l => !l.archivedAt);
     const soldItems = allAccountLoadsForExport.filter(item => item.loaded > 0 || item.sold > 0).map(item => {
       const avgCartonPrice = item.loaded > 0 ? Math.round(item.loadedValue / item.loaded) : 0;
       return {
@@ -1654,150 +1656,174 @@ export default function FactoryTab({
     const totalSoldCrates = soldItems.reduce((sum, item) => sum + item.sold, 0);
     const totalRemainingCrates = soldItems.reduce((sum, item) => sum + item.remaining, 0);
     const totalSoldValuePdf = soldItems.reduce((sum, item) => sum + item.factoryValue, 0);
+    const totalLoadedValuePdf = soldItems.reduce((sum, item) => sum + (item.loaded * item.factoryCartonPrice), 0);
 
     doc.open();
     doc.write(`
+      <!DOCTYPE html>
       <html dir="rtl" lang="ar">
-        <head>
-          <style>
-            @media print {
-              @page { size: A4; margin: 15mm; }
-              body { margin: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      <head>${COMPACT_PRO_CSS}</head>
+      <body>
+
+        <div class="rh">
+          <h1>كشف حساب المصنع</h1>
+          <div class="sub">نظام إدارة المبيعات — كشف حساب تفصيلي</div>
+          ${delegateHeader}
+          <div class="ref">
+            <span>تاريخ الطباعة: ${new Date().toLocaleDateString('ar-EG')}</span>
+            <span>رقم العملية: FACT-${Date.now().toString().slice(-6)}</span>
+          </div>
+        </div>
+
+        <div class="sg">
+          <div class="sb bl">
+            <div class="l">حساب المصنع (المحمل)</div>
+            <div class="v">${totalFactoryBalanceDetails.totalWithdrawnValue.toLocaleString('ar-EG')} <span style="font-size:10px">ج.م</span></div>
+          </div>
+          <div class="sb gr">
+            <div class="l">إجمالي المسدد</div>
+            <div class="v">${totalFactoryBalanceDetails.totalAdvancePayments.toLocaleString('ar-EG')} <span style="font-size:10px">ج.م</span></div>
+          </div>
+          ${totalFactoryBalanceDetails.netRemainingDueToFactory > 0 ? `
+          <div class="sb rd">
+            <div class="l">المتبقي للمصنع</div>
+            <div class="v">${totalFactoryBalanceDetails.netRemainingDueToFactory.toLocaleString('ar-EG')} <span style="font-size:10px">ج.م</span></div>
+          </div>` : totalFactoryBalanceDetails.netRemainingDueToFactory === 0 ? `
+          <div class="sb gr">
+            <div class="l">المتبقي للمصنع</div>
+            <div class="v" style="color:#16a34a">مسوى ✔️</div>
+          </div>` : `
+          <div class="sb pu">
+            <div class="l">رصيد دائن لصالحنا</div>
+            <div class="v">${Math.abs(totalFactoryBalanceDetails.netRemainingDueToFactory).toLocaleString('ar-EG')} <span style="font-size:10px">ج.م</span></div>
+          </div>`}
+        </div>
+
+        <div class="st"><span class="i">1</span> تفاصيل البضاعة (المحمل - المبيع - المتبقي)</div>
+        <table>
+          <thead>
+            <tr>
+              <th width="30">م</th>
+              <th>الصنف والحجم</th>
+              <th>المحمل (كرتونة)</th>
+              <th>المبيع (كرتونة)</th>
+              <th>المتبقي (كرتونة)</th>
+              <th>سعر الكرتونة</th>
+              <th>قيمة المبيع</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${soldItems.length === 0 ? '<tr><td colspan="7" style="text-align:center; color:#94a3b8; padding:20px;">لا توجد بضاعة مباع مسجلة.</td></tr>' :
+              soldItems.map((item, idx) => `
+                <tr>
+                  <td style="text-align:center; font-weight:700; color:#94a3b8;">${idx + 1}</td>
+                  <td><b style="color:#1e3a5f">${item.productName}</b> <span style="color:#64748b">${item.size}</span></td>
+                  <td style="text-align:center">${item.loaded}</td>
+                  <td style="text-align:center; color: #16a34a; font-weight: 800;">${item.sold}</td>
+                  <td style="text-align:center; color: ${item.remaining > 0 ? '#f97316' : '#16a34a'}; font-weight: 800;">${item.remaining}</td>
+                  <td style="text-align:center">${item.factoryCartonPrice > 0 ? item.factoryCartonPrice.toLocaleString('ar-EG') : '—'}</td>
+                  <td style="text-align:center; font-weight:800; color:#1e3a5f">${item.factoryValue.toLocaleString('ar-EG')}</td>
+                </tr>
+              `).join('')
             }
-            body { font-family: system-ui, -apple-system, sans-serif; color: #0f172a; line-height: 1.5; padding: 20px; }
-            .header { text-align: center; margin-bottom: 25px; border-bottom: 3px double #1e3a8a; padding-bottom: 12px; }
-            .header h1 { color: #1e3a8a; margin: 0 0 5px 0; font-size: 24px; font-weight: 900; }
-            .header p { margin: 0; color: #64748b; font-size: 13px; font-weight: bold; }
-            .meta-box { display: flex; justify-content: space-between; margin-bottom: 25px; font-size: 11px; color: #334155; font-weight: bold; border-bottom: 1px solid #e2e8f0; padding-bottom: 8px; }
-            .summary-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; margin-bottom: 25px; }
-            .card { background: #f8fafc; border: 1px solid #e2e8f0; padding: 15px; border-radius: 12px; text-align: center; }
-            .card.danger { background: #fff5f5; border-color: #fee2e2; }
-            .card.success { background: #f0fdf4; border-color: #dcfce7; }
-            .card span { display: block; font-size: 10px; color: #64748b; font-weight: bold; margin-bottom: 5px; }
-            .card strong { font-size: 15px; color: #0f172a; font-weight: 900; }
-            h2 { font-size: 13px; color: #1e3a8a; margin: 25px 0 10px 0; border-right: 4px solid #dd6b20; padding-right: 8px; font-weight: bold; }
-            table { width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 11px; }
-            th, td { border: 1px solid #e2e8f0; padding: 8px 12px; text-align: right; }
-            th { background: #f1f5f9; color: #334155; font-weight: 900; }
-            .footer-notes { margin-top: 40px; border-top: 1px solid #cbd5e1; padding-top: 15px; display: flex; justify-content: space-between; font-size: 11px; font-weight: bold; color: #475569; }
-          </style>
-        </head>
-        <body>
-          <div class="header">
-            <h1>كشف حساب المالي للمصنع</h1>
-            <p>محسوب بناءً على البضاعة المباع فقط (الجرد)</p>
-            ${delegateHeader}
+          </tbody>
+          <tfoot>
+            <tr class="tt">
+              <td colspan="2" style="text-align:right">المجموع</td>
+              <td style="text-align:center">${totalLoadedCrates}</td>
+              <td style="text-align:center">${totalSoldCrates}</td>
+              <td style="text-align:center; color: #fbbf24;">${totalRemainingCrates}</td>
+              <td></td>
+              <td></td>
+            </tr>
+            <tr class="ts">
+              <td colspan="5" style="text-align:right; font-size:11px">إجمالي المستحق (المبيع بسعر المصنع)</td>
+              <td colspan="2" style="text-align:center; font-size: 14px; font-weight:900;">${totalSoldValuePdf.toLocaleString('ar-EG')} ج.م</td>
+            </tr>
+          </tfoot>
+        </table>
+
+        <div class="st"><span class="i">2</span> تفاصيل دفعات السداد المباشرة للمورد</div>
+        <table>
+          <thead>
+            <tr>
+              <th width="28">م</th>
+              <th>التاريخ والوقت</th>
+              <th>البيان</th>
+              <th>المبلغ</th>
+              <th>المندوب المسدد</th>
+              <th>المتبقي للمديونية</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${currentCycleExtraPayments.length === 0 ? '<tr><td colspan="6" style="text-align:center; color:#94a3b8; padding:16px;">لم يتم تسجيل دفعات مباشرة إضافية.</td></tr>' :
+              currentCycleExtraPayments.map((pay, idx) => {
+                const cumBefore = currentCycleExtraPayments.slice(0, idx).reduce((s, p) => s + (p.amount - (p.appliedToCarriedDebt || 0)), 0);
+                const remainAfter = totalFactoryBalanceDetails.totalWithdrawnValue - totalFactoryBalanceDetails.totalAdvancePayments + (totalFactoryBalanceDetails.netRemainingDueToFactory > 0 ? totalFactoryBalanceDetails.netRemainingDueToFactory : 0) - cumBefore - (pay.amount - (pay.appliedToCarriedDebt || 0));
+                const runningTotal = totalFactoryBalanceDetails.totalWithdrawnValue - totalFactoryBalanceDetails.currentAdvances - cumBefore - (pay.amount - (pay.appliedToCarriedDebt || 0));
+                return `
+                <tr>
+                  <td style="text-align:center; font-weight:700; color:#94a3b8;">${idx + 1}</td>
+                  <td style="font-size:9px">${pay.date}</td>
+                  <td>${pay.notes || 'تسديد مباشر للمصنع'}</td>
+                  <td style="font-weight:800; color:#15803d">${pay.amount.toLocaleString('ar-EG')}</td>
+                  <td>${pay.delegateName || '-'}</td>
+                  <td style="text-align:center; font-weight:700; color: ${runningTotal > 0 ? '#dc2626' : '#16a34a'}">
+                    ${runningTotal > 0 ? runningTotal.toLocaleString('ar-EG') + ' ج.م' : runningTotal < 0 ? 'دائن ' + Math.abs(runningTotal).toLocaleString('ar-EG') : '— مسوى'}
+                  </td>
+                </tr>
+              `}).join('')
+            }
+          </tbody>
+        </table>
+
+        <div class="st"><span class="i">3</span> ملخص الحساب النهائي</div>
+        <table class="final-summary">
+          <thead>
+            <tr>
+              <th style="width:60%">البيان</th>
+              <th style="width:40%">المبلغ (ج.م)</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td style="font-weight:700">إجمالي قيمة المحمل من المصنع</td>
+              <td style="text-align:center; font-weight:800; font-family:'Tajawal',monospace">${totalFactoryBalanceDetails.totalWithdrawnValue.toLocaleString('ar-EG')}</td>
+            </tr>
+            <tr>
+              <td>إجمالي المستحق (المبيع بسعر المصنع)</td>
+              <td style="text-align:center; font-weight:700; font-family:'Tajawal',monospace">${totalSoldValuePdf.toLocaleString('ar-EG')}</td>
+            </tr>
+            <tr>
+              <td style="font-weight:700; color:#15803d">إجمالي المسدد والمقدمات</td>
+              <td style="text-align:center; font-weight:800; color:#15803d; font-family:'Tajawal',monospace">${totalFactoryBalanceDetails.totalAdvancePayments.toLocaleString('ar-EG')}</td>
+            </tr>
+            ${carriedOverDebt > 0 ? `
+            <tr>
+              <td style="color:#dc2626">دين من دورة سابقة</td>
+              <td style="text-align:center; font-weight:700; color:#dc2626; font-family:'Tajawal',monospace">${carriedOverDebt.toLocaleString('ar-EG')}</td>
+            </tr>` : ''}
+            <tr class="result-row">
+              <td style="font-size:12px; letter-spacing:0.3px">المتبقي للمصنع (الرصيد النهائي)</td>
+              <td style="text-align:center; font-size:16px; font-weight:900; font-family:'Tajawal',monospace">
+                ${totalFactoryBalanceDetails.netRemainingDueToFactory > 0 ? totalFactoryBalanceDetails.netRemainingDueToFactory.toLocaleString('ar-EG') + ' ج.م' : totalFactoryBalanceDetails.netRemainingDueToFactory === 0 ? 'مسوى ✔️' : Math.abs(totalFactoryBalanceDetails.netRemainingDueToFactory).toLocaleString('ar-EG') + ' ج.م (دائن)'}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="fs">
+          <div class="sb2">
+            <div class="ti">المدير المالي للشركة</div>
+            <div class="ln">التوقيع</div>
           </div>
-          
-          <div class="meta-box">
-            <div>تاريخ الطباعة: ${new Date().toLocaleDateString('ar-EG')}</div>
-            <div>رقم الحساب أو العملية: FACT-${Date.now().toString().slice(-6)}</div>
+          <div class="sb2">
+            <div class="ti">مندوب المبيعات المستلم</div>
+            <div class="ln">التوقيع</div>
           </div>
-          
-          <div class="summary-cards">
-            <div class="card">
-              <span>حساب المصنع (المبيع بسعر المصنع)</span>
-              <strong>${factoryBalanceDetails.totalWithdrawnValue.toLocaleString('ar-EG')} ج.م</strong>
-            </div>
-            <div class="card success">
-              <span>إجمالي المسدد والمقدمات</span>
-              <strong style="color: #16a34a;">${factoryBalanceDetails.totalAdvancePayments.toLocaleString('ar-EG')} ج.م</strong>
-            </div>
-            ${factoryBalanceDetails.netRemainingDueToFactory > 0 ? `
-            <div class="card danger">
-              <span>صافي المتبقي للمصنع</span>
-              <strong style="color: #dc2626;">${factoryBalanceDetails.netRemainingDueToFactory.toLocaleString('ar-EG')} ج.م</strong>
-            </div>` : factoryBalanceDetails.netRemainingDueToFactory === 0 ? `
-            <div class="card success">
-              <span>صافي المتبقي للمصنع</span>
-              <strong style="color: #16a34a;">مسوى ✔️</strong>
-            </div>` : `
-            <div class="card" style="border-color:#c7d2fe; background:#eef2ff;">
-              <span>رصيد دائن لصالحنا (دفعات زائدة)</span>
-              <strong style="color: #4f46e5;">${Math.abs(factoryBalanceDetails.netRemainingDueToFactory).toLocaleString('ar-EG')} ج.م</strong>
-            </div>`}
-          </div>
-          
-          <h2>تفاصيل البضاعة (المحمل - المبيع - المتبقي)</h2>
-          <table>
-            <thead>
-              <tr>
-                <th width="40">م</th>
-                <th>الصنف والحجم</th>
-                <th>المحمل (كرتونة)</th>
-                <th>المبيع (كرتونة)</th>
-                <th>المتبقي (كرتونة)</th>
-                <th>سعر المصنع للكرتونة</th>
-                <th>قيمة المبيع بسعر المصنع</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${soldItems.length === 0 ? '<tr><td colspan="7" style="text-align:center; color:#94a3b8;">لا توجد بضاعة مباع مسجلة.</td></tr>' : 
-                soldItems.map((item, idx) => `
-                    <tr>
-                      <td>${idx + 1}</td>
-                      <td><b>${item.productName}</b> ${item.size}</td>
-                      <td>${item.loaded}</td>
-                      <td style="color: #16a34a; font-weight: bold;">${item.sold}</td>
-                      <td style="color: ${item.remaining > 0 ? '#dd6b20' : '#16a34a'}; font-weight: bold;">${item.remaining}</td>
-                      <td>${item.factoryCartonPrice > 0 ? item.factoryCartonPrice.toLocaleString('ar-EG') + ' ج.م' : '—'}</td>
-                      <td><b>${item.factoryValue.toLocaleString('ar-EG')} ج.م</b></td>
-                    </tr>
-                  `).join('')
-              }
-            </tbody>
-            <tfoot>
-              <tr style="background: #1e3a5f; color: white; font-weight: bold;">
-                <td colspan="2">المجموع</td>
-                <td>${totalLoadedCrates}</td>
-                <td>${totalSoldCrates}</td>
-                <td style="color: #fbbf24;">${totalRemainingCrates}</td>
-                <td></td>
-                <td></td>
-              </tr>
-              <tr style="background: #0d7c5f; color: white; font-weight: bold;">
-                <td colspan="5">إجمالي المستحق (المبيع بسعر المصنع)</td>
-                <td colspan="2" style="font-size: 14px;">${totalSoldValuePdf.toLocaleString('ar-EG')} ج.م</td>
-              </tr>
-            </tfoot>
-          </table>
-          
-          <h2>تفاصيل دفعات السداد المباشرة للمورد</h2>
-          <table>
-            <thead>
-              <tr>
-                <th width="35">م</th>
-                <th>التاريخ والوقت</th>
-                <th>البيان (وسيلة الدفع)</th>
-                <th>المبلغ</th>
-                <th>المندوب المسدد</th>
-                <th>المتبقي للمديونية</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${currentCycleExtraPayments.length === 0 ? '<tr><td colspan="6" style="text-align:center; color:#94a3b8;">لم يتم تسجيل دفعات مباشرة إضافية.</td></tr>' : 
-                currentCycleExtraPayments.map((pay, idx) => {
-                  const cumPaymentsBefore = currentCycleExtraPayments.slice(0, idx).reduce((s, p) => s + p.amount, 0);
-                  const remainingAfterPayment = factoryBalanceDetails.totalWithdrawnValue - factoryBalanceDetails.currentAdvances - cumPaymentsBefore - pay.amount;
-                  return `
-                  <tr>
-                    <td>${idx + 1}</td>
-                    <td>${pay.date}</td>
-                    <td>${pay.notes || 'تسديد مباشر للمصنع'}</td>
-                    <td><b>${pay.amount.toLocaleString('ar-EG')} ج.م</b></td>
-                    <td>${pay.delegateName || '-'}</td>
-                    <td>${remainingAfterPayment > 0 ? remainingAfterPayment.toLocaleString('ar-EG') + ' ج.م' : remainingAfterPayment < 0 ? 'رصيد دائن ' + Math.abs(remainingAfterPayment).toLocaleString('ar-EG') + ' ج.م' : '— مسوى'}</td>
-                  </tr>
-                `}).join('')
-              }
-            </tbody>
-          </table>
-          
-          <div class="footer-notes">
-            <div>توقيع المدير المالي للشركة: ............................</div>
-            <div>اعتماد مندوب مبيعات المصنع المستلم: ............................</div>
-          </div>
-        </body>
+        </div>
+
+      </body>
       </html>
     `);
     doc.close();
@@ -1808,7 +1834,7 @@ export default function FactoryTab({
       setTimeout(() => {
         document.body.removeChild(iframe);
       }, 500);
-    }, 500);
+    }, 800);
   };
 
   // Compute comprehensive factory account statement: withdrawn vs sold vs remaining financial balance
@@ -1892,6 +1918,54 @@ export default function FactoryTab({
     };
   }, [factoryLoads, products, invoices, carriedOverDebt, currentCycleExtraPayments, factoryDelegateFilter, isManager, lastArchiveTimestamp]);
 
+  // ═══════════════════════════════════════════════════════════════
+  // الرصيد الكلي للمصنع (بدون فلتر مندوب) — لضمان أي سداد يُحسب على الرصيد الكلي
+  // ═══════════════════════════════════════════════════════════════
+  const totalFactoryPayments = useMemo(() => {
+    return expenses
+      .filter(e => e.category === 'سداد للمصنع' || e.type === 'factory_payment')
+      .filter(e => {
+        const timeVal = e.date ? new Date(e.date).getTime() : 0;
+        return timeVal > lastArchiveTimestamp;
+      });
+  }, [expenses, lastArchiveTimestamp]);
+
+  const totalFactoryBalanceDetails = useMemo(() => {
+    let rawLoadedValue = 0;
+    let currentAdvances = 0;
+
+    const allLoads = factoryLoads
+      .filter(l => new Date(l.date).getTime() > lastArchiveTimestamp);
+
+    allLoads.forEach(load => {
+      const prod = products.find(p => String(p.id).trim() === String(load.productId).trim());
+      const weights = prod ? getProductWeightsFallback(prod) : [];
+      const weight = weights.find(w => String(w.id).trim() === String(load.weightId).trim()) || weights[0];
+      const unitsPerCarton = weight?.unitsPerCarton || 12;
+      const cartons = load.cartonsCount !== undefined ? load.cartonsCount : Math.floor(load.quantity / unitsPerCarton);
+      const loose = load.looseUnitsCount !== undefined ? load.looseUnitsCount : (load.quantity % unitsPerCarton);
+      const cartonPrice = load.cartonPrice !== undefined ? Number(load.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) : 0) || 0);
+      const unitPrice = load.unitPrice !== undefined ? Number(load.unitPrice) : (Number(weight?.factoryPricePerUnit) || (prod ? Number(prod.price) : 0) || 0);
+      const subtotal = (cartons * cartonPrice) + (loose * unitPrice);
+      rawLoadedValue += subtotal;
+      currentAdvances += load.advanceAmount ?? 0;
+    });
+
+    const totalWithdrawnValue = rawLoadedValue;
+
+    const allPaymentsSum = totalFactoryPayments.reduce((sum, p) => {
+      let parsed = p;
+      try { parsed = JSON.parse(p.description || '{}'); } catch {}
+      const applied = (parsed && parsed.appliedToCarriedDebt) || 0;
+      return sum + (p.amount - applied);
+    }, 0);
+
+    const totalAdvancePayments = currentAdvances + allPaymentsSum;
+    const netRemainingDueToFactory = totalWithdrawnValue - totalAdvancePayments + carriedOverDebt;
+
+    return { rawLoadedValue, totalWithdrawnValue, totalAdvancePayments, netRemainingDueToFactory };
+  }, [factoryLoads, products, totalFactoryPayments, carriedOverDebt, lastArchiveTimestamp]);
+
   // Filters for the withdrawn goods visual component (Box 1 in Factory Account)
   const [accountLoadsFilter, setAccountLoadsFilter] = useState<'all' | 'daily' | 'weekly' | 'monthly' | 'custom'>('all');
   const [accountLoadsStartDate, setAccountLoadsStartDate] = useState('');
@@ -1958,12 +2032,15 @@ export default function FactoryTab({
       const unitsPerCarton = weight?.unitsPerCarton || 12;
       const cartonPrice = weight ? (Number(weight.cartonPriceFromFactory) || Number(prod?.price || 0)) : 0;
       const unitPrice = weight ? (Number(weight.factoryPricePerUnit) || Number(prod?.price || 0)) : 0;
-      const soldCartons = stock.sold;
-      const soldValue = soldCartons * cartonPrice;
-      const remCartons = stock.remaining;
-      const remainingValue = remCartons * cartonPrice;
-      totals[key].sold = soldCartons;
-      totals[key].remaining = remCartons;
+      // stock.sold و stock.remaining بالقطعة — تحويل إلى كرتونة + باقي
+      const soldFullCartons = Math.floor(stock.sold / unitsPerCarton);
+      const soldLoose = stock.sold % unitsPerCarton;
+      const soldValue = (soldFullCartons * cartonPrice) + (soldLoose * unitPrice);
+      const remFullCartons = Math.floor(stock.remaining / unitsPerCarton);
+      const remLoose = stock.remaining % unitsPerCarton;
+      const remainingValue = (remFullCartons * cartonPrice) + (remLoose * unitPrice);
+      totals[key].sold = soldFullCartons;
+      totals[key].remaining = remFullCartons;
       totals[key].soldValue = soldValue;
       totals[key].remainingValue = remainingValue;
     });
@@ -2077,12 +2154,15 @@ export default function FactoryTab({
       const unitsPerCarton = weight?.unitsPerCarton || 12;
       const cartonPrice = weight ? (Number(weight.cartonPriceFromFactory) || Number(prod?.price || 0)) : 0;
       const unitPrice = weight ? (Number(weight.factoryPricePerUnit) || Number(prod?.price || 0)) : 0;
-      const soldCartons = stock.sold;
-      const soldValue = soldCartons * cartonPrice;
-      const remCartons = stock.remaining;
-      const remainingValue = remCartons * cartonPrice;
-      totals[key].sold = soldCartons;
-      totals[key].remaining = remCartons;
+      // stock.sold و stock.remaining بالقطعة — تحويل إلى كرتونة + باقي
+      const soldFullCartons = Math.floor(stock.sold / unitsPerCarton);
+      const soldLoose = stock.sold % unitsPerCarton;
+      const soldValue = (soldFullCartons * cartonPrice) + (soldLoose * unitPrice);
+      const remFullCartons = Math.floor(stock.remaining / unitsPerCarton);
+      const remLoose = stock.remaining % unitsPerCarton;
+      const remainingValue = (remFullCartons * cartonPrice) + (remLoose * unitPrice);
+      totals[key].sold = soldFullCartons;
+      totals[key].remaining = remFullCartons;
       totals[key].soldValue = soldValue;
       totals[key].remainingValue = remainingValue;
     });
@@ -2336,23 +2416,23 @@ export default function FactoryTab({
     }
   }, [factoryBalanceDetails.netRemainingDueToFactory, carriedOverDebtDate, carriedOverDebt]);
 
-  // Auto-archive when remaining balance becomes exactly 0 (after payment settles it)
-  const prevNetRemainingRef = React.useRef(factoryBalanceDetails.netRemainingDueToFactory);
+  // Auto-archive when remaining balance becomes exactly 0 (after payment settles it) — uses TOTAL factory balance
+  const prevNetRemainingRef = React.useRef(totalFactoryBalanceDetails.netRemainingDueToFactory);
   useEffect(() => {
     const prev = prevNetRemainingRef.current;
-    const curr = factoryBalanceDetails.netRemainingDueToFactory;
+    const curr = totalFactoryBalanceDetails.netRemainingDueToFactory;
     prevNetRemainingRef.current = curr;
 
     // Only trigger when transitioning from > 0 to exactly 0
     if (prev > 0 && curr === 0 && !isArchiving) {
-      const hasLoads = factoryLoads.filter(filterByFactoryDelegate).length > 0;
-      const hasPayments = currentCycleExtraPayments.length > 0;
+      const hasLoads = factoryLoads.filter(l => new Date(l.date).getTime() > lastArchiveTimestamp).length > 0;
+      const hasPayments = totalFactoryPayments.length > 0;
       if (hasLoads || hasPayments) {
         showToast("✅ الحساب المتبقي صفر! جاري ترحيل الدورة تلقائياً للأرشيف...");
         setTimeout(async () => {
           setIsArchiving(true);
           try {
-            const currentLoads = factoryLoads.filter(filterByFactoryDelegate).map(l => {
+            const currentLoads = factoryLoads.filter(l => new Date(l.date).getTime() > lastArchiveTimestamp).map(l => {
               const prod = products.find(p => String(p.id).trim() === String(l.productId).trim());
               const weights = prod ? getProductWeightsFallback(prod) : [];
               const weight = weights.find(w => String(w.id).trim() === String(l.weightId).trim());
@@ -2368,11 +2448,15 @@ export default function FactoryTab({
                 advanceAmount: l.advanceAmount ?? 0, delegateName: l.delegateName || ''
               };
             });
-            const currentPayments = currentCycleExtraPayments.map(p => ({
-              id: p.id, amount: p.amount, date: p.date, notes: p.notes,
-              recipient: p.recipient, delegateName: p.delegateName,
-              delegatePhone: p.delegatePhone, appliedToCarriedDebt: p.appliedToCarriedDebt
-            }));
+            const currentPayments = totalFactoryPayments.map(p => {
+              let parsed: any = {};
+              try { parsed = JSON.parse(p.description || '{}'); } catch {}
+              return {
+                id: p.id, amount: p.amount, date: p.date, notes: parsed.notes || '',
+                recipient: parsed.recipient || '', delegateName: p.delegateName || '',
+                delegatePhone: p.delegatePhone || '', appliedToCarriedDebt: parsed.appliedToCarriedDebt || 0
+              };
+            });
             const rawSum = currentLoads.reduce((s, l) => s + l.subtotal, 0);
             const totalPaidAuto = currentPayments.reduce((s, p) => s + p.amount, 0);
             const newCycle = {
@@ -2381,7 +2465,7 @@ export default function FactoryTab({
               loads: currentLoads,
               payments: currentPayments,
               rawLoadedValue: rawSum,
-              totalWithdrawnValue: factoryBalanceDetails.totalWithdrawnValue,
+              totalWithdrawnValue: totalFactoryBalanceDetails.totalWithdrawnValue,
               totalAdvancePayments: totalPaidAuto,
               creditBalance: 0,
               carriedOverDebtAtTime: carriedOverDebt,
@@ -2396,10 +2480,10 @@ export default function FactoryTab({
               const finalName = selectedDelegatePhone ? (archiveDelegates.find(d => d.phone === selectedDelegatePhone)?.name || currentUser?.name || 'مجهول') : (factoryDelegateFilter ? (archiveDelegates.find(d => d.phone === factoryDelegateFilter || d.name === factoryDelegateFilter)?.name || 'مجهول') : 'مجهول');
               onArchiveFactoryCycle(finalPhone, finalName);
             } else {
-              const loadsToArchive = factoryLoads.filter(filterByFactoryDelegate);
+              const loadsToArchive = factoryLoads.filter(l => new Date(l.date).getTime() > lastArchiveTimestamp);
               for (const load of loadsToArchive) { onDeleteLoad(load.id); }
               const currentExpenses = expenses.filter(e =>
-                (e.category === 'سداد للمصنع' || e.type === 'factory_payment') && filterByFactoryDelegate(e));
+                (e.category === 'سداد للمصنع' || e.type === 'factory_payment') && new Date(e.date).getTime() > lastArchiveTimestamp);
               for (const exp of currentExpenses) { onDeleteExpense(exp.id); }
             }
             showToast("✓ تم ترحيل الدورة تلقائياً للأرشيف!");
@@ -2412,7 +2496,7 @@ export default function FactoryTab({
         }, 1500);
       }
     }
-  }, [factoryBalanceDetails.netRemainingDueToFactory, isArchiving]);
+  }, [totalFactoryBalanceDetails.netRemainingDueToFactory, isArchiving]);
 
   // Draw and download factory account statement image — clean professional invoice style
   const handleDownloadFactoryLedgerImage = () => {
@@ -3053,86 +3137,58 @@ export default function FactoryTab({
     const netText = netRemaining > 0 ? `${formatNum(netRemaining)} ج.م` : netRemaining === 0 ? '٠.٠٠ ج.م — *تم تسوية الحساب بالكامل*' : `${formatNum(Math.abs(netRemaining))} ج.م — رصيد دائن لصالحنا`;
     const settleNote = netRemaining === 0 ? '<div style="background:#ecfdf5;border:1px solid #a7f3d0;border-radius:6px;padding:8px 12px;color:#059669;font-weight:bold;font-size:13px;text-align:center;margin-top:8px">*تم تسوية الحساب بالكامل*</div>' : '';
 
-    const html = `<html dir="rtl" lang="ar"><head><style>
-      @media print{@page{size:A4;margin:10mm}body{margin:0;-webkit-print-color-adjust:exact;print-color-adjust:exact}}
-      body{font-family:system-ui,sans-serif;padding:0;margin:0;color:#1a1a1a;background:#faf8f5}
-      .page{padding:20px;max-width:210mm;margin:0 auto}
-      .header{background:#1e2a4a;color:#fff;padding:20px;border-radius:6px;text-align:center;margin-bottom:16px;border-bottom:4px solid #d4a843}
-      .header h1{margin:0 0 6px;font-size:22px}
-      .header .sub{color:#93c5fd;font-size:11px;margin:0 0 4px}
-      .header .meta{display:flex;justify-content:space-between;font-size:11px;color:#cbd5e1;padding:0 10px}
-      .header .meta .gold{color:#fbbf24;font-weight:bold}
-      table{width:100%;border-collapse:collapse;margin-bottom:12px;font-size:11px}
-      th{background:#2c3e6b;color:#fff;padding:8px 6px;font-weight:bold;text-align:center}
-      td{padding:7px 6px;border-bottom:1px solid #e8e4dc;text-align:right}
-      tr:nth-child(even) td{background:#f5f3ee}
-      .summary-row{background:#0d7c5f;color:#fff;font-weight:bold}
-      .summary-row td{border:none;padding:10px 6px}
-      .boxes{display:flex;gap:15px;margin-top:12px}
-      .box{flex:1;border:2px solid #2c3e6b;border-radius:6px;overflow:hidden}
-      .box-header{background:#2c3e6b;color:#fff;padding:8px 12px;font-weight:bold;font-size:13px;text-align:center}
-      .box-body{padding:12px;min-height:120px;background:#fdf6ee}
-      .pay-entry{border-bottom:1px dashed #c5b89a;padding:8px 0;font-size:12px;display:flex;justify-content:space-between}
-      .pay-entry:last-child{border-bottom:none}
-      .pay-amount{color:#0d7c5f;font-weight:bold;font-size:13px}
-      .pay-total{border-top:2px solid #2c3e6b;padding-top:10px;margin-top:10px;display:flex;justify-content:space-between;font-weight:bold;font-size:13px}
-      .net-box{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%}
-      .net-amount{font-size:32px;font-weight:bold;margin:12px 0}
-      .net-note{font-size:13px;font-weight:bold}
-      .net-settled{background:#ecfdf5;border:1px solid #a7f3d0;border-radius:6px;padding:8px 12px;color:#059669;font-weight:bold;font-size:13px;text-align:center;margin-top:8px}
-      .footer{text-align:center;color:#94a3b8;font-size:10px;margin-top:24px;border-top:1px solid #d5d0c8;padding-top:12px}
-      .sig{display:flex;justify-content:space-between;margin-top:20px;font-size:11px;color:#1a1a1a}
-    </style></head><body>
-      <div class="page">
-        <div class="header">
+    const html = `<html dir="rtl" lang="ar"><head>${COMPACT_PRO_CSS}</head><body>
+      <div style="padding:12mm 14mm">
+        <div class="rh">
           <h1>دورة مؤرشفة — كشف حساب المصنع</h1>
-          <p class="sub">نظام التوزيع والمبيعات المعتمد للأغذية وال المستودع</p>
-          <div class="meta">
+          <div class="sub">نظام التوزيع والمبيعات المعتمد</div>
+          <div class="ref">
             <span>تاريخ الإقفال: ${cycle.settledAt || '—'}</span>
-            <span class="gold">رقم الدورة: ${cycle.id?.slice(-6) || '—'}</span>
+            <span>رقم الدورة: ${cycle.id?.slice(-6) || '—'}</span>
           </div>
         </div>
 
-        <h3 style="color:#2c3e6b;margin-bottom:8px">📦 الحمولات (${loads.length})</h3>
+        <div class="st"><span class="i">1</span> الحمولات (${loads.length})</div>
         <table>
-          <thead><tr><th width="40">م</th><th>البيان / المرحلة</th><th>العدد</th><th>السعر</th><th>الإجمالي</th></tr></thead>
-          <tbody>${loadsRows || '<tr><td colspan="5" style="text-align:center;color:#94a3b8">لا توجد حمولات</td></tr>'}</tbody>
+          <thead><tr><th width="30">م</th><th>البيان</th><th>العدد</th><th>السعر</th><th>الإجمالي</th></tr></thead>
+          <tbody>${loadsRows || '<tr><td colspan="5" style="text-align:center;color:#94a3b8;padding:16px">لا توجد حمولات</td></tr>'}</tbody>
         </table>
-        <div style="background:#0d7c5f;color:#fff;padding:10px 12px;border-radius:6px;display:flex;justify-content:space-between;font-weight:bold;font-size:13px;margin-bottom:12px">
+        <div class="ts" style="padding:10px 12px;border-radius:8px;display:flex;justify-content:space-between;font-weight:800;font-size:12px;margin-bottom:14px">
           <span>إجمالي المسحوبات (المطلوب)</span>
           <span>${formatNum(totalLoadValue)} ج.م</span>
         </div>
 
-        <div class="boxes">
-          <div class="box">
-            <div class="box-header">سجل الدفعات المستلمة</div>
-            <div class="box-body">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px">
+          <div style="border:2px solid #1e3a5f;border-radius:12px;overflow:hidden">
+            <div class="tt" style="padding:8px 12px;font-weight:800;font-size:12px;text-align:center">سجل الدفعات المستلمة</div>
+            <div style="padding:12px;min-height:100px;background:#f8fafc">
               ${pays.length > 0 ? pays.map((p: any) => `
-                <div class="pay-entry">
+                <div style="border-bottom:1px dashed #e2e8f0;padding:6px 0;font-size:10px;display:flex;justify-content:space-between">
                   <span>${p.notes || 'تسديد'} - ${p.date || ''}</span>
-                  <span class="pay-amount">${formatNum(p.amount)} ج.م</span>
+                  <span style="color:#059669;font-weight:800">${formatNum(p.amount)} ج.م</span>
                 </div>
-              `).join('') : '<div style="text-align:center;color:#94a3b8;padding:20px">لا توجد دفعات مسجلة</div>'}
+              `).join('') : '<div style="text-align:center;color:#94a3b8;padding:16px;font-size:10px">لا توجد دفعات</div>'}
               ${pays.length > 0 ? `
-              <div class="pay-total">
-                <span>إجمالي المسدد: ${formatNum(totalPayments)} ج.م</span>
-                <span>عدد الدفعات: ${pays.length}</span>
+              <div style="border-top:2px solid #1e3a5f;padding-top:8px;margin-top:8px;display:flex;justify-content:space-between;font-weight:800;font-size:11px">
+                <span>إجمالي: ${formatNum(totalPayments)} ج.م</span>
+                <span>الدفعات: ${pays.length}</span>
               </div>` : ''}
             </div>
           </div>
-          <div class="box">
-            <div class="box-header">صافي المستحق (المتبقي)</div>
-            <div class="box-body">
-              <div class="net-box">
-                <div class="net-amount" style="color:${netColor}">${netRemaining === 0 ? '٠.٠٠ ج.م' : `${formatNum(Math.abs(netRemaining))} ج.م`}</div>
-                <div class="net-note" style="color:${netColor}">${netRemaining > 0 ? 'يجب سداد المبلغ أعلاه' : netRemaining === 0 ? '*تم تسوية الحساب بالكامل*' : 'رصيد دائن لصالحنا'}</div>
-                ${settleNote}
-              </div>
+          <div style="border:2px solid #1e3a5f;border-radius:12px;overflow:hidden">
+            <div class="tt" style="padding:8px 12px;font-weight:800;font-size:12px;text-align:center">صافي المستحق (المتبقي)</div>
+            <div style="padding:12px;min-height:100px;background:#f8fafc;display:flex;flex-direction:column;align-items:center;justify-content:center">
+              <div style="font-size:28px;font-weight:900;margin:8px 0;color:${netColor}">${netRemaining === 0 ? '٠.٠٠ ج.م' : `${formatNum(Math.abs(netRemaining))} ج.م`}</div>
+              <div style="font-size:11px;font-weight:700;color:${netColor}">${netRemaining > 0 ? 'يجب سداد المبلغ أعلاه' : netRemaining === 0 ? '*تم تسوية الحساب بالكامل*' : 'رصيد دائن لصالحنا'}</div>
+              ${settleNote}
             </div>
           </div>
         </div>
 
-        <div class="footer">تم التصدير من نظام تتبع المبيعات — ${new Date().toLocaleDateString('ar-EG')}</div>
+        <div class="fs" style="margin-top:30px">
+          <div class="sb2"><div class="ti">المدير المالي</div><div class="ln">التوقيع</div></div>
+          <div class="sb2"><div class="ti">مندوب المبيعات</div><div class="ln">التوقيع</div></div>
+        </div>
       </div>
     </body></html>`;
 
@@ -3213,38 +3269,24 @@ export default function FactoryTab({
 
     const netGrand = grandTotalLoad - grandTotalPayments;
 
-    const html = `<html dir="rtl" lang="ar"><head><style>
-      @media print{@page{size:A4;margin:8mm}body{margin:0;-webkit-print-color-adjust:exact;print-color-adjust:exact}}
-      body{font-family:system-ui,sans-serif;padding:0;margin:0;color:#1a1a1a;background:#faf8f5}
-      .page{padding:15px;max-width:210mm;margin:0 auto}
-      .header{background:#1e2a4a;color:#fff;padding:18px;border-radius:6px;text-align:center;margin-bottom:14px;border-bottom:4px solid #d4a843}
-      .header h1{margin:0 0 4px;font-size:20px}
-      .header .sub{color:#93c5fd;font-size:11px;margin:0 0 4px}
-      .header .meta{display:flex;justify-content:space-between;font-size:11px;color:#cbd5e1;padding:0 10px}
-      .header .meta .gold{color:#fbbf24;font-weight:bold}
-      table{width:100%;border-collapse:collapse;margin-bottom:10px;font-size:10px}
-      th{background:#2c3e6b;color:#fff;padding:6px 4px;font-weight:bold;text-align:center}
-      td{padding:5px 4px;border-bottom:1px solid #e8e4dc;text-align:right}
-      tr:nth-child(even) td{background:#f5f3ee}
-      .footer{text-align:center;color:#94a3b8;font-size:10px;margin-top:20px;border-top:1px solid #d5d0c8;padding-top:10px}
-    </style></head><body>
-      <div class="page">
-        <div class="header">
+    const html = `<html dir="rtl" lang="ar"><head>${COMPACT_PRO_CSS}</head><body>
+      <div style="padding:12mm 14mm">
+        <div class="rh">
           <h1>جميع الدورات المؤرشفة — كشف حساب المصنع</h1>
-          <p class="sub">نظام التوزيع والمبيعات المعتمد للأغذية والمستودع</p>
-          <div class="meta">
+          <div class="sub">نظام التوزيع والمبيعات المعتمد</div>
+          <div class="ref">
             <span>عدد الدورات: ${archiveCycles.length}</span>
-            <span class="gold">إجمالي المسحوبات: ${formatNum(grandTotalLoad)} ج.م</span>
+            <span>إجمالي المسحوبات: ${formatNum(grandTotalLoad)} ج.م</span>
           </div>
-          <div class="meta" style="margin-top:4px">
+          <div class="ref" style="margin-top:4px">
             <span>إجمالي المسدد: ${formatNum(grandTotalPayments)} ج.م</span>
-            <span style="color:${netGrand > 0 ? '#f87171' : '#4ade80'};font-weight:bold">الصافي: ${formatNum(Math.abs(netGrand))} ج.م ${netGrand > 0 ? 'مدين' : netGrand === 0 ? 'مسوى' : 'دائن'}</span>
+            <span style="color:${netGrand > 0 ? '#f87171' : '#4ade80'};font-weight:800">الصافي: ${formatNum(Math.abs(netGrand))} ج.م ${netGrand > 0 ? 'مدين' : netGrand === 0 ? 'مسوى' : 'دائن'}</span>
           </div>
         </div>
         ${allLoadsHtml}
-        <h3 style="color:#2c3e6b;margin-top:20px;border-bottom:2px solid #065f46;padding-bottom:6px">💳 الدفعات المباشرة لجميع الدورات</h3>
+        <div class="st"><span class="i">2</span> الدفعات المباشرة لجميع الدورات</div>
         ${allPaymentsHtml}
-        <div class="footer">تم التصدير من نظام تتبع المبيعات — ${new Date().toLocaleDateString('ar-EG')}</div>
+        <div style="text-align:center;color:#94a3b8;font-size:9px;margin-top:16px;border-top:1px solid #e2e8f0;padding-top:10px">تم التصدير من نظام تتبع المبيعات — ${new Date().toLocaleDateString('ar-EG')}</div>
       </div>
     </body></html>`;
 
@@ -3467,13 +3509,35 @@ export default function FactoryTab({
     });
 
     const grandNet = grandTotalLoad - grandTotalPayments;
-    const html = `<!DOCTYPE html><html dir="rtl"><head><meta charset="utf-8"><style>body{font-family:system-ui,sans-serif;padding:20px;background:#f8fafc}table{width:100%;border-collapse:collapse;margin:10px 0}th,td{border:1px solid #cbd5e1;padding:6px 8px;font-size:12px}th{background:#1e2a4a;color:white}.summary{background:#f1f5f9;padding:15px;border-radius:12px;margin-top:15px;text-align:center;font-weight:bold}</style></head><body>
-    <h2 style="text-align:center;color:#1e2a4a">تقرير الدورات المؤرشفة — فلتر: ${filterLabel}</h2>
-    <p style="text-align:center;color:#64748b">عدد الدورات: ${filtered.length} | تاريخ الطباعة: ${new Date().toLocaleDateString('ar-EG')}</p>
-    <h3 style="color:#1e3a5f">📦 الحمولات</h3><table><thead><tr><th>م</th><th>الصنف</th><th>الكمية</th><th>السعر</th><th>القيمة</th></tr></thead><tbody>${allLoadsHtml}</tbody></table>
-    <h3 style="color:#1e3a5f">💳 الدفعات</h3><table><thead><tr><th>م</th><th>البيان</th><th>المبلغ</th><th>المندوب</th><th>المستلم</th></tr></thead><tbody>${allPaymentsHtml}</tbody></table>
-    <div class="summary">إجمالي الحمولات: ${formatNum(grandTotalLoad)} ج.م | إجمالي الدفعات: ${formatNum(grandTotalPayments)} ج.م | المتبقي: ${formatNum(grandNet)} ج.م</div>
-    <p style="text-align:center;color:#94a3b8;margin-top:20px;font-size:10px">تم التصدير من نظام تتبع المبيعات</p></body></html>`;
+    const html = `<html dir="rtl" lang="ar"><head>${COMPACT_PRO_CSS}</head><body>
+      <div style="padding:12mm 14mm">
+        <div class="rh">
+          <h1>تقرير الدورات المؤرشفة — فلتر: ${filterLabel}</h1>
+          <div class="sub">نظام التوزيع والمبيعات المعتمد</div>
+          <div class="ref">
+            <span>عدد الدورات: ${filtered.length}</span>
+            <span>تاريخ الطباعة: ${new Date().toLocaleDateString('ar-EG')}</span>
+          </div>
+        </div>
+
+        <div class="st"><span class="i">1</span> الحمولات (${filtered.length})</div>
+        <table><thead><tr><th>م</th><th>الصنف</th><th>الكمية</th><th>السعر</th><th>القيمة</th></tr></thead><tbody>${allLoadsHtml}</tbody></table>
+
+        <div class="st"><span class="i">2</span> الدفعات (${filtered.length})</div>
+        <table><thead><tr><th>م</th><th>البيان</th><th>المبلغ</th><th>المندوب</th><th>المستلم</th></tr></thead><tbody>${allPaymentsHtml}</tbody></table>
+
+        <div class="sg">
+          <div class="sb bl"><div class="l">إجمالي الحمولات</div><div class="v">${formatNum(grandTotalLoad)} ج.م</div></div>
+          <div class="sb gr"><div class="l">إجمالي الدفعات</div><div class="v">${formatNum(grandTotalPayments)} ج.م</div></div>
+          <div class="sb rd"><div class="l">المتبقي</div><div class="v">${formatNum(grandNet)} ج.م</div></div>
+        </div>
+
+        <div class="fs" style="margin-top:30px">
+          <div class="sb2"><div class="ti">المدير المالي</div><div class="ln">التوقيع</div></div>
+          <div class="sb2"><div class="ti">مندوب المبيعات</div><div class="ln">التوقيع</div></div>
+        </div>
+      </div>
+    </body></html>`;
     const w = window.open('', '_blank');
     if (w) { w.document.write(html); w.document.close(); setTimeout(() => w.print(), 500); }
     showToast('✓ تم فتح تقرير PDF للفترة المفلترة!');
@@ -3809,44 +3873,30 @@ export default function FactoryTab({
       </tr>`;
     }).join('');
 
-    const html = `<html dir="rtl" lang="ar"><head><style>
-      @media print{@page{size:A4;margin:10mm}body{margin:0;-webkit-print-color-adjust:exact;print-color-adjust:exact}}
-      body{font-family:system-ui,sans-serif;padding:0;margin:0;color:#1a1a1a;background:#faf8f5}
-      .page{padding:20px;max-width:210mm;margin:0 auto}
-      .header{background:#1e2a4a;color:#fff;padding:20px;border-radius:6px;text-align:center;margin-bottom:16px;border-bottom:4px solid #d4a843}
-      .header h1{margin:0 0 6px;font-size:22px}
-      .header .sub{color:#93c5fd;font-size:11px;margin:0 0 4px}
-      .header .meta{display:flex;justify-content:space-between;font-size:11px;color:#cbd5e1;padding:0 10px}
-      .header .meta .gold{color:#fbbf24;font-weight:bold}
-      table{width:100%;border-collapse:collapse;margin-bottom:12px;font-size:11px}
-      th{background:#2c3e6b;color:#fff;padding:8px 6px;font-weight:bold;text-align:center}
-      td{padding:7px 6px;border-bottom:1px solid #e8e4dc;text-align:right}
-      tr:nth-child(even) td{background:#f5f3ee}
-      .summary-row{background:#0d7c5f;color:#fff;font-weight:bold}
-      .summary-row td{border:none;padding:10px 6px}
-      .footer{text-align:center;color:#94a3b8;font-size:10px;margin-top:24px;border-top:1px solid #d5d0c8;padding-top:12px}
-    </style></head><body>
-      <div class="page">
-        <div class="header">
+    const html = `<html dir="rtl" lang="ar"><head>${COMPACT_PRO_CSS}</head><body>
+      <div style="padding:12mm 14mm">
+        <div class="rh">
           <h1>كشف المشاوير المعلقة (غير المحصلة)</h1>
-          <p class="sub">نظام التوزيع والمبيعات المعتمد للأغذية والمستودع</p>
-          <div class="meta">
+          <div class="sub">نظام التوزيع والمبيعات المعتمد</div>
+          <div class="ref">
             <span>عدد المشاوير: ${pendingTrips.length}</span>
-            <span class="gold">إجمالي السعر: ${formatNum(totalPrice)} ج.م</span>
-          </div>
-          <div class="meta" style="margin-top:4px">
-            <span>تاريخ الطباعة: ${new Date().toLocaleDateString('ar-EG')} — ${new Date().toLocaleTimeString('ar-EG')}</span>
+            <span>إجمالي السعر: ${formatNum(totalPrice)} ج.م</span>
           </div>
         </div>
+
         <table>
           <thead><tr><th width="40">م</th><th>الجهة / الوصف</th><th>التاريخ</th><th>السعر</th><th>الحالة</th></tr></thead>
           <tbody>${rowsHtml}</tbody>
         </table>
-        <div style="background:#0d7c5f;color:#fff;padding:10px 12px;border-radius:6px;display:flex;justify-content:space-between;font-weight:bold;font-size:13px;margin-bottom:12px">
+        <div class="ts" style="padding:10px 12px;border-radius:8px;display:flex;justify-content:space-between;font-weight:800;font-size:12px;margin-bottom:14px">
           <span>إجمالي المشاوير المعلقة</span>
           <span>${formatNum(totalPrice)} ج.م</span>
         </div>
-        <div class="footer">تم التصدير من نظام تتبع المبيعات — ${new Date().toLocaleDateString('ar-EG')}</div>
+
+        <div class="fs" style="margin-top:30px">
+          <div class="sb2"><div class="ti">المدير المالي</div><div class="ln">التوقيع</div></div>
+          <div class="sb2"><div class="ti">مندوب المبيعات</div><div class="ln">التوقيع</div></div>
+        </div>
       </div>
     </body></html>`;
 
@@ -4031,42 +4081,30 @@ export default function FactoryTab({
       </tr>`;
     }).join('');
 
-    const html = `<html dir="rtl" lang="ar"><head><style>
-      @media print{@page{size:A4;margin:10mm}body{margin:0;-webkit-print-color-adjust:exact;print-color-adjust:exact}}
-      body{font-family:system-ui,sans-serif;padding:0;margin:0;color:#1a1a1a;background:#faf8f5}
-      .page{padding:20px;max-width:210mm;margin:0 auto}
-      .header{background:#1e2a4a;color:#fff;padding:20px;border-radius:6px;text-align:center;margin-bottom:16px;border-bottom:4px solid #d4a843}
-      .header h1{margin:0 0 6px;font-size:22px}
-      .header .sub{color:#93c5fd;font-size:11px;margin:0 0 4px}
-      .header .meta{display:flex;justify-content:space-between;font-size:11px;color:#cbd5e1;padding:0 10px}
-      .header .meta .gold{color:#fbbf24;font-weight:bold}
-      table{width:100%;border-collapse:collapse;margin-bottom:12px;font-size:11px}
-      th{background:#2c3e6b;color:#fff;padding:8px 6px;font-weight:bold;text-align:center}
-      td{padding:7px 6px;border-bottom:1px solid #e8e4dc;text-align:right}
-      tr:nth-child(even) td{background:#f5f3ee}
-      .footer{text-align:center;color:#94a3b8;font-size:10px;margin-top:24px;border-top:1px solid #d5d0c8;padding-top:12px}
-    </style></head><body>
-      <div class="page">
-        <div class="header">
+    const html = `<html dir="rtl" lang="ar"><head>${COMPACT_PRO_CSS}</head><body>
+      <div style="padding:12mm 14mm">
+        <div class="rh">
           <h1>كشف المشاوير المسددة (المحصلة)</h1>
-          <p class="sub">نظام التوزيع والمبيعات المعتمد للأغذية والمستودع</p>
-          <div class="meta">
+          <div class="sub">نظام التوزيع والمبيعات المعتمد</div>
+          <div class="ref">
             <span>عدد المشاوير: ${filteredArchiveTrips.length}</span>
-            <span class="gold">إجمالي المحصل: ${formatNum(totalPrice)} ج.م</span>
-          </div>
-          <div class="meta" style="margin-top:4px">
-            <span>تاريخ الطباعة: ${new Date().toLocaleDateString('ar-EG')} — ${new Date().toLocaleTimeString('ar-EG')}</span>
+            <span>إجمالي المحصل: ${formatNum(totalPrice)} ج.م</span>
           </div>
         </div>
+
         <table>
           <thead><tr><th width="40">م</th><th>الجهة / الوصف</th><th>التاريخ</th><th>السعر</th><th>الحالة</th></tr></thead>
           <tbody>${rowsHtml}</tbody>
         </table>
-        <div style="background:#0d7c5f;color:#fff;padding:10px 12px;border-radius:6px;display:flex;justify-content:space-between;font-weight:bold;font-size:13px;margin-bottom:12px">
+        <div class="ts" style="padding:10px 12px;border-radius:8px;display:flex;justify-content:space-between;font-weight:800;font-size:12px;margin-bottom:14px">
           <span>إجمالي المشاوير المحصلة</span>
           <span>${formatNum(totalPrice)} ج.م</span>
         </div>
-        <div class="footer">تم التصدير من نظام تتبع المبيعات — ${new Date().toLocaleDateString('ar-EG')}</div>
+
+        <div class="fs" style="margin-top:30px">
+          <div class="sb2"><div class="ti">المدير المالي</div><div class="ln">التوقيع</div></div>
+          <div class="sb2"><div class="ti">مندوب المبيعات</div><div class="ln">التوقيع</div></div>
+        </div>
       </div>
     </body></html>`;
 
@@ -4609,40 +4647,14 @@ export default function FactoryTab({
     const netColor = netDue > 0 ? '#dc2626' : netDue === 0 ? '#059669' : '#4f46e5';
     const netText = netDue > 0 ? `${netDue.toLocaleString('ar-EG')} ج.م — يجب سداد المبلغ` : netDue === 0 ? '٠.٠٠ ج.م — *تم تسوية الحساب بالكامل*' : `${Math.abs(netDue).toLocaleString('ar-EG')} ج.م — رصيد دائن لصالحنا (دفعات زائدة)`;
 
-    const html = `<html dir="rtl" lang="ar"><head><style>
-      @media print{@page{size:A4;margin:10mm}body{margin:0;-webkit-print-color-adjust:exact;print-color-adjust:exact}}
-      body{font-family:system-ui,sans-serif;padding:0;margin:0;color:#1a1a1a;background:#faf8f5}
-      .page{padding:20px;max-width:210mm;margin:0 auto}
-      .header{background:#1e2a4a;color:#fff;padding:20px;border-radius:6px;text-align:center;margin-bottom:16px;border-bottom:4px solid #d4a843}
-      .header h1{margin:0 0 6px;font-size:22px}
-      .header .sub{color:#93c5fd;font-size:11px;margin:0 0 4px}
-      .header .meta{display:flex;justify-content:space-between;font-size:11px;color:#cbd5e1;padding:0 10px}
-      .header .meta .gold{color:#fbbf24;font-weight:bold}
-      table{width:100%;border-collapse:collapse;margin-bottom:12px;font-size:11px}
-      th{background:#2c3e6b;color:#fff;padding:8px 6px;font-weight:bold;text-align:center}
-      td{padding:7px 6px;border-bottom:1px solid #e8e4dc;text-align:right}
-      tr:nth-child(even) td{background:#f5f3ee}
-      .summary-row{background:#0d7c5f;color:#fff;font-weight:bold}
-      .summary-row td{border:none;padding:10px 6px}
-      .boxes{display:flex;gap:15px;margin-top:12px}
-      .box{flex:1;border:2px solid #2c3e6b;border-radius:6px;overflow:hidden}
-      .box-header{background:#2c3e6b;color:#fff;padding:8px 12px;font-weight:bold;font-size:13px;text-align:center}
-      .box-body{padding:12px;min-height:100px;background:#fdf6ee}
-      .box-body-white{padding:12px;min-height:100px;background:#ffffff}
-      .info-line{font-size:12px;margin:6px 0;display:flex;justify-content:space-between}
-      .info-bold{font-weight:bold;font-size:13px}
-      .footer{text-align:center;color:#94a3b8;font-size:10px;margin-top:24px;border-top:1px solid #d5d0c8;padding-top:12px}
-    </style></head><body>
-      <div class="page">
-        <div class="header">
+    const html = `<html dir="rtl" lang="ar"><head>${COMPACT_PRO_CSS}</head><body>
+      <div style="padding:12mm 14mm">
+        <div class="rh">
           <h1>بيان شحنات المصنع</h1>
-          <p class="sub">نظام التوزيع والمبيعات المعتمد للأغذية والمستودع</p>
-          <div class="meta">
+          <div class="sub">نظام التوزيع والمبيعات المعتمد</div>
+          <div class="ref">
             <span>الفترة: ${filterLabel}</span>
-            <span class="gold">عدد الشحنات: ${filteredLoads.length}</span>
-          </div>
-          <div class="meta" style="margin-top:4px">
-            <span>تاريخ الطباعة: ${new Date().toLocaleDateString('ar-EG')} ${new Date().toLocaleTimeString('ar-EG')}</span>
+            <span>عدد الشحنات: ${filteredLoads.length}</span>
           </div>
         </div>
 
@@ -4658,43 +4670,43 @@ export default function FactoryTab({
           </tr></thead>
           <tbody>
             ${loadsRows}
-            <tr style="background:#0d7c5f;color:#fff;font-weight:bold">
+            <tr class="summary-row">
               <td colspan="2" style="text-align:center;border:none;padding:10px 6px">المجموع</td>
               <td style="text-align:center;border:none;padding:10px 6px">${totalLoadedCrates}</td>
-              <td style="text-align:center;border:none;padding:10px 6px;color:#bbf7d0">${totalSoldCrates}</td>
-              <td style="text-align:center;border:none;padding:10px 6px;color:#fed7aa">${totalRemainingCrates}</td>
+              <td style="text-align:center;border:none;padding:10px 6px">${totalSoldCrates}</td>
+              <td style="text-align:center;border:none;padding:10px 6px">${totalRemainingCrates}</td>
               <td style="border:none;padding:10px 6px"></td>
-              <td style="text-align:center;border:none;padding:10px 6px;color:#bbf7d0">${totalSoldValue.toLocaleString('ar-EG')} ج.م</td>
+              <td style="text-align:center;border:none;padding:10px 6px">${totalSoldValue.toLocaleString('ar-EG')} ج.م</td>
             </tr>
           </tbody>
         </table>
-        <div style="background:#1e2a4a;color:#fff;padding:10px 12px;border-radius:6px;display:flex;justify-content:space-between;font-weight:bold;font-size:13px;margin-bottom:12px">
+        <div class="tt" style="padding:10px 12px;border-radius:8px;display:flex;justify-content:space-between;font-weight:800;font-size:12px;margin-bottom:14px">
           <span>إجمالي المستحق (المبيع)</span>
           <span>${totalSoldValue.toLocaleString('ar-EG')} ج.م</span>
         </div>
 
-        <div class="boxes">
-          <div class="box">
-            <div class="box-header">ملخص الشحنات</div>
-            <div class="box-body">
-              <div class="info-line"><span>عدد الشحنات:</span><span class="info-bold">${filteredLoads.length}</span></div>
-              <div class="info-line"><span>إجمالي المحمل:</span><span class="info-bold">${totalLoadedCrates.toLocaleString('ar-EG')} كرتونة</span></div>
-              <div class="info-line"><span>إجمالي المبيع:</span><span class="info-bold" style="color:#0d7c5f">${totalSoldCrates.toLocaleString('ar-EG')} كرتونة</span></div>
-              <div class="info-line"><span>إجمالي المتبقي:</span><span class="info-bold" style="color:#DD6B20">${totalRemainingCrates.toLocaleString('ar-EG')} كرتونة</span></div>
-              <div class="info-line"><span>إجمالي المقدمات:</span><span class="info-bold">${totalAdvanceAmounts.toLocaleString('ar-EG')} ج.م</span></div>
-            </div>
+        <div class="sg">
+          <div class="sb bl">
+            <div class="l">ملخص الشحنات</div>
+            <div style="margin-top:8px">
+              <div style="font-size:11px;margin:4px 0;display:flex;justify-content:space-between"><span>عدد الشحنات:</span><span style="font-weight:800">${filteredLoads.length}</span></div>
+              <div style="font-size:11px;margin:4px 0;display:flex;justify-content:space-between"><span>إجمالي المحمل:</span><span style="font-weight:800">${totalLoadedCrates.toLocaleString('ar-EG')} كرتونة</span></div>
+              <div style="font-size:11px;margin:4px 0;display:flex;justify-content:space-between"><span>إجمالي المبيع:</span><span style="font-weight:800;color:#059669">${totalSoldCrates.toLocaleString('ar-EG')} كرتونة</span></div>
+              <div style="font-size:11px;margin:4px 0;display:flex;justify-content:space-between"><span>إجمالي المتبقي:</span><span style="font-weight:800;color:#DD6B20">${totalRemainingCrates.toLocaleString('ar-EG')} كرتونة</span></div>
+              <div style="font-size:11px;margin:4px 0;display:flex;justify-content:space-between"><span>إجمالي المقدمات:</span><span style="font-weight:800">${totalAdvanceAmounts.toLocaleString('ar-EG')} ج.م</span></div>
             </div>
           </div>
-          <div class="box">
-            <div class="box-header">صافي المستحق (المتبقي)</div>
-            <div class="box-body-white" style="display:flex;flex-direction:column;align-items:center;justify-content:center">
-              <div style="font-size:32px;font-weight:bold;color:${netColor};margin:8px 0">${Math.abs(netDue).toLocaleString('ar-EG')} ج.م</div>
-              <div style="font-size:13px;font-weight:bold;color:${netColor}">${netDue > 0 ? 'يجب سداد المبلغ أعلاه' : netDue === 0 ? '*تم تسوية الحساب بالكامل*' : 'رصيد دائن لصالحنا'}</div>
-            </div>
+          <div class="sb gr" style="display:flex;flex-direction:column;align-items:center;justify-content:center">
+            <div class="l">صافي المستحق (المتبقي)</div>
+            <div style="font-size:28px;font-weight:900;margin:8px 0;color:${netColor}">${Math.abs(netDue).toLocaleString('ar-EG')} ج.م</div>
+            <div style="font-size:11px;font-weight:700;color:${netColor}">${netDue > 0 ? 'يجب سداد المبلغ أعلاه' : netDue === 0 ? '*تم تسوية الحساب بالكامل*' : 'رصيد دائن لصالحنا'}</div>
           </div>
         </div>
 
-        <div class="footer">تم التصدير من نظام تتبع المبيعات — ${new Date().toLocaleDateString('ar-EG')}</div>
+        <div class="fs" style="margin-top:30px">
+          <div class="sb2"><div class="ti">المدير المالي</div><div class="ln">التوقيع</div></div>
+          <div class="sb2"><div class="ti">مندوب المبيعات</div><div class="ln">التوقيع</div></div>
+        </div>
       </div>
     </body></html>`;
 
@@ -5761,14 +5773,29 @@ export default function FactoryTab({
                         <button type="button" onClick={() => {
                           const filterLabel = archiveFilter === 'daily' ? 'يومي' : archiveFilter === 'weekly' ? 'أسبوعي' : archiveFilter === 'monthly' ? 'شهري' : 'مخصص';
                           const total = filteredArchiveExtraPayments.reduce((s, p) => s + p.amount, 0);
-                          let html = `<!DOCTYPE html><html dir="rtl"><head><meta charset="utf-8"><style>body{font-family:system-ui,sans-serif;padding:20px;background:#f8fafc}table{width:100%;border-collapse:collapse;margin:10px 0}th,td{border:1px solid #cbd5e1;padding:6px 8px;font-size:12px}th{background:#1e2a4a;color:white}.summary{background:#f1f5f9;padding:15px;border-radius:12px;margin-top:15px;text-align:center;font-weight:bold}</style></head><body>
-                          <h2 style="text-align:center;color:#1e2a4a">سجل الدفعات المؤرشفة — فلتر: ${filterLabel}</h2>
-                          <p style="text-align:center;color:#64748b">عدد الدفعات: ${filteredArchiveExtraPayments.length} | تاريخ الطباعة: ${new Date().toLocaleDateString('ar-EG')}</p>
-                          <table><thead><tr><th>م</th><th>التاريخ</th><th>البيان</th><th>المبلغ</th><th>المندوب</th><th>المستلم</th></tr></thead><tbody>
-                          ${filteredArchiveExtraPayments.map((p, i) => `<tr><td style="text-align:center">${i + 1}</td><td style="text-align:center">${p.date}</td><td style="text-align:right">${p.notes || 'تسديد مباشر'}</td><td style="text-align:center;font-weight:bold;color:#059669">${formatNum(p.amount)} ج.م</td><td style="text-align:center">${p.delegateName || '-'}</td><td style="text-align:center">${p.recipient || '-'}</td></tr>`).join('')}
-                          </tbody></table>
-                          <div class="summary">إجمالي الدفعات: ${formatNum(total)} ج.م</div>
-                          <p style="text-align:center;color:#94a3b8;margin-top:20px;font-size:10px">تم التصدير من نظام تتبع المبيعات</p></body></html>`;
+                          let html = `<html dir="rtl" lang="ar"><head>${COMPACT_PRO_CSS}</head><body>
+                          <div style="padding:12mm 14mm">
+                            <div class="rh">
+                              <h1>سجل الدفعات المؤرشفة — فلتر: ${filterLabel}</h1>
+                              <div class="sub">نظام التوزيع والمبيعات المعتمد</div>
+                              <div class="ref">
+                                <span>عدد الدفعات: ${filteredArchiveExtraPayments.length}</span>
+                                <span>تاريخ الطباعة: ${new Date().toLocaleDateString('ar-EG')}</span>
+                              </div>
+                            </div>
+                            <table><thead><tr><th>م</th><th>التاريخ</th><th>البيان</th><th>المبلغ</th><th>المندوب</th><th>المستلم</th></tr></thead><tbody>
+                            ${filteredArchiveExtraPayments.map((p, i) => `<tr><td style="text-align:center">${i + 1}</td><td style="text-align:center">${p.date}</td><td style="text-align:right">${p.notes || 'تسديد مباشر'}</td><td style="text-align:center;font-weight:bold;color:#059669">${formatNum(p.amount)} ج.م</td><td style="text-align:center">${p.delegateName || '-'}</td><td style="text-align:center">${p.recipient || '-'}</td></tr>`).join('')}
+                            </tbody></table>
+                            <div class="ts" style="padding:10px 12px;border-radius:8px;display:flex;justify-content:space-between;font-weight:800;font-size:12px;margin-bottom:14px">
+                              <span>إجمالي الدفعات</span>
+                              <span>${formatNum(total)} ج.م</span>
+                            </div>
+                            <div class="fs" style="margin-top:30px">
+                              <div class="sb2"><div class="ti">المدير المالي</div><div class="ln">التوقيع</div></div>
+                              <div class="sb2"><div class="ti">مندوب المبيعات</div><div class="ln">التوقيع</div></div>
+                            </div>
+                          </div>
+                          </body></html>`;
                           const w = window.open('', '_blank'); if (w) { w.document.write(html); w.document.close(); setTimeout(() => w.print(), 500); }
                         }} className="flex-1 bg-indigo-700 hover:bg-indigo-800 text-white py-1.5 rounded-lg text-[10px] font-extrabold flex items-center justify-center gap-1 active:scale-95 cursor-pointer"><Printer className="h-3 w-3" /> PDF</button>
                         <button type="button" onClick={() => {
@@ -6679,30 +6706,30 @@ export default function FactoryTab({
               </div>
             )}
 
-            {/* Top Grid of Balance sheet */}
+            {/* Top Grid of Balance sheet — الرصيد الكلي للمصنع (لكل المناديب) */}
             <div className="grid grid-cols-3 gap-2 font-sans">
               <div className="bg-[#1A365D] text-white p-3 rounded-2xl shadow-sm flex flex-col justify-between">
-                <span className="text-[10px] text-indigo-205 font-bold">حساب المصنع</span>
+                <span className="text-[10px] text-indigo-205 font-bold">حساب المصنع (كلي)</span>
                 <span className="text-sm font-black mt-2 font-mono">
-                  {formatNum(factoryBalanceDetails.totalWithdrawnValue)} <span className="text-[10px]">ج.م</span>
+                  {formatNum(totalFactoryBalanceDetails.totalWithdrawnValue)} <span className="text-[10px]">ج.م</span>
                 </span>
               </div>
               <div className="bg-[#10B981] text-white p-3 rounded-2xl shadow-sm flex flex-col justify-between">
-                <span className="text-[10px] text-emerald-100 font-bold">المسدد للمصنع</span>
+                <span className="text-[10px] text-emerald-100 font-bold">المسدد للمصنع (كلي)</span>
                 <span className="text-sm font-black mt-2 font-mono">
-                  {formatNum(factoryBalanceDetails.totalAdvancePayments)} <span className="text-[10px]">ج.م</span>
+                  {formatNum(totalFactoryBalanceDetails.totalAdvancePayments)} <span className="text-[10px]">ج.م</span>
                 </span>
               </div>
-              {factoryBalanceDetails.netRemainingDueToFactory > 0 ? (
+              {totalFactoryBalanceDetails.netRemainingDueToFactory > 0 ? (
                 <div className="bg-rose-600 text-white p-3 rounded-2xl shadow-sm flex flex-col justify-between">
-                  <span className="text-[10px] text-rose-100 font-bold">المتبقي للمصنع</span>
+                  <span className="text-[10px] text-rose-100 font-bold">المتبقي للمصنع (كلي)</span>
                   <span className="text-sm font-black mt-2 font-mono">
-                    {formatNum(factoryBalanceDetails.netRemainingDueToFactory)} <span className="text-[10px]">ج.م</span>
+                    {formatNum(totalFactoryBalanceDetails.netRemainingDueToFactory)} <span className="text-[10px]">ج.م</span>
                   </span>
                 </div>
-              ) : factoryBalanceDetails.netRemainingDueToFactory === 0 ? (
+              ) : totalFactoryBalanceDetails.netRemainingDueToFactory === 0 ? (
                 <div className="bg-emerald-500 text-white p-3 rounded-2xl shadow-sm flex flex-col justify-between">
-                  <span className="text-[10px] text-emerald-100 font-bold">المتبقي للمصنع</span>
+                  <span className="text-[10px] text-emerald-100 font-bold">المتبقي للمصنع (كلي)</span>
                   <span className="text-sm font-black mt-2 font-mono">
                     مسوى <span className="text-[10px]">✔️</span>
                   </span>
@@ -6711,7 +6738,7 @@ export default function FactoryTab({
                 <div className="bg-indigo-600 text-white p-3 rounded-2xl shadow-sm flex flex-col justify-between">
                   <span className="text-[10px] text-indigo-100 font-bold">رصيد دائن لصالحنا (دفعات زائدة)</span>
                   <span className="text-sm font-black mt-2 font-mono">
-                    {formatNum(Math.abs(factoryBalanceDetails.netRemainingDueToFactory))} <span className="text-[10px]">ج.م</span>
+                    {formatNum(Math.abs(totalFactoryBalanceDetails.netRemainingDueToFactory))} <span className="text-[10px]">ج.م</span>
                   </span>
                 </div>
               )}
@@ -6859,12 +6886,12 @@ export default function FactoryTab({
                 </div>
               </div>
 
-              {/* Panel B: خانة المتبقي للمصنع / الرصيد الدائن / زر الأرشفة */}
+              {/* Panel B: خانة المتبقي للمصنع / الرصيد الدائن / زر الأرشفة — يستخدم الرصيد الكلي */}
               {(() => {
-                const netRemaining = factoryBalanceDetails.netRemainingDueToFactory;
-                const rawValue = factoryBalanceDetails.rawLoadedValue;
-                const creditBalance = Math.max(0, factoryBalanceDetails.totalAdvancePayments - factoryBalanceDetails.totalWithdrawnValue - carriedOverDebt);
-                const isSettledAndCanArchive = (netRemaining <= 0) && (factoryLoads.length > 0 || extraPayments.length > 0 || carriedOverDebt !== 0);
+                const netRemaining = totalFactoryBalanceDetails.netRemainingDueToFactory;
+                const rawValue = totalFactoryBalanceDetails.rawLoadedValue;
+                const creditBalance = Math.max(0, totalFactoryBalanceDetails.totalAdvancePayments - totalFactoryBalanceDetails.totalWithdrawnValue - carriedOverDebt);
+                const isSettledAndCanArchive = (netRemaining <= 0) && (factoryLoads.length > 0 || totalFactoryPayments.length > 0 || carriedOverDebt !== 0);
 
                 if (netRemaining > 0) {
                   return (
@@ -6902,8 +6929,8 @@ export default function FactoryTab({
                                   delegatePhone: selectedDelegatePhone || currentUser?.phone || ''
                                 });
 
-                                // 2. Build archive snapshot — include existing payments + settle payment (don't use currentCycleExtraPayments to avoid double-counting)
-                                const currentLoads = factoryLoads.filter(filterByFactoryDelegate).map(l => {
+                                // 2. Build archive snapshot — use ALL loads (not filtered by delegate) for full cycle archive
+                                const currentLoads = factoryLoads.filter(l => new Date(l.date).getTime() > lastArchiveTimestamp).map(l => {
                                   const prod = products.find(p => String(p.id).trim() === String(l.productId).trim());
                                   const weights = prod ? getProductWeightsFallback(prod) : [];
                                   const weight = weights.find(w => String(w.id).trim() === String(l.weightId).trim());
@@ -6919,12 +6946,16 @@ export default function FactoryTab({
                                     advanceAmount: l.advanceAmount ?? 0, delegateName: l.delegateName || ''
                                   };
                                 });
-                                // Build payments list from CURRENT state snapshot (before expense state update)
-                                const existingPayments = currentCycleExtraPayments.map(p => ({
-                                  id: p.id, amount: p.amount, date: p.date, notes: p.notes,
-                                  recipient: p.recipient, delegateName: p.delegateName,
-                                  delegatePhone: p.delegatePhone, appliedToCarriedDebt: p.appliedToCarriedDebt
-                                }));
+                                // Build payments list using ALL payments (not filtered by delegate)
+                                const existingPayments = totalFactoryPayments.map(p => {
+                                  let parsed: any = {};
+                                  try { parsed = JSON.parse(p.description || '{}'); } catch {}
+                                  return {
+                                    id: p.id, amount: p.amount, date: p.date, notes: parsed.notes || '',
+                                    recipient: parsed.recipient || '', delegateName: p.delegateName || '',
+                                    delegatePhone: p.delegatePhone || '', appliedToCarriedDebt: parsed.appliedToCarriedDebt || 0
+                                  };
+                                });
                                 const settlePayment = {
                                   id: 'settle_' + Date.now(), amount: remainingAmount,
                                   date: new Date().toLocaleDateString('ar-EG') + ' ' + new Date().toLocaleTimeString('ar-EG'),
@@ -6942,7 +6973,7 @@ export default function FactoryTab({
                                   loads: currentLoads,
                                   payments: allPayments,
                                   rawLoadedValue: rawSum,
-                                  totalWithdrawnValue: factoryBalanceDetails.totalWithdrawnValue,
+                                  totalWithdrawnValue: totalFactoryBalanceDetails.totalWithdrawnValue,
                                   totalAdvancePayments: totalPaid,
                                   creditBalance: 0,
                                   carriedOverDebtAtTime: carriedOverDebt,
@@ -6957,10 +6988,10 @@ export default function FactoryTab({
                                   const finalName = selectedDelegatePhone ? (archiveDelegates.find(d => d.phone === selectedDelegatePhone)?.name || currentUser?.name || 'مجهول') : (factoryDelegateFilter ? (archiveDelegates.find(d => d.phone === factoryDelegateFilter || d.name === factoryDelegateFilter)?.name || 'مجهول') : 'مجهول');
                                   onArchiveFactoryCycle(finalPhone, finalName);
                                 } else {
-                                  const loadsToArchive = factoryLoads.filter(filterByFactoryDelegate);
+                                  const loadsToArchive = factoryLoads.filter(l => new Date(l.date).getTime() > lastArchiveTimestamp);
                                   for (const load of loadsToArchive) { onDeleteLoad(load.id); }
                                   const currentExpenses = expenses.filter(e =>
-                                    (e.category === 'سداد للمصنع' || e.type === 'factory_payment') && filterByFactoryDelegate(e));
+                                    (e.category === 'سداد للمصنع' || e.type === 'factory_payment') && new Date(e.date).getTime() > lastArchiveTimestamp);
                                   for (const exp of currentExpenses) { onDeleteExpense(exp.id); }
                                 }
                                 showToast("✓ تم تسجيل الدفعة النهائية وترحيل الدورة للأرشيف بنجاح!");
@@ -6984,7 +7015,7 @@ export default function FactoryTab({
                             if (confirmed) {
                               setIsArchiving(true);
                               try {
-                                const currentLoads = factoryLoads.filter(filterByFactoryDelegate).map(l => {
+                                const currentLoads = factoryLoads.filter(l => new Date(l.date).getTime() > lastArchiveTimestamp).map(l => {
                                   const prod = products.find(p => String(p.id).trim() === String(l.productId).trim());
                                   const weights = prod ? getProductWeightsFallback(prod) : [];
                                   const weight = weights.find(w => String(w.id).trim() === String(l.weightId).trim());
@@ -7000,11 +7031,15 @@ export default function FactoryTab({
                                     advanceAmount: l.advanceAmount ?? 0, delegateName: l.delegateName || ''
                                   };
                                 });
-                                const currentPayments = currentCycleExtraPayments.map(p => ({
-                                  id: p.id, amount: p.amount, date: p.date, notes: p.notes,
-                                  recipient: p.recipient, delegateName: p.delegateName,
-                                  delegatePhone: p.delegatePhone, appliedToCarriedDebt: p.appliedToCarriedDebt
-                                }));
+                                const currentPayments = totalFactoryPayments.map(p => {
+                                  let parsed: any = {};
+                                  try { parsed = JSON.parse(p.description || '{}'); } catch {}
+                                  return {
+                                    id: p.id, amount: p.amount, date: p.date, notes: parsed.notes || '',
+                                    recipient: parsed.recipient || '', delegateName: p.delegateName || '',
+                                    delegatePhone: p.delegatePhone || '', appliedToCarriedDebt: parsed.appliedToCarriedDebt || 0
+                                  };
+                                });
                                 const rawSum = currentLoads.reduce((s, l) => s + l.subtotal, 0);
                                 const newCycle = {
                                   id: Date.now().toString(),
@@ -7012,8 +7047,8 @@ export default function FactoryTab({
                                   loads: currentLoads,
                                   payments: currentPayments,
                                   rawLoadedValue: rawSum,
-                                  totalWithdrawnValue: factoryBalanceDetails.totalWithdrawnValue,
-                                  totalAdvancePayments: factoryBalanceDetails.totalAdvancePayments,
+                                  totalWithdrawnValue: totalFactoryBalanceDetails.totalWithdrawnValue,
+                                  totalAdvancePayments: totalFactoryBalanceDetails.totalAdvancePayments,
                                   creditBalance: 0,
                                   carriedOverDebtAtTime: carriedOverDebt,
                                   waivedAmount: netRemaining
@@ -7026,10 +7061,10 @@ export default function FactoryTab({
                                   const finalName = selectedDelegatePhone ? (archiveDelegates.find(d => d.phone === selectedDelegatePhone)?.name || currentUser?.name || 'مجهول') : (factoryDelegateFilter ? (archiveDelegates.find(d => d.phone === factoryDelegateFilter || d.name === factoryDelegateFilter)?.name || 'مجهول') : 'مجهول');
                                   onArchiveFactoryCycle(finalPhone, finalName);
                                 } else {
-                                  const loadsToArchive = factoryLoads.filter(filterByFactoryDelegate);
+                                  const loadsToArchive = factoryLoads.filter(l => new Date(l.date).getTime() > lastArchiveTimestamp);
                                   for (const load of loadsToArchive) { onDeleteLoad(load.id); }
                                   const currentExpenses = expenses.filter(e =>
-                                    (e.category === 'سداد للمصنع' || e.type === 'factory_payment') && filterByFactoryDelegate(e));
+                                    (e.category === 'سداد للمصنع' || e.type === 'factory_payment') && new Date(e.date).getTime() > lastArchiveTimestamp);
                                   for (const exp of currentExpenses) { onDeleteExpense(exp.id); }
                                 }
                                 showToast("✓ تم ترحيل الدورة مع السماح بالمبلغ المتبقي!");
@@ -7091,8 +7126,8 @@ export default function FactoryTab({
                             if (confirmed) {
                               setIsArchiving(true);
                               try {
-                                // Build archive snapshot from current data
-                                const currentLoads = factoryLoads.filter(filterByFactoryDelegate).map(l => {
+                                // Build archive snapshot from current data — use ALL loads and ALL payments
+                                const currentLoads = factoryLoads.filter(l => new Date(l.date).getTime() > lastArchiveTimestamp).map(l => {
                                   const prod = products.find(p => String(p.id).trim() === String(l.productId).trim());
                                   const weights = prod ? getProductWeightsFallback(prod) : [];
                                   const weight = weights.find(w => String(w.id).trim() === String(l.weightId).trim());
@@ -7108,21 +7143,25 @@ export default function FactoryTab({
                                     advanceAmount: l.advanceAmount ?? 0, delegateName: l.delegateName || ''
                                   };
                                 });
-                                const currentPayments = currentCycleExtraPayments.map(p => ({
-                                  id: p.id, amount: p.amount, date: p.date, notes: p.notes,
-                                  recipient: p.recipient, delegateName: p.delegateName,
-                                  delegatePhone: p.delegatePhone, appliedToCarriedDebt: p.appliedToCarriedDebt
-                                }));
+                                const currentPayments = totalFactoryPayments.map(p => {
+                                  let parsed: any = {};
+                                  try { parsed = JSON.parse(p.description || '{}'); } catch {}
+                                  return {
+                                    id: p.id, amount: p.amount, date: p.date, notes: parsed.notes || '',
+                                    recipient: parsed.recipient || '', delegateName: p.delegateName || '',
+                                    delegatePhone: p.delegatePhone || '', appliedToCarriedDebt: parsed.appliedToCarriedDebt || 0
+                                  };
+                                });
                                 const rawSum = currentLoads.reduce((s, l) => s + l.subtotal, 0);
-                                const trueCredit = Math.max(0, factoryBalanceDetails.totalAdvancePayments - factoryBalanceDetails.totalWithdrawnValue - carriedOverDebt);
+                                const trueCredit = Math.max(0, totalFactoryBalanceDetails.totalAdvancePayments - totalFactoryBalanceDetails.totalWithdrawnValue - carriedOverDebt);
                                 const newCycle = {
                                   id: Date.now().toString(),
                                   settledAt: new Date().toLocaleDateString('ar-EG') + ' ' + new Date().toLocaleTimeString('ar-EG'),
                                   loads: currentLoads,
                                   payments: currentPayments,
                                   rawLoadedValue: rawSum,
-                                  totalWithdrawnValue: factoryBalanceDetails.totalWithdrawnValue,
-                                  totalAdvancePayments: factoryBalanceDetails.totalAdvancePayments,
+                                  totalWithdrawnValue: totalFactoryBalanceDetails.totalWithdrawnValue,
+                                  totalAdvancePayments: totalFactoryBalanceDetails.totalAdvancePayments,
                                   creditBalance: trueCredit,
                                   carriedOverDebtAtTime: carriedOverDebt
                                 };
@@ -7136,11 +7175,10 @@ export default function FactoryTab({
                                   onArchiveFactoryCycle(finalPhone, finalName);
                                 } else {
                                   // Mark all current factory loads as archived via parent handler (fallback)
-                                  const loadsToArchive = factoryLoads.filter(filterByFactoryDelegate);
+                                  const loadsToArchive = factoryLoads.filter(l => new Date(l.date).getTime() > lastArchiveTimestamp);
                                   for (const load of loadsToArchive) { onDeleteLoad(load.id); }
-                                  // Delete current extra payment expenses
                                   const currentExpenses = expenses.filter(e =>
-                                    (e.category === 'سداد للمصنع' || e.type === 'factory_payment') && filterByFactoryDelegate(e));
+                                    (e.category === 'سداد للمصنع' || e.type === 'factory_payment') && new Date(e.date).getTime() > lastArchiveTimestamp);
                                   for (const exp of currentExpenses) { onDeleteExpense(exp.id); }
                                 }
                                 showToast("✓ تم أرشفة الدورة بنجاح! الشاشات جاهزة لدورة جديدة. يمكنك مراجعة الدورة في تبويب الأرشيف.");
@@ -7203,14 +7241,29 @@ export default function FactoryTab({
                     <button type="button" onClick={() => {
                       const filterLabel = currentPaymentsFilter === 'daily' ? 'يومي' : currentPaymentsFilter === 'weekly' ? 'أسبوعي' : currentPaymentsFilter === 'monthly' ? 'شهري' : 'مخصص';
                       const total = filteredCurrentPayments.reduce((s, p) => s + p.amount, 0);
-                      let html = `<!DOCTYPE html><html dir="rtl"><head><meta charset="utf-8"><style>body{font-family:system-ui,sans-serif;padding:20px;background:#f8fafc}table{width:100%;border-collapse:collapse;margin:10px 0}th,td{border:1px solid #cbd5e1;padding:6px 8px;font-size:12px}th{background:#1e2a4a;color:white}.summary{background:#f1f5f9;padding:15px;border-radius:12px;margin-top:15px;text-align:center;font-weight:bold}</style></head><body>
-                      <h2 style="text-align:center;color:#1e2a4a">سجل الدفعات — فلتر: ${filterLabel}</h2>
-                      <p style="text-align:center;color:#64748b">عدد الدفعات: ${filteredCurrentPayments.length} | تاريخ الطباعة: ${new Date().toLocaleDateString('ar-EG')}</p>
-                      <table><thead><tr><th>م</th><th>التاريخ</th><th>البيان</th><th>المبلغ</th><th>المندوب</th><th>المستلم</th></tr></thead><tbody>
-                      ${filteredCurrentPayments.map((p, i) => `<tr><td style="text-align:center">${i + 1}</td><td style="text-align:center">${p.date}</td><td style="text-align:right">${p.notes || 'تسديد مباشر'}</td><td style="text-align:center;font-weight:bold;color:#059669">${formatNum(p.amount)} ج.م</td><td style="text-align:center">${p.delegateName || '-'}</td><td style="text-align:center">${p.recipient || '-'}</td></tr>`).join('')}
-                      </tbody></table>
-                      <div class="summary">إجمالي الدفعات: ${formatNum(total)} ج.م</div>
-                      <p style="text-align:center;color:#94a3b8;margin-top:20px;font-size:10px">تم التصدير من نظام تتبع المبيعات</p></body></html>`;
+                      let html = `<html dir="rtl" lang="ar"><head>${COMPACT_PRO_CSS}</head><body>
+                      <div style="padding:12mm 14mm">
+                        <div class="rh">
+                          <h1>سجل الدفعات — فلتر: ${filterLabel}</h1>
+                          <div class="sub">نظام التوزيع والمبيعات المعتمد</div>
+                          <div class="ref">
+                            <span>عدد الدفعات: ${filteredCurrentPayments.length}</span>
+                            <span>تاريخ الطباعة: ${new Date().toLocaleDateString('ar-EG')}</span>
+                          </div>
+                        </div>
+                        <table><thead><tr><th>م</th><th>التاريخ</th><th>البيان</th><th>المبلغ</th><th>المندوب</th><th>المستلم</th></tr></thead><tbody>
+                        ${filteredCurrentPayments.map((p, i) => `<tr><td style="text-align:center">${i + 1}</td><td style="text-align:center">${p.date}</td><td style="text-align:right">${p.notes || 'تسديد مباشر'}</td><td style="text-align:center;font-weight:bold;color:#059669">${formatNum(p.amount)} ج.م</td><td style="text-align:center">${p.delegateName || '-'}</td><td style="text-align:center">${p.recipient || '-'}</td></tr>`).join('')}
+                        </tbody></table>
+                        <div class="ts" style="padding:10px 12px;border-radius:8px;display:flex;justify-content:space-between;font-weight:800;font-size:12px;margin-bottom:14px">
+                          <span>إجمالي الدفعات</span>
+                          <span>${formatNum(total)} ج.م</span>
+                        </div>
+                        <div class="fs" style="margin-top:30px">
+                          <div class="sb2"><div class="ti">المدير المالي</div><div class="ln">التوقيع</div></div>
+                          <div class="sb2"><div class="ti">مندوب المبيعات</div><div class="ln">التوقيع</div></div>
+                        </div>
+                      </div>
+                      </body></html>`;
                       const w = window.open('', '_blank'); if (w) { w.document.write(html); w.document.close(); setTimeout(() => w.print(), 500); }
                     }} className="flex-1 bg-indigo-700 hover:bg-indigo-800 text-white py-1.5 rounded-lg text-[10px] font-extrabold flex items-center justify-center gap-1 active:scale-95 cursor-pointer"><Printer className="h-3 w-3" /> PDF</button>
                     <button type="button" onClick={() => {

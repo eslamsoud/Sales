@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { COMPACT_PRO_CSS } from '../utils/reportStyles';
 import { confirmDialog, duaConfirmDialog } from '../utils/confirm';
 /**
  * @license
@@ -959,145 +960,117 @@ export default function InvoiceTab({
 
     doc.open();
     doc.write(`
+      <!DOCTYPE html>
       <html dir="rtl" lang="ar">
-        <head>
-          <title>فاتورة رقم ${inv.invoiceNumber}</title>
-          <style>
-            @media print {
-              @page { size: A4; margin: 15mm; }
-              body { margin: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-            }
-            body { font-family: system-ui, -apple-system, sans-serif; color: #0f172a; line-height: 1.5; padding: 20px; text-align: right; }
-            .header { display: flex; justify-content: space-between; align-items: start; border-bottom: 3px double #1e3a8a; padding-bottom: 15px; margin-bottom: 25px; }
-            .company-info h1 { color: #1e3a8a; margin: 0 0 5px 0; font-size: 24px; font-weight: 900; text-align: right; }
-            .company-info p { margin: 0; color: #64748b; font-size: 13px; font-weight: bold; text-align: right; }
-            
-            .invoice-meta { text-align: left; font-size: 12px; font-weight: bold; color: #334155; }
-            .invoice-meta h2 { margin: 0 0 5px 0; color: #dd6b20; font-size: 18px; font-weight: 900; text-align: left; }
-            
-            .details-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 25px; background: #f8fafc; border: 1px solid #e2e8f0; padding: 15px; border-radius: 12px; text-align: right; }
-            .details-col h3 { margin: 0 0 8px 0; font-size: 13px; color: #1e3a8a; border-bottom: 1px solid #cbd5e1; padding-bottom: 4px; font-weight: 800; text-align: right; }
-            .details-col p { margin: 4px 0; font-size: 11px; font-weight: bold; color: #475569; text-align: right; }
-            
-            table { width: 100%; border-collapse: collapse; margin-bottom: 30px; font-size: 11px; text-align: right; }
-            th, td { border: 1px solid #cbd5e1; padding: 10px 12px; text-align: right; }
-            th { background: #f1f5f9; color: #1e3a8a; font-weight: 900; }
-            
-            .totals-table { width: 45%; margin-right: auto; margin-left: 0; border: none; font-size: 11px; text-align: right; }
-            .totals-table td { border: none; padding: 6px 12px; }
-            .totals-table tr.grand-total td { background: #eff6ff; border-top: 1px solid #3b82f6; border-bottom: 1px solid #3b82f6; font-size: 13px; font-weight: 900; color: #1e3a8a; }
-            
-            .signature-box { margin-top: 50px; display: flex; justify-content: space-between; font-size: 11px; font-weight: bold; color: #475569; border-top: 1px solid #cbd5e1; padding-top: 15px; text-align: right; }
-            .watermark { position: fixed; bottom: 20px; left: 20px; font-size: 9px; color: #cbd5e1; font-weight: bold; }
-          </style>
-        </head>
-        <body>
-          <div class="header">
-            <div class="company-info">
-              <h1>${invoiceAppName}</h1>
-              <p>حلول التوزيع ونظام مبيعات الغذاء الميداني المعتمد</p>
-            </div>
-            <div class="invoice-meta">
-              <h2>فاتورة مبيعات معتمدة</h2>
-              <div>رقم المستند: <b>${inv.invoiceNumber}</b></div>
-              <div>تاريخ الإصدار: <b>${formattedDate}</b></div>
-            </div>
+      <head>${COMPACT_PRO_CSS}</head>
+      <body>
+        <div class="rh">
+          <h1>${invoiceAppName}</h1>
+          <div class="sub">حلول التوزيع ونظام مبيعات الغذاء الميداني المعتمد</div>
+          <div class="ref">
+            <span>فاتورة مبيعات معتمدة</span>
+            <span>رقم المستند: <b>${inv.invoiceNumber}</b></span>
+            <span>تاريخ الإصدار: <b>${formattedDate}</b></span>
           </div>
-          
-          <div class="details-grid">
-            <div class="details-col">
-              <h3>تفاصيل والجهة المستلمة (العميل)</h3>
-              <p>اسم المحل/العميل: <b>${customerObj?.name || 'غير معروف'}</b></p>
-              <p>المحافظة والمنطقة: <b>${customerObj?.governorate ? `${customerObj.governorate} - ` : ''}${customerObj?.area || 'المنطقة الافتراضية'}</b></p>
-              <p>رقم تواصل الهاتف: <span style="font-family: monospace;">${customerObj?.phone || 'غير متوفر'}</span></p>
-            </div>
-            <div class="details-col" style="text-align: left;">
-              <h3>بيانات المسؤول والمندوب</h3>
-              <p>اسم المندوب المفوض: <b>${invoiceRepName || 'شريك مبيعات معتمد'}</b></p>
-              <p>هاتف التواصل الداخلي: <span style="font-family: monospace;">${invoiceRepPhone || '01228466613'}</span></p>
-              ${inv.notes ? `<p>ملاحظات إضافية: <span style="color:#d97706;">${inv.notes}</span></p>` : ''}
-            </div>
+        </div>
+        
+        <div class="sg">
+          <div class="sb bl">
+            <div class="l">العميل المستلم</div>
+            <div class="v" style="font-size:11px;text-align:right">اسم المحل: <b>${customerObj?.name || 'غير معروف'}</b></div>
+            <div class="v" style="font-size:11px;text-align:right">المحافظة والمنطقة: <b>${customerObj?.governorate ? `${customerObj.governorate} - ` : ''}${customerObj?.area || 'المنطقة الافتراضية'}</b></div>
+            <div class="v" style="font-size:11px;text-align:right">الهاتف: <span style="font-family:monospace">${customerObj?.phone || 'غير متوفر'}</span></div>
           </div>
-          
-          <table>
-            <thead>
-              <tr>
-                <th width="40">م</th>
-                <th>بيان الأصناف والمنتجات المباعة</th>
-                <th>الكمية المفرزة</th>
-                <th>السعر الافتراضي للكرتونة</th>
-                <th>نسبة خصم الصنف</th>
-                <th>إجمالي القيمة الصافية</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${inv.items.map((item: any, idx: number) => {
-                const prod = products.find((p: any) => String(p.id).trim() === String(item.productId).trim());
-                const ws = prod ? getProductWeightsFallback(prod) : [];
-                const weight = ws.find((w: any) => String(w.id).trim() === String(item.weightId).trim()) || ws[0];
-                const prodName = prod ? prod.name : 'صنف مبيعات';
-                const sizeLabel = weight ? weight.size : '';
-                
-                const multiplier = weight ? (weight.unitsPerCarton || 12) : 12;
-                const cartons = Math.floor(item.quantity / multiplier);
-                const pieces = item.quantity % multiplier;
-                
-                const qtyTextParts = [];
-                if (cartons > 0) qtyTextParts.push(`\${cartons} كرتونة`);
-                if (pieces > 0) qtyTextParts.push(`\${pieces} قطعة`);
-                const qtyLabel = qtyTextParts.join(' و ') || 'منتهي';
-
-                const cartonOriginalPrice = item.originalPrice * multiplier;
-                const singleItemTotal = item.finalPrice * item.quantity;
-                
-                return `
-                  <tr>
-                    <td>\${idx + 1}</td>
-                    <td><b>\${prodName}</b> (\${sizeLabel})</td>
-                    <td><b>\${qtyLabel}</b></td>
-                    <td>\${cartonOriginalPrice.toLocaleString('ar-EG')} ج.م</td>
-                    <td style="color: \${item.discountPercent > 0 ? '#dc2626' : 'inherit'}; font-weight: bold;">
-                      \${item.discountPercent > 0 ? item.discountPercent + '%' : '---'}
-                    </td>
-                    <td><b>\${singleItemTotal.toLocaleString('ar-EG')} ج.م</b></td>
-                  </tr>
-                `;
-              }).join('')}
-            </tbody>
-          </table>
-          
-          <table class="totals-table">
-            <tbody>
-              <tr>
-                <td><b>الإجمالي قبل التخفيض:</b></td>
-                <td style="text-align: left;">\${inv.totalBeforeDiscount.toLocaleString('ar-EG')} ج.م</td>
-              </tr>
-              <tr>
-                <td style="color: #dc2626;"><b>خصومات وتخفيضات تجارية:</b></td>
-                <td style="text-align: left; color: #dc2626; font-weight: bold;">-\${(inv.totalBeforeDiscount - inv.totalAfterDiscount).toLocaleString('ar-EG')} ج.م</td>
-              </tr>
-              <tr class="grand-total">
-                <td><b>صافي قيمة الفاتورة النهائي:</b></td>
-                <td style="text-align: left;">\${inv.totalAfterDiscount.toLocaleString('ar-EG')} ج.م</td>
-              </tr>
-              <tr>
-                <td style="color: #16a34a;"><b>المبلغ المقبوض والمسدد:</b></td>
-                <td style="text-align: left; color: #16a34a; font-weight: bold;">\${inv.paidAmount.toLocaleString('ar-EG')} ج.م</td>
-              </tr>
-              <tr>
-                <td style="color: #ea580c;"><b>المتبقي مديونية على العميل:</b></td>
-                <td style="text-align: left; color: #ea580c; font-weight: bold;">\${(inv.totalAfterDiscount - inv.paidAmount).toLocaleString('ar-EG')} ج.م</td>
-              </tr>
-            </tbody>
-          </table>
-          
-          <div class="signature-box">
-            <div>توقيع مستلم البضاعة (العميل): ............................</div>
-            <div>اعتماد وسداد المندوب المفوض: ............................</div>
+          <div class="sb gr">
+            <div class="l">المندوب المسؤول</div>
+            <div class="v" style="font-size:11px;text-align:right">اسم المندوب: <b>${invoiceRepName || 'شريك مبيعات معتمد'}</b></div>
+            <div class="v" style="font-size:11px;text-align:right">هاتف التواصل: <span style="font-family:monospace">${invoiceRepPhone || '—'}</span></div>
+            ${inv.notes ? `<div class="v" style="font-size:11px;text-align:right">ملاحظات: <span style="color:#d97706">${inv.notes}</span></div>` : ''}
           </div>
-          
-          <div class="watermark">نظام الأغذية الميداني الموحد - رصيد المبيعات والمخزن</div>
-        </body>
+        </div>
+        
+        <table>
+          <thead>
+            <tr>
+              <th width="30">م</th>
+              <th>الصنف والحجم</th>
+              <th>الكمية</th>
+              <th>سعر الكرتونة</th>
+              <th>نسبة الخصم</th>
+              <th>القيمة الصافية</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${inv.items.map((item: any, idx: number) => {
+              const prod = products.find((p: any) => String(p.id).trim() === String(item.productId).trim());
+              const ws = prod ? getProductWeightsFallback(prod) : [];
+              const weight = ws.find((w: any) => String(w.id).trim() === String(item.weightId).trim()) || ws[0];
+              const prodName = prod ? prod.name : 'صنف مبيعات';
+              const sizeLabel = weight ? weight.size : '';
+              const multiplier = weight ? (weight.unitsPerCarton || 12) : 12;
+              const cartons = Math.floor(item.quantity / multiplier);
+              const pieces = item.quantity % multiplier;
+              const qtyTextParts = [];
+              if (cartons > 0) qtyTextParts.push(`${cartons} كرتونة`);
+              if (pieces > 0) qtyTextParts.push(`${pieces} قطعة`);
+              const qtyLabel = qtyTextParts.join(' و ') || 'منتهي';
+              const cartonOriginalPrice = item.originalPrice * multiplier;
+              const singleItemTotal = item.finalPrice * item.quantity;
+              return `
+                <tr>
+                  <td style="text-align:center;font-weight:700;color:#94a3b8">${idx + 1}</td>
+                  <td><b style="color:#1e3a5f">${prodName}</b> <span style="color:#64748b">${sizeLabel}</span></td>
+                  <td style="font-weight:700">${qtyLabel}</td>
+                  <td style="text-align:center">${cartonOriginalPrice.toLocaleString('ar-EG')}</td>
+                  <td style="text-align:center;color:${item.discountPercent > 0 ? '#dc2626' : '#94a3b8'};font-weight:700">${item.discountPercent > 0 ? item.discountPercent + '%' : '—'}</td>
+                  <td style="text-align:center;font-weight:800;color:#1e3a5f">${singleItemTotal.toLocaleString('ar-EG')}</td>
+                </tr>
+              `;
+            }).join('')}
+          </tbody>
+        </table>
+        
+        <table style="width:45%;margin-left:0;margin-right:auto">
+          <thead>
+            <tr class="tt">
+              <td colspan="2" style="text-align:center;font-weight:900;font-size:12px">ملخص الفاتورة</td>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>الإجمالي قبل التخفيض:</td>
+              <td style="text-align:left;font-weight:700">${inv.totalBeforeDiscount.toLocaleString('ar-EG')} ج.م</td>
+            </tr>
+            <tr>
+              <td style="color:#dc2626">خصومات وتخفيضات:</td>
+              <td style="text-align:left;color:#dc2626;font-weight:700">-${(inv.totalBeforeDiscount - inv.totalAfterDiscount).toLocaleString('ar-EG')} ج.م</td>
+            </tr>
+            <tr class="ts">
+              <td style="font-weight:900">صافي الفاتورة:</td>
+              <td style="text-align:left">${inv.totalAfterDiscount.toLocaleString('ar-EG')} ج.م</td>
+            </tr>
+            <tr>
+              <td style="color:#15803d">المبلغ المسدد:</td>
+              <td style="text-align:left;color:#15803d;font-weight:800">${inv.paidAmount.toLocaleString('ar-EG')} ج.م</td>
+            </tr>
+            <tr>
+              <td style="color:#ea580c;font-weight:800">المتبقي (مديونية):</td>
+              <td style="text-align:left;color:#ea580c;font-weight:900;font-size:12px">${(inv.totalAfterDiscount - inv.paidAmount).toLocaleString('ar-EG')} ج.م</td>
+            </tr>
+          </tbody>
+        </table>
+        
+        <div class="fs">
+          <div class="sb2">
+            <div class="ti">مستلم البضاعة (العميل)</div>
+            <div class="ln">التوقيع</div>
+          </div>
+          <div class="sb2">
+            <div class="ti">المندوب المفوض</div>
+            <div class="ln">التوقيع</div>
+          </div>
+        </div>
+      </body>
       </html>
     `);
     doc.close();

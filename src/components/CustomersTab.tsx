@@ -1,5 +1,6 @@
 // @ts-nocheck
 import { confirmDialog } from '../utils/confirm';
+import { COMPACT_PRO_CSS } from '../utils/reportStyles';
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -310,7 +311,43 @@ export default function CustomersTab({
       console.warn("Using premium local pitch message generator due to inactive Gemini API Key:", err.message);
       
       const guidelines = settings.aiRetentionGuidelines || 'تقديم عرض ترويجي خاص لزيوت وسمن سوفانا الفاخرة';
-      const fallbackPitchMsg = `السلام عليكم ورحمة الله وبركاته يا فندم 🌸\nمعكم مندوب مبيعات زيوت وسمن "سوفانا" الممتازة لجودة الفنادق والمطاعم والبيوت.\n\nنتشرف بالتعاون معكم في [ ${customer.name} ] بمنطقة [ ${customer.area} ] ونود تقديم عروضنا الخاصة والحصرية لكم لتوفير أفضل سمن بلدي وزيوت مصفاة فائقة النقاوة، بهامش ربح ممتاز وتسهيلات سداد مريحة.\n\n(✨ هدفنا الاستراتيجي: ${guidelines})\n\nهل نتشرف بتحديد موعد قريب للزيارة وتجريب عيناتنا المجانية للتأكد من الجودة؟`;
+      const delegateName = currentUser?.name || 'المندوب';
+      const isActive = (customer.purchasesCount || 0) > 0 || (customer.totalSpent || 0) > 0;
+      const fallbackPitchMsg = isActive
+        ? `السلام عليكم ورحمة الله وبركاته،
+
+معكم ${delegateName}، مندوب مبيعات زيت سوفانا.
+
+أتمنى أن تكونوا بخير وفي أتم الصحة والعافية.
+
+🤝 نتقدم إليكم بخالص الشكر والتقدير على ثقتكم المستمرة في منتجات زيت سوفانا، ونعتز بشراكتكم التي تمثل جزءًا مهمًا من نجاحنا.
+
+نحرص دائمًا على تقديم أفضل العروض والخدمات، والارتقاء بمستوى الخدمة بما يلبي تطلّعاتكم ويواكب احتياجاتكم.
+
+📅 يشرفني تجديد اللقاء بكم في الزيارة القادمة، في أقرب وقت يناسبكم، لمواصلة تقديم أفضل خدمة، وتعزيز التعاون المثمر بيننا.
+
+⭐ ثقتكم الغالية محل تقديرنا واعتزازنا، ونسأل الله أن يديم بيننا التعاون، وأن نكون دائمًا عند حسن ظنكم.
+
+وتفضلوا بقبول فائق الاحترام والتقدير،
+
+${delegateName}
+مندوب مبيعات زيت سوفانا`
+        : `السلام عليكم ورحمة الله وبركاته،
+
+معكم ${delegateName}، مندوب مبيعات زيت سوفانا.
+
+أتمنى أن تكونوا بخير وفي أتم الصحة والعافية.
+
+🤝 انطلاقًا من حرص مصنع زيت سوفانا على تعزيز علاقته بعملائه الكرام، وحرصي على متابعة احتياجاتكم وتقديم أفضل مستوى من الخدمة، يسعدني التواصل معكم لإطلاعكم على أحدث العروض والأسعار المميزة التي تناسب احتياجاتكم.
+
+📅 يشرفني زيارتكم في الموعد الذي يناسبكم، ويسعدني تلبية أي طلب أو استفسار، مع متابعة طلباتكم شخصيًا حتى يتم تنفيذها بأفضل جودة وفي أسرع وقت.
+
+⭐ نعتز بثقتكم، ونتطلع إلى استمرار التعاون معكم، ويسعدني معرفة اليوم والوقت المناسبين لزيارتكم.
+
+مع خالص الشكر والتقدير،
+
+${delegateName}
+مندوب مبيعات زيت سوفانا`;
       
       const messageText = encodeURIComponent(fallbackPitchMsg);
       window.location.href = formatWhatsAppLink(customer.phone, messageText);
@@ -709,26 +746,25 @@ export default function CustomersTab({
   };
 
   const generateAIPitchMessage = (type: string, clientName: string) => {
-    const t = type || '';
-    const guidelines = settings.aiPitchGuidelines ? `\n\n(🎯 تذكير بالنقاط الرئيسية المتفق عليها بالعرض: ${settings.aiPitchGuidelines})` : '';
-    
-    if (t === 'هايبر ماركت') {
-      return `السلام عليكم يا فندم، معكم مندوب زيوت وسمن سوفانا الفاخرة 🌸. يسعدنا التعاون معكم وتقديم عروض سمن وزيوت حصرية لـ [ ${clientName} ] بمميزات مخصصة للهايبر ماركت وسحب كميات ومستويات توريد مستمرة. نضمن لكم هامش ربح ممتاز وتجربة عينات مجانية لعملائكم.${guidelines}\n\nهل نتشرف بتحديد موعد للزيارة؟`;
-    } else if (t === 'حلواني ومخبز') {
-      return `السلام عليكم ورحمة الله، معكم مندوب زيوت وسمن سوفانا الخاصة بالمخابز والأفران 🥖. يشرفنا تزويد [ ${clientName} ] بأجود أنواع سمن العجن والزيوت النباتية المصفاة المخصصة للحلويات والفينو والمعجنات، بأسعار جملة تشجيعية وتسهيل دفع ممتاز لضمان جودة طعم ورائحة لا تقاوم لمخبوزاتكم.${guidelines}\n\nيسعدنا إرسال عينة تجريبية للمصانع والأفران اليوم للتجربة الفوقية؟`;
-    } else if (t === 'سوبر ماركت') {
-      return `السلام عليكم يا فندم، معكم مندوب زيوت وسمن سوفانا الفاخرة 🌸. يسعدنا التعاون معكم وتقديم عرض توريد خاص جداً يناسب السوبر ماركت المميز لديكم [ ${clientName} ] بمستويات طلب مرنة وهوامش ربح ممتازة لعملائكم، مع توفير عينات تذوق مجاناً لزيادة حركة سحب الصنف بالرفوف.${guidelines}\n\nهل يمكننا تحديد موعد لزيارتكم وتقديم قائمة الأسعار والخصومات الحصرية؟`;
-    } else if (t === 'ميني ماركت') {
-      return `أهلاً بحضرتك يا فندم، معكم زيوت وسمن سوفانا 🌟. يسعدنا نوفر لكم خدمة توصيل سريعة ومجانية لبقالتكم الكريمة [ ${clientName} ] مع هامش ربح تنافسي يزيد مبيعاتكم، وضمان الاسترجاع الكامل والاستبدال الفوري للأصناف. أسعارنا تبدأ من كرتونة واحدة وتسهيلات دفع تشجيعية.${guidelines}\n\nيشرفنا نرسل لحضرتك كتالوج الأصناف المتاحة للطلب الفوري؟`;
-    } else if (t === 'مطاعم') {
-      return `السلام عليكم يا فندم، معكم شريككم في الجودة؛ زيوت وسمن سوفانا الممتازة للمطاعم الفاخرة [ ${clientName} ] 🍳. ندرك أهمية نقاوة الزيت ومقاومته للحرارة العالية لتقديم طعام صحي وشهي؛ لذلك صممنا عروض الجملة الخاصة بمطاعم الفول والفلافل والمأكولات الشعبية بنسب توفير مذهلة وبند سحب دوري سهل.${guidelines}\n\nيسعدنا إرسال عينة تذوق وتجريب مجانية للمطبخ اليوم للتأكد من جدارتنا بالاعتماد؟`;
-    } else if (t === 'بقالة تموينية' || t === 'مواد تموينية') {
-      return `السلام عليكم يا فندم، معكم مندوب زيوت وسمن سوفانا 🌸. يشرفنا أن نتعاون معكم ونوفر لـ [ ${clientName} ] منتجاتنا بأسعار تنافسية تلائم طبيعة عملكم كمنفذ تمويني مع توفير هوامش ربح جيدة وعبوات تناسب جميع الفئات المستهدفة.${guidelines}\n\nهل يمكننا تحديد موعد لزيارتكم وتقديم قائمة الأسعار والخصومات الحصرية؟`;
-    } else if (t === 'مطابخ وتجهيزات') {
-      return `أهلاً بحضرتك يا فندم، معكم مندوب زيوت وسمن سوفانا الممتازة للولائم والتجهيزات 🌟. نعلم أن [ ${clientName} ] يهتم بجودة الطعم والرائحة الأصيلة في كل وجبة. صممنا لكم عروضاً على عبوات الجراكن والصفائح الكبيرة لتوفير أعلى جودة بأقل تكلفة إنتاجية.${guidelines}\n\nيسعدنا تقديم الأسعار التنافسية الخاصة بالتجهيزات المركزية وعينة تجريبية لشيف المطبخ؟`;
-    } else {
-      return `مرحباً بحضرتك يا فندم، معكم زيوت وسمن سوفانا 🌿. نتشرف بالتعاون مع تجار العطارة الكرام في [ ${clientName} ]، ونوفر لكم سمن بلدي وزيوت طبيعية بنكهات أصلية وروائح جذابة تضمن ولاء المتسوقين وبخصومات مخصصة للكميات تبدأ من 5 كراتين مع ترويج مجاني لعطارتكم في منصاتنا لضمان بيع ممتاز.${guidelines}\n\nهل تود التعرف على أسعار التوريد والكميات المتاحة حالياً؟`;
-    }
+    const delegateName = currentUser?.name || 'المندوب';
+    return `السلام عليكم ورحمة الله وبركاته،
+
+معكم ${delegateName}، مندوب مبيعات زيت سوفانا.
+
+أتمنى أن تكونوا بخير وفي أتم الصحة والعافية.
+
+يسعدني التواصل معكم والتعريف بمنتجات زيت سوفانا، التي تحظى بثقة العديد من العملاء بفضل جودتها العالية، وتنوع عبواتها، وأسعارها التنافسية، مع الالتزام بتقديم خدمة متميزة وسرعة في تلبية الطلبات.
+
+🤝 يشرفني أن أكون مسؤولًا عن خدمتكم، وأن أقدم لكم أحدث العروض، وأجيب عن جميع استفساراتكم، بما يساعدكم على اختيار المنتجات المناسبة لاحتياجاتكم.
+
+📅 أتطلع إلى فرصة تشريفكم بزيارة في أقرب وقت يناسبكم، للتعريف بمنتجات زيت سوفانا واستعراض العروض الحالية، وبداية تعاون مثمر بإذن الله.
+
+نسعد بثقتكم، ونتطلع إلى بناء شراكة ناجحة ومستدامة معكم.
+
+وتفضلوا بقبول فائق الاحترام والتقدير،
+
+${delegateName}
+مندوب مبيعات زيت سوفانا`;
   };
 
   const handleAddMapLeadToGoogleLeads = (lead: any) => {
@@ -1015,70 +1051,53 @@ export default function CustomersTab({
     doc.open();
     doc.write(`
       <html dir="rtl" lang="ar">
-        <head>
-          <style>
-            @media print {
-              @page { size: A4; margin: 15mm; }
-              body { margin: 0; }
-            }
-            body { font-family: system-ui, -apple-system, sans-serif; color: #0f172a; line-height: 1.5; padding: 20px; }
-            .header { text-align: center; margin-bottom: 25px; border-bottom: 3px double #1e3a8a; padding-bottom: 12px; }
-            .header h1 { color: #1e3a8a; margin: 0 0 5px 0; font-size: 24px; font-weight: 900; }
-            .header p { margin: 0; color: #64748b; font-size: 13px; font-weight: bold; }
-            
-            .meta-box { display: flex; justify-content: space-between; margin-bottom: 25px; font-size: 11px; color: #334155; font-weight: bold; border-bottom: 1px solid #e2e8f0; padding-bottom: 8px; }
-            
-            h2 { font-size: 13px; color: #1e3a8a; margin: 25px 0 10px 0; border-right: 4px solid #dd6b20; padding-right: 8px; font-weight: bold; }
-            
-            table { width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 11px; }
-            th, td { border: 1px solid #e2e8f0; padding: 10px 12px; text-align: right; }
-            th { background: #f1f5f9; color: #334155; font-weight: 900; }
-            
-            .footer-notes { margin-top: 50px; border-top: 1px solid #cbd5e1; padding-top: 15px; display: flex; justify-content: space-between; font-size: 11px; font-weight: bold; color: #475569; }
-          </style>
-        </head>
+        <head>${COMPACT_PRO_CSS}</head>
         <body>
-          <div class="header">
-            <h1>دليل عملاء التوزيع والمبيعات الميدانية</h1>
-            <p>سمن وزيت سوفانا الفاخر - الاخوه EAGS لخدمات التوزيع</p>
-          </div>
-          
-          <div class="meta-box">
-            <div>تاريخ الاستخراج: ${new Date().toLocaleDateString('ar-EG')}</div>
-            <div>تصفية القائمة: <span style="color:#dd6b20;">${filterSummary}</span></div>
-          </div>
-          
-          <h2>قائمة العملاء المعتمدة للفترة (${filteredCustomers.length} عميل)</h2>
-          <table>
-            <thead>
-              <tr>
-                <th width="40">م</th>
-                <th>اسم العميل</th>
-                <th>رقم الهاتف للتواصل</th>
-                <th>منطقة التوزيع</th>
-                <th>المحافظة المسجلة</th>
-                <th>موقع العميل / خرائط جوجل</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${filteredCustomers.length === 0 ? '<tr><td colspan="6" style="text-align:center; color:#94a3b8;">لا توجد نتائج عملاء مطابقة للتصفية الحالية.</td></tr>' : 
-                filteredCustomers.map((customer, idx) => `
-                  <tr>
-                    <td>${idx + 1}</td>
-                    <td><b>${customer.name}</b></td>
-                    <td><b style="font-family: monospace;">${customer.phone}</b></td>
-                    <td>${customer.area}</td>
-                    <td>${getResolvedGov(customer)}</td>
-                    <td><span style="font-size: 10px; color: #475569;">${customer.locationLink ? 'متوفر (الرابط مسجل)' : 'غير متوفر'}</span></td>
-                  </tr>
-                `).join('')
-              }
-            </tbody>
-          </table>
-          
-          <div class="footer-notes">
-            <div>إعداد مندوب مبيعات المنطقة: ............................</div>
-            <div>تاريخ الطباعة والاعتماد: ............................</div>
+          <div style="padding:12mm 14mm">
+            <div class="rh">
+              <h1>دليل عملاء التوزيع والمبيعات الميدانية</h1>
+              <div class="sub">سمن وزيت سوفانا الفاخر - الاخوه EAGS لخدمات التوزيع</div>
+              <div class="ref">
+                <span>تاريخ الاستخراج: ${new Date().toLocaleDateString('ar-EG')}</span>
+                <span>عدد العملاء: ${filteredCustomers.length}</span>
+              </div>
+              <div class="ref" style="margin-top:4px">
+                <span>تصفية القائمة: <span style="color:#fbbf24">${filterSummary}</span></span>
+              </div>
+            </div>
+
+            <div class="st"><span class="i">1</span> قائمة العملاء المعتمدة للفترة</div>
+            <table>
+              <thead>
+                <tr>
+                  <th width="30">م</th>
+                  <th>اسم العميل</th>
+                  <th>رقم الهاتف</th>
+                  <th>منطقة التوزيع</th>
+                  <th>المحافظة</th>
+                  <th>موقع العميل</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${filteredCustomers.length === 0 ? '<tr><td colspan="6" style="text-align:center;color:#94a3b8;padding:20px">لا توجد نتائج عملاء مطابقة للتصفية الحالية.</td></tr>' : 
+                  filteredCustomers.map((customer, idx) => `
+                    <tr>
+                      <td>${idx + 1}</td>
+                      <td><b>${customer.name}</b></td>
+                      <td><b style="font-family:monospace;">${customer.phone}</b></td>
+                      <td>${customer.area}</td>
+                      <td>${getResolvedGov(customer)}</td>
+                      <td><span class="bd-${customer.locationLink ? 'g' : 'w'}">${customer.locationLink ? 'متوفر' : 'غير متوفر'}</span></td>
+                    </tr>
+                  `).join('')
+                }
+              </tbody>
+            </table>
+
+            <div class="fs">
+              <div class="sb2"><div class="ti">إعداد مندوب مبيعات المنطقة</div><div class="ln">التوقيع</div></div>
+              <div class="sb2"><div class="ti">تاريخ الطباعة والاعتماد</div><div class="ln">التوقيع</div></div>
+            </div>
           </div>
         </body>
       </html>
@@ -2015,7 +2034,7 @@ export default function CustomersTab({
                                   </button>
                                 ) : (
                                   <a
-                                    href={formatWhatsAppLink(lead.phone)}
+                                    href={formatWhatsAppLink(lead.phone, encodeURIComponent(generateAIPitchMessage(lead.type, lead.name)))}
                                     target="_blank"
                                     rel="noopener noreferrer"
                                     className="px-3.5 py-2 bg-emerald-50 hover:bg-emerald-100/85 text-[#DD6B20] border border-emerald-200 rounded-xl text-xs font-black flex items-center justify-center gap-1.5 transition-colors active:scale-95 text-center"
@@ -2572,7 +2591,7 @@ export default function CustomersTab({
                                     </button>
                                   ) : (
                                     <a
-                                      href={formatWhatsAppLink(lead.phone)}
+                                      href={formatWhatsAppLink(lead.phone, encodeURIComponent(generateAIPitchMessage(lead.type, lead.name)))}
                                       target="_blank"
                                       rel="noopener noreferrer"
                                       className="px-3.5 py-1.5 bg-emerald-50 hover:bg-emerald-100/85 text-[#DD6B20] border border-emerald-200 rounded-lg text-xs font-black flex items-center justify-center gap-1.5 transition-colors active:scale-95 text-center"
@@ -2983,7 +3002,7 @@ export default function CustomersTab({
                                     </button>
                                   ) : (
                                     <a
-                                      href={formatWhatsAppLink(lead.phone)}
+                                      href={formatWhatsAppLink(lead.phone, encodeURIComponent(generateAIPitchMessage(lead.type, lead.name)))}
                                       target="_blank"
                                       rel="noopener noreferrer"
                                       className="px-3.5 py-1.5 bg-emerald-50 hover:bg-emerald-100/85 text-[#DD6B20] border border-emerald-200 rounded-lg text-xs font-black flex items-center justify-center gap-1.5 transition-colors active:scale-95 text-center"

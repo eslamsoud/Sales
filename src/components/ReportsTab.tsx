@@ -6,8 +6,10 @@
 
 import React, { useState } from 'react';
 import { Invoice, Expense, Product, Customer, Trip, AppSettings, formatNum, FactoryLoad, getProductWeightsFallback, UserAuth, InvoiceItem, getItemFactoryCost, getFactoryCartonPrice } from '../types';
-import { ArrowRight, FileSpreadsheet, Send, TrendingUp, TrendingDown, Clock, Search, Eye, Filter, Check, ShieldAlert, MapPin, Printer, ChevronDown, AlertCircle, Activity, Package, Wallet } from 'lucide-react';
+import { ArrowRight, FileSpreadsheet, Send, TrendingUp, TrendingDown, Clock, Search, Eye, Filter, Check, ShieldAlert, MapPin, Printer, ChevronDown, AlertCircle, Activity, Package, Wallet, UserCheck, HandCoins, CircleDollarSign } from 'lucide-react';
 import { showToast } from '../utils/toast';
+import { confirmDialog } from '../utils/confirm';
+import { COMPACT_PRO_CSS } from '../utils/reportStyles';
 import SecurePhoneDisplay from './SecurePhoneDisplay';
 
 interface ReportsTabProps {
@@ -20,6 +22,7 @@ interface ReportsTabProps {
   settings: AppSettings;
   usersList?: UserAuth[];
   onUpdateInvoice?: (updated: Invoice) => void;
+  onAddExpense?: (newExpense: Omit<Expense, 'id'>) => void;
   onGoBack: () => void;
   permittedSubTabs?: string[];
   currentUser?: UserAuth | null;
@@ -96,6 +99,7 @@ function ReportsTabComponent({
   settings,
   usersList = [],
   onUpdateInvoice,
+  onAddExpense,
   onGoBack,
   permittedSubTabs,
   currentUser
@@ -324,7 +328,7 @@ function ReportsTabComponent({
       const cartons = l.cartonsCount !== undefined ? l.cartonsCount : Math.floor((l.quantity || 0) / upc);
       const loose = l.looseUnitsCount !== undefined ? l.looseUnitsCount : (l.quantity || 0) % upc;
       const cp = l.cartonPrice !== undefined ? Number(l.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) : 0) || 0);
-      const up = l.unitPrice !== undefined ? Number(l.unitPrice) : (cp / upc);
+      const up = l.unitPrice !== undefined ? Number(l.unitPrice) : (Number(weight?.factoryPricePerUnit) || (prod ? Number(prod.price) : 0) || 0);
       return sum + (cartons * cp) + (loose * up);
     }, 0);
 
@@ -333,32 +337,29 @@ function ReportsTabComponent({
     const periodExtraPayments = currentFilteredData.extraPayments.reduce((sum, ep) => sum + ((ep.amount || 0) - (ep.appliedToCarriedDebt || 0)), 0);
     const totalPaidToFactoryInPeriod = periodAdvances + periodExtraPayments;
 
-    // Cumulative overall remaining debt due to factory (matches FactoryTab: uses SOLD goods only, not loaded)
-    let cumulativeSoldFactoryValue = 0;
-    invoices.forEach(inv => {
-      if (!inv || !Array.isArray(inv.items)) return;
-      inv.items.forEach(item => {
-        if (!item) return;
-        const prod = products.find(p => String(p.id).trim() === String(item.productId).trim());
-        if (!prod) return;
-        const weights = getProductWeightsFallback(prod);
-        const weight = weights.find(w => String(w.id).trim() === String(item.weightId).trim());
-        if (!weight) return;
-        const upc = weight.unitsPerCarton || 12;
-        const factoryCartonPrice = Number(weight.cartonPriceFromFactory) || Number(prod.price) || (Number(weight.factoryPricePerUnit) || 0);
-        cumulativeSoldFactoryValue += (item.quantity / upc) * factoryCartonPrice;
-      });
+    // Cumulative overall remaining debt due to factory (matches FactoryTab: uses LOADED goods value)
+    let cumulativeLoadedValue = 0;
+    delFilteredFactoryLoads.forEach(l => {
+      const prod = products.find(p => String(p.id).trim() === String(l.productId).trim());
+      const weights = prod ? getProductWeightsFallback(prod) : [];
+      const weight = weights.find(w => String(w.id).trim() === String(l.weightId || '').trim()) || weights[0];
+      const unitsPerCarton = weight?.unitsPerCarton || 12;
+      const cartons = l.cartonsCount !== undefined ? l.cartonsCount : Math.floor((l.quantity || 0) / unitsPerCarton);
+      const loose = l.looseUnitsCount !== undefined ? l.looseUnitsCount : (l.quantity || 0) % unitsPerCarton;
+      const cp = l.cartonPrice !== undefined ? Number(l.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) : 0) || 0);
+      const up = l.unitPrice !== undefined ? Number(l.unitPrice) : (Number(weight?.factoryPricePerUnit) || (prod ? Number(prod.price) : 0) || 0);
+      cumulativeLoadedValue += (cartons * cp) + (loose * up);
     });
 
-    const totalWithdrawnValue = cumulativeSoldFactoryValue + currentFilteredData.carriedOverDebt;
+    const totalWithdrawnValue = cumulativeLoadedValue;
     const currentAdvancesTotal = delFilteredFactoryLoads.reduce((sum, fl) => sum + (fl.advanceAmount ?? 0), 0);
     const manualPaymentsSumTotal = currentFilteredData.allExtraPayments.reduce((sum, p) => sum + ((p.amount || 0) - (p.appliedToCarriedDebt || 0)), 0);
     const totalOverallPaidToFactory = currentAdvancesTotal + manualPaymentsSumTotal;
-    const remainingDebtToFactory = Math.max(0, totalWithdrawnValue - totalOverallPaidToFactory);
+    const remainingDebtToFactory = Math.max(0, totalWithdrawnValue - totalOverallPaidToFactory + currentFilteredData.carriedOverDebt);
 
-    // صافي الربح = (المحصل + إيرادات + مشاوير) - (المسدد للمصنع + المصروفات)
-    const operatingNetProfit = trueTotalSales + extraRevenues + totalTripsCollectedProfit - totalPaidToFactoryInPeriod - totalSpent;
-    const netProfit = totalCollected + extraRevenues + totalTripsCollectedProfit - totalPaidToFactoryInPeriod - totalSpent;
+    // صافي الربح = المحصل + إيرادات + مشاوير - تكلفة البضاعة المباعة (COGS) - المصروفات
+    const operatingNetProfit = trueTotalSales + extraRevenues + totalTripsCollectedProfit - factorySoldCost - totalSpent;
+    const netProfit = totalCollected + extraRevenues + totalTripsCollectedProfit - factorySoldCost - totalSpent;
 
     return {
       totalSales: trueTotalSales,
@@ -395,9 +396,10 @@ function ReportsTabComponent({
       const cartons = l.cartonsCount !== undefined ? l.cartonsCount : Math.floor((l.quantity || 0) / upc);
       const loose = l.looseUnitsCount !== undefined ? l.looseUnitsCount : (l.quantity || 0) % upc;
       const cp = l.cartonPrice !== undefined ? Number(l.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) : 0) || 0);
-      const up = l.unitPrice !== undefined ? Number(l.unitPrice) : (cp / upc);
+      const up = l.unitPrice !== undefined ? Number(l.unitPrice) : (Number(weight?.factoryPricePerUnit) || (prod ? Number(prod.price) : 0) || 0);
       return s + (cartons * cp) + (loose * up);
     }, 0);
+
     return {
       invoiceCount: periodInvoices.length,
       totalCollected: periodInvoices.reduce((s, inv) => s + (inv.paidAmount !== undefined ? inv.paidAmount : (inv.totalAfterDiscount || 0)), 0),
@@ -623,6 +625,25 @@ function ReportsTabComponent({
       }
     });
 
+    // Compute cumulative sold per combo across ALL groups
+    const cumulativeSoldMap: Record<string, number> = {};
+    delFilteredInvoices.forEach(inv => {
+      if (!inv || !Array.isArray(inv.items)) return;
+      inv.items.forEach(item => {
+        if (!item) return;
+        const comboKey = `${String(item.productId).trim()}-${String(item.weightId || '').trim()}`;
+        cumulativeSoldMap[comboKey] = (cumulativeSoldMap[comboKey] || 0) + (item.quantity || 0);
+      });
+    });
+
+    // Compute cumulative loaded per combo across ALL groups
+    const cumulativeLoadedMap: Record<string, number> = {};
+    delFilteredFactoryLoads.forEach(l => {
+      if (!l) return;
+      const comboKey = `${String(l.productId).trim()}-${String(l.weightId || '').trim()}`;
+      cumulativeLoadedMap[comboKey] = (cumulativeLoadedMap[comboKey] || 0) + (l.quantity || 0);
+    });
+
     const sortedGroupKeys = Object.keys(groupsMap).sort((a, b) => b.localeCompare(a));
 
     const productsMap = new Map(products.map(p => [String(p.id).trim(), p]));
@@ -657,7 +678,7 @@ function ReportsTabComponent({
       return { gKey, groupData, activeCombinations: visibleCombinations, groupHeaderLabel };
     });
 
-    return { processedGroups, productsMap };
+    return { processedGroups, productsMap, cumulativeSoldMap, cumulativeLoadedMap };
   }, [delFilteredFactoryLoads, delFilteredInvoices, inventoryMatchFilter, products]);
 
   const delegateDebtBreakdown = React.useMemo(() => {
@@ -689,202 +710,176 @@ function ReportsTabComponent({
 
     doc.open();
     doc.write(`
+      <!DOCTYPE html>
       <html dir="rtl" lang="ar">
-        <head>
-          <style>
-            @media print { @page { size: A4; margin: 10mm; } body { margin: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
-            body { font-family: system-ui, sans-serif; color: #1a1a1a; line-height: 1.4; padding: 0; margin: 0; background: #faf8f5; }
-            .page { padding: 20px; max-width: 210mm; margin: 0 auto; }
-            .header { background: #1e2a4a; color: #fff; padding: 20px; border-radius: 6px; text-align: center; margin-bottom: 16px; border-bottom: 4px solid #d4a843; }
-            .header h1 { margin: 0 0 4px; font-size: 20px; }
-            .header .sub { color: #93c5fd; font-size: 11px; margin: 0 0 4px; }
-            .header .meta { display: flex; justify-content: space-between; font-size: 11px; color: #cbd5e1; padding: 0 10px; }
-            .header .meta .gold { color: #fbbf24; font-weight: bold; }
-            .grid-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 15px; }
-            .stat-box { border: 1px solid #e8e4dc; padding: 10px; border-radius: 6px; text-align: center; background: #fdf6ee; }
-            .stat-box.highlight { background: #f0fdf4; border-color: #bbf7d0; }
-            .stat-box.alert { background: #fef2f2; border-color: #fca5a5; }
-            .stat-box span { display: block; font-size: 9px; color: #64748b; font-weight: bold; margin-bottom: 4px; }
-            .stat-box strong { font-size: 11px; color: #0f172a; font-weight: 900; }
-            h2 { font-size: 12px; color: #1e2a4a; margin: 15px 0 8px 0; border-right: 3px solid #d4a843; padding-right: 8px; font-weight: 850; }
-            table { width: 100%; border-collapse: collapse; margin-bottom: 15px; font-size: 10px; }
-            th, td { border: 1px solid #e8e4dc; padding: 6px 10px; text-align: right; }
-            th { background: #1e2a4a; color: #fff; font-weight: 900; }
-            tr:nth-child(even) td { background: #f5f3ee; }
-            .summary-row { background: #0d7c5f; color: #fff; font-weight: bold; }
-            .summary-row td { border: none; padding: 8px 10px; }
-            .footer { text-align: center; color: #94a3b8; font-size: 10px; margin-top: 20px; border-top: 1px solid #d5d0c8; padding-top: 10px; }
-          </style>
-        </head>
-        <body>
-          <div class="page">
-            <div class="header">
-              <h1>تقرير العمليات المالية الشامل</h1>
-              <p class="sub">نظام التوزيع والمبيعات المعتمد للأغذية والمستودع</p>
-              <div class="meta">
-                <span>الفترة: ${periodLabel}</span>
-                <span class="gold">تاريخ الطباعة: ${new Date().toLocaleDateString('ar-EG')} ${new Date().toLocaleTimeString('ar-EG')}</span>
-              </div>
-            </div>
+      <head>${COMPACT_PRO_CSS}</head>
+      <body>
 
-            <div class="grid-stats">
-              <div class="stat-box highlight">
-                <span>صافي الربح التشغيلي</span>
-                <strong style="color: #15803d;">${salesStats.operatingNetProfit.toLocaleString('ar-EG')} ج.م</strong>
-              </div>
-              <div class="stat-box" style="background: #e0f2fe; border-color: #bae6fd;">
-                <span>صافي التدفق النقدي</span>
-                <strong style="color: #0369a1;">${salesStats.netProfit.toLocaleString('ar-EG')} ج.م</strong>
-              </div>
-              <div class="stat-box">
-                <span>إجمالي المبيعات</span>
-                <strong>${salesStats.totalSales.toLocaleString('ar-EG')} ج.م</strong>
-              </div>
-              <div class="stat-box highlight">
-                <span>المحصل كاش</span>
-                <strong>${salesStats.totalCollected.toLocaleString('ar-EG')} ج.م</strong>
-              </div>
-              <div class="stat-box alert">
-                <span>باقي ديون العملاء</span>
-                <strong>${salesStats.totalRemaining.toLocaleString('ar-EG')} ج.م</strong>
-              </div>
-              <div class="stat-box">
-                <span>المسدد للمصنع</span>
-                <strong>${salesStats.totalPaidToFactoryInPeriod.toLocaleString('ar-EG')} ج.م</strong>
-              </div>
-              <div class="stat-box">
-                <span>المصروفات التشغيلية</span>
-                <strong>${salesStats.totalSpent.toLocaleString('ar-EG')} ج.م</strong>
-              </div>
-              <div class="stat-box">
-                <span>أرباح المشاوير</span>
-                <strong>${salesStats.totalTripsCollectedProfit.toLocaleString('ar-EG')} ج.م</strong>
-              </div>
-              <div class="stat-box alert">
-                <span>مديونية المصنع</span>
-                <strong>${salesStats.remainingDebtToFactory.toLocaleString('ar-EG')} ج.م</strong>
-              </div>
-            </div>
-          
-          <h2>١. قائمة فواتير مبيعات العملاء للفترة</h2>
-          <table>
-            <thead>
-              <tr>
-                <th width="40">م</th>
-                <th>رقم الفاتورة</th>
-                <th>العميل</th>
-                <th>المندوب</th>
-                <th>الإجمالي</th>
-                <th>المسدد</th>
-                <th>المتبقي</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${!currentFilteredData.invoices || currentFilteredData.invoices.length === 0 ? '<tr><td colspan="7" style="text-align:center; color:#94a3b8;">لا توجد فواتير مبيعات في هذه الفترة.</td></tr>' : 
-                currentFilteredData.invoices.map((inv: any, idx: number) => {
-                  const cust = (customers || []).find(c => c.id === inv.customerId);
-                  const totalAfter = inv.totalAfterDiscount || 0;
-                  const paid = inv.paidAmount !== undefined ? inv.paidAmount : totalAfter;
-                  const remaining = totalAfter - paid;
-                  return `
-                    <tr>
-                      <td>${idx + 1}</td>
-                      <td><b>#${inv.invoiceNumber}</b></td>
-                      <td>${cust ? cust.name : 'عميل غير مسجل'}</td>
-              <td>${inv.delegateName?.replace(/ \(.*?\)/g, '').trim() || 'غير محدد'}</td>
-                      <td><b>${totalAfter.toLocaleString('ar-EG')} ج.م</b></td>
-                      <td style="color: #16a34a;">${paid.toLocaleString('ar-EG')} ج.م</td>
-                      <td style="color: ${remaining > 0 ? '#dc2626' : '#64748b'}; font-weight: ${remaining > 0 ? 'bold' : 'normal'}">${remaining.toLocaleString('ar-EG')} ج.م</td>
-                    </tr>
-                  `;
-                }).join('')
-              }
-            </tbody>
-          </table>
-
-          <h2>٢. قائمة المصاريف التشغيلية والإيرادات</h2>
-          <table>
-            <thead>
-              <tr>
-                <th width="40">م</th>
-                <th>البيان والتفاصيل</th>
-                <th>الفئة</th>
-                <th>النوع</th>
-                <th>القيمة</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${currentFilteredData.expenses.filter(e => e.category !== 'سداد للمصنع' && e.type !== 'factory_payment').length === 0 ? '<tr><td colspan="5" style="text-align:center; color:#94a3b8;">لا توجد حركة مصروفات مسجلة في هذه الفترة.</td></tr>' : 
-                currentFilteredData.expenses.filter(e => e.category !== 'سداد للمصنع' && e.type !== 'factory_payment').map((exp, idx) => {
-                  const isRev = exp.type === 'revenue';
-                  return `
-                    <tr>
-                      <td>${idx + 1}</td>
-                      <td>${exp.description || 'بدون بيان'}</td>
-                      <td>${exp.category || 'عام'}</td>
-                      <td><span class="badge ${isRev ? 'badge-success' : 'badge-danger'}">${isRev ? 'إيراد وارد' : 'مصروف منصرف'}</span></td>
-                      <td style="font-weight: bold; color: ${isRev ? '#16a34a' : '#b91c1c'}">${(exp.amount || 0).toLocaleString('ar-EG')} ج.م</td>
-                    </tr>
-                  `;
-                }).join('')
-              }
-            </tbody>
-          </table>
-
-          <h2>٣. سجل مشاوير السيارة والنقل</h2>
-          <table>
-            <thead>
-              <tr>
-                <th width="40">م</th>
-                <th>تفاصيل المشوار والوجهة</th>
-                <th>المندوب</th>
-                <th>المبلغ</th>
-                <th>الموقف</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${currentFilteredData.trips.length === 0 ? '<tr><td colspan="5" style="text-align:center; color:#94a3b8;">لا توجد مشاوير مسجلة للفترة.</td></tr>' : 
-                currentFilteredData.trips.map((t, idx) => {
-                  return `
-                    <tr>
-                      <td>${idx + 1}</td>
-                      <td>${t.description}</td>
-                      <td>${t.delegateName || 'غير محدد'}</td>
-                      <td><b>${t.price.toLocaleString('ar-EG')} ج.م</b></td>
-                      <td><span class="badge ${t.collected ? 'badge-success' : 'badge-warn'}">${t.collected ? 'تم التحصيل نقداً' : 'معلق آجل'}</span></td>
-                    </tr>
-                  `;
-                }).join('')
-              }
-            </tbody>
-          </table>
-
-          <div class="footer">تم التصدير من نظام تتبع المبيعات — ${new Date().toLocaleDateString('ar-EG')}</div>
-
-          <div style="margin-top: 35px; border-top: 1px solid #d5d0c8; padding-top: 15px; display: flex; justify-content: space-between; font-size: 11px; font-weight: bold; color: #475569;">
-            <div>اعتماد المسؤول الإداري: ................................</div>
-            <div>توقيع المندوب الميداني: ................................</div>
+        <div class="rh">
+          <h1>تقرير العمليات المالية الشامل</h1>
+          <div class="sub">نظام التوزيع والمبيعات المعتمد</div>
+          <div class="ref">
+            <span>الفترة: ${periodLabel}</span>
+            <span>تاريخ الطباعة: ${new Date().toLocaleDateString('ar-EG')} ${new Date().toLocaleTimeString('ar-EG')}</span>
           </div>
-        </body>
+        </div>
+
+        <div class="sg">
+          <div class="sb gr">
+            <div class="l">صافي الربح التشغيلي</div>
+            <div class="v">${salesStats.operatingNetProfit.toLocaleString('ar-EG')} <span style="font-size:10px">ج.م</span></div>
+          </div>
+          <div class="sb bl">
+            <div class="l">صافي التدفق النقدي</div>
+            <div class="v">${salesStats.netProfit.toLocaleString('ar-EG')} <span style="font-size:10px">ج.م</span></div>
+          </div>
+          <div class="sb am">
+            <div class="l">إجمالي المبيعات</div>
+            <div class="v">${salesStats.totalSales.toLocaleString('ar-EG')} <span style="font-size:10px">ج.م</span></div>
+          </div>
+          <div class="sb gr">
+            <div class="l">المحصل كاش</div>
+            <div class="v">${salesStats.totalCollected.toLocaleString('ar-EG')} <span style="font-size:10px">ج.م</span></div>
+          </div>
+          <div class="sb rd">
+            <div class="l">باقي ديون العملاء</div>
+            <div class="v">${salesStats.totalRemaining.toLocaleString('ar-EG')} <span style="font-size:10px">ج.م</span></div>
+          </div>
+          <div class="sb bl">
+            <div class="l">المسدد للمصنع</div>
+            <div class="v">${salesStats.totalPaidToFactoryInPeriod.toLocaleString('ar-EG')} <span style="font-size:10px">ج.م</span></div>
+          </div>
+          <div class="sb bl">
+            <div class="l">المصروفات التشغيلية</div>
+            <div class="v">${salesStats.totalSpent.toLocaleString('ar-EG')} <span style="font-size:10px">ج.م</span></div>
+          </div>
+          <div class="sb gr">
+            <div class="l">أرباح المشاوير</div>
+            <div class="v">${salesStats.totalTripsCollectedProfit.toLocaleString('ar-EG')} <span style="font-size:10px">ج.م</span></div>
+          </div>
+          <div class="sb rd">
+            <div class="l">مديونية المصنع</div>
+            <div class="v">${salesStats.remainingDebtToFactory.toLocaleString('ar-EG')} <span style="font-size:10px">ج.م</span></div>
+          </div>
+        </div>
+        
+        <div class="st"><span class="i">1</span> قائمة فواتير مبيعات العملاء للفترة</div>
+        <table>
+          <thead>
+            <tr>
+              <th width="30">م</th>
+              <th>رقم الفاتورة</th>
+              <th>العميل</th>
+              <th>المندوب</th>
+              <th>الإجمالي</th>
+              <th>المسدد</th>
+              <th>المتبقي</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${!currentFilteredData.invoices || currentFilteredData.invoices.length === 0 ? '<tr><td colspan="7" style="text-align:center; color:#94a3b8; padding:16px;">لا توجد فواتير مبيعات في هذه الفترة.</td></tr>' :
+              currentFilteredData.invoices.map((inv: any, idx: number) => {
+                const cust = (customers || []).find(c => c.id === inv.customerId);
+                const totalAfter = inv.totalAfterDiscount || 0;
+                const paid = inv.paidAmount !== undefined ? inv.paidAmount : totalAfter;
+                const remaining = totalAfter - paid;
+                return `
+                  <tr>
+                    <td style="text-align:center;font-weight:700;color:#94a3b8">${idx + 1}</td>
+                    <td style="font-weight:800;color:#1e3a5f">#${inv.invoiceNumber}</td>
+                    <td>${cust ? cust.name : 'غير مسجل'}</td>
+                    <td>${inv.delegateName?.replace(/ \(.*?\)/g, '').trim() || 'غير محدد'}</td>
+                    <td style="text-align:center;font-weight:700">${totalAfter.toLocaleString('ar-EG')}</td>
+                    <td style="text-align:center;color:#15803d;font-weight:700">${paid.toLocaleString('ar-EG')}</td>
+                    <td style="text-align:center;font-weight:800;color:${remaining > 0 ? '#dc2626' : '#94a3b8'}">${remaining.toLocaleString('ar-EG')}</td>
+                  </tr>
+                `;
+              }).join('')
+            }
+          </tbody>
+        </table>
+
+        <div class="st"><span class="i">2</span> قائمة المصاريف التشغيلية والإيرادات</div>
+        <table>
+          <thead>
+            <tr>
+              <th width="30">م</th>
+              <th>البيان والتفاصيل</th>
+              <th>الفئة</th>
+              <th>النوع</th>
+              <th>القيمة</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${currentFilteredData.expenses.filter(e => e.category !== 'سداد للمصنع' && e.type !== 'factory_payment').length === 0 ? '<tr><td colspan="5" style="text-align:center; color:#94a3b8; padding:16px;">لا توجد حركة مصروفات مسجلة في هذه الفترة.</td></tr>' :
+              currentFilteredData.expenses.filter(e => e.category !== 'سداد للمصنع' && e.type !== 'factory_payment').map((exp, idx) => {
+                const isRev = exp.type === 'revenue';
+                return `
+                  <tr>
+                    <td style="text-align:center;font-weight:700;color:#94a3b8">${idx + 1}</td>
+                    <td>${exp.description || 'بدون بيان'}</td>
+                    <td><span class="bd-b">${exp.category || 'عام'}</span></td>
+                    <td><span class="bd-${isRev ? 'g' : 'r'}">${isRev ? 'إيراد' : 'مصروف'}</span></td>
+                    <td style="text-align:center;font-weight:800;color:${isRev ? '#15803d' : '#dc2626'};font-family:'Tajawal',monospace">${(exp.amount || 0).toLocaleString('ar-EG')}</td>
+                  </tr>
+                `;
+              }).join('')
+            }
+          </tbody>
+        </table>
+
+        <div class="st"><span class="i">3</span> سجل مشاوير السيارة والنقل</div>
+        <table>
+          <thead>
+            <tr>
+              <th width="30">م</th>
+              <th>تفاصيل المشوار والوجهة</th>
+              <th>المندوب</th>
+              <th>المبلغ</th>
+              <th>الموقف</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${currentFilteredData.trips.length === 0 ? '<tr><td colspan="5" style="text-align:center; color:#94a3b8; padding:16px;">لا توجد مشاوير مسجلة للفترة.</td></tr>' :
+              currentFilteredData.trips.map((t, idx) => {
+                return `
+                  <tr>
+                    <td style="text-align:center;font-weight:700;color:#94a3b8">${idx + 1}</td>
+                    <td>${t.description}</td>
+                    <td>${t.delegateName || 'غير محدد'}</td>
+                    <td style="text-align:center;font-weight:800;font-family:'Tajawal',monospace">${t.price.toLocaleString('ar-EG')}</td>
+                    <td style="text-align:center"><span class="bd-${t.collected ? 'g' : 'b'}">${t.collected ? 'محصل' : 'معلق'}</span></td>
+                  </tr>
+                `;
+              }).join('')
+            }
+          </tbody>
+        </table>
+
+        <div class="fs">
+          <div class="sb2"><div class="ti">المسؤول الإداري</div><div class="ln">التوقيع</div></div>
+          <div class="sb2"><div class="ti">المندوب الميداني</div><div class="ln">التوقيع</div></div>
+        </div>
+
+      </body>
       </html>
     `);
     doc.close();
 
-    // 3. Print and remove
     setTimeout(() => {
       iframe.contentWindow?.focus();
       iframe.contentWindow?.print();
       setTimeout(() => {
         document.body.removeChild(iframe);
       }, 500);
-    }, 500);
+    }, 800);
   };
 
   // Group invoices by month
   const monthlyBreakdown = React.useMemo(() => {
     const months: Record<string, { sales: number; collected: number; cogs: number; expenses: number; revs: number; count: number }> = {};
 
-    delFilteredInvoices.forEach(inv => {
+    currentFilteredData.invoices.forEach(inv => {
       if (!inv || !inv.date) return;
       const parts = String(inv.date).split('-');
       if (parts.length < 2) return;
@@ -909,7 +904,7 @@ function ReportsTabComponent({
       }
     });
 
-    delFilteredExpenses.forEach(exp => {
+    currentFilteredData.expenses.forEach(exp => {
       if (!exp || !exp.date) return;
       const parts = String(exp.date).split('-');
       if (parts.length < 2) return;
@@ -949,7 +944,7 @@ function ReportsTabComponent({
         count: d.count
       };
     }).sort((a, b) => b.dateStr.localeCompare(a.dateStr));
-  }, [delFilteredInvoices, delFilteredExpenses, products]);
+  }, [currentFilteredData, products]);
 
   // Filter invoices for registry lookup
   const filteredInvoices = delFilteredInvoices.filter(inv => {
@@ -1026,78 +1021,95 @@ function ReportsTabComponent({
     doc.open();
     doc.write(`
       <html dir="rtl" lang="ar">
-        <head>
-          <style>
-            @media print {
-              @page { size: A4; margin: 15mm; }
-              body { margin: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-            }
-            body { font-family: system-ui, -apple-system, sans-serif; color: #0f172a; line-height: 1.5; padding: 20px; }
-            .header { text-align: center; margin-bottom: 20px; border-bottom: 2px solid #312e81; padding-bottom: 10px; }
-            .header h1 { color: #312e81; margin: 0 0 5px 0; font-size: 24px; }
-            .header p { margin: 0; color: #64748b; font-size: 14px; }
-            .summary { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 20px; }
-            .summary-box { background: #f8fafc; border: 1px solid #e2e8f0; padding: 15px; border-radius: 8px; }
-            table { width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 12px; }
-            th, td { border: 1px solid #e2e8f0; padding: 8px 12px; text-align: right; }
-            th { background: #f1f5f9; color: #475569; font-weight: bold; }
-            .profit { color: ${profit >= 0 ? '#047857' : '#be123c'}; font-weight: bold; font-size: 16px; }
-            .notes-section { margin-top: 30px; border: 1px dashed #cbd5e1; height: 150px; border-radius: 8px; position: relative; }
-            .notes-section::before { content: "مساحة لكتابة ملاحظات للإدارة..."; position: absolute; top: 15px; right: 15px; color: #94a3b8; font-size: 14px; }
-          </style>
-        </head>
+        <head>${COMPACT_PRO_CSS}</head>
         <body>
-          <div class="header">
-            <h1>تقرير الحسابات الختامية - ${displayDate}</h1>
-            <p>تم التصدير من نظام المستودع والمبيعات</p>
-          </div>
-          <div class="summary">
-            <div class="summary-box" style="text-align: right;">
-              <strong>إجمالي المبيعات (قبل الخصم):</strong> ${formatNum(mTotalBeforeDisc)}ج.م<br/>
-              <strong style="color: #059669;">الخصم الممنوح:</strong> ${formatNum(mDisc)}ج.م<br/>
-              <strong style="color: #4f46e5;">المحصل كاش:</strong> ${formatNum(collected)}ج.م<br/>
-              <strong style="color: #ea580c;">المتبقي (آجل):</strong> ${formatNum(remaining)}ج.م
+          <div style="padding:12mm 14mm">
+            <div class="rh">
+              <h1>تقرير الحسابات الختامية — ${displayDate}</h1>
+              <div class="sub">نظام التوزيع والمبيعات المعتمد</div>
+              <div class="ref">
+                <span>عدد الفواتير: ${mInvoices.length}</span>
+                <span>عدد المصروفات: ${mExpenses.length}</span>
+              </div>
             </div>
-            <div class="summary-box" style="text-align: right;">
-              <strong>إيرادات إضافية:</strong> ${formatNum(revenuesParam)}ج.م<br/>
-              <strong>المصروفات:</strong> ${formatNum(expensesParam)}ج.م<br/>
-              <div class="profit" style="margin-top: 10px;">صافي الأرباح التشغيلية: ${formatNum(profit)}ج.م</div>
+
+            <div class="sg">
+              <div class="sb bl">
+                <div class="l">إجمالي المبيعات (قبل الخصم)</div>
+                <div class="v">${formatNum(mTotalBeforeDisc)} ج.م</div>
+              </div>
+              <div class="sb gr">
+                <div class="l">الخصم الممنوح</div>
+                <div class="v">${formatNum(mDisc)} ج.م</div>
+              </div>
+              <div class="sb bl">
+                <div class="l">المحصل كاش</div>
+                <div class="v">${formatNum(collected)} ج.م</div>
+              </div>
+              <div class="sb am">
+                <div class="l">المتبقي (آجل)</div>
+                <div class="v">${formatNum(remaining)} ج.م</div>
+              </div>
+              <div class="sb gr">
+                <div class="l">إيرادات إضافية</div>
+                <div class="v">${formatNum(revenuesParam)} ج.م</div>
+              </div>
+              <div class="sb rd">
+                <div class="l">المصروفات</div>
+                <div class="v">${formatNum(expensesParam)} ج.م</div>
+              </div>
+            </div>
+
+            <div class="st"><span class="i">1</span> تفاصيل الفواتير والمصروفات</div>
+            <table>
+              <thead>
+                <tr>
+                  <th width="30">م</th>
+                  <th>البيان</th>
+                  <th width="100">النوع</th>
+                  <th width="100">القيمة (ج.م)</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${mInvoices.map((inv, idx) => {
+                  const customer = customers.find(c => c.id === inv.customerId);
+                  return `
+                  <tr>
+                    <td>${idx + 1}</td>
+                    <td><b>مبيعات ${customer ? customer.name : 'عميل غير مسجل'}</b></td>
+                    <td><span class="bd-g">مبيعات واردة</span></td>
+                    <td style="font-weight:800">${formatNum(inv.totalAfterDiscount)}</td>
+                  </tr>
+                `}).join('')}
+                ${mExpenses.map((exp, idx) => {
+                  const isRev = exp.type === 'revenue';
+                  const i = idx + mInvoices.length + 1;
+                  return `
+                  <tr>
+                    <td>${i}</td>
+                    <td>${isRev ? 'إيراد' : 'مصروف'}: ${exp.category}</td>
+                    <td><span class="bd-${isRev ? 'g' : 'r'}">${isRev ? 'وارد إضافي' : 'منصرف'}</span></td>
+                    <td style="font-weight:800">${formatNum(exp.amount)}</td>
+                  </tr>
+                `}).join('')}
+                ${mInvoices.length === 0 && mExpenses.length === 0 ? '<tr><td colspan="4" style="text-align:center;color:#94a3b8;padding:20px">لا توجد بيانات لهذه الفترة</td></tr>' : ''}
+              </tbody>
+            </table>
+
+            <div style="border:2px solid ${profit >= 0 ? '#059669' : '#dc2626'};border-radius:14px;padding:16px;text-align:center;margin-top:14px;background:${profit >= 0 ? 'linear-gradient(180deg,#f0fdf4,#dcfce7)' : 'linear-gradient(180deg,#fff5f5,#fee2e2)'}">
+              <div style="font-size:11px;font-weight:700;color:#64748b;margin-bottom:6px">صافي الأرباح التشغيلية</div>
+              <div style="font-size:28px;font-weight:900;color:${profit >= 0 ? '#059669' : '#dc2626'};font-family:'Tajawal',monospace">${formatNum(profit)} ج.م</div>
+            </div>
+
+            <div style="margin-top:30px;border:1px dashed #cbd5e1;height:120px;border-radius:8px;position:relative">
+              <span style="position:absolute;top:10px;right:14px;color:#94a3b8;font-size:11px;font-weight:600">مساحة لكتابة ملاحظات للإدارة...</span>
+            </div>
+
+            <div class="fs" style="margin-top:20px">
+              <div class="sb2"><div class="ti">المدير المالي</div><div class="ln">التوقيع</div></div>
+              <div class="sb2"><div class="ti">مدير المبيعات</div><div class="ln">التوقيع</div></div>
             </div>
           </div>
-          <table>
-            <thead>
-              <tr>
-                <th width="50">م</th>
-                <th>البيان / رقم الاستناد</th>
-                <th width="150">النوع</th>
-                <th width="120">القيمة (ج.م)</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${mInvoices.map((inv, idx) => {
-                const customer = customers.find(c => c.id === inv.customerId);
-                return `
-                <tr>
-                  <td>${idx + 1}</td>
-                  <td>مبيعات ${customer ? customer.name : 'عميل غير مسجل'}</td>
-                  <td style="color: #059669;">مبيعات واردة</td>
-                  <td>${formatNum(inv.totalAfterDiscount)}</td>
-                </tr>
-              `}).join('')}
-              ${mExpenses.map((exp, idx) => {
-                const isRev = exp.type === 'revenue';
-                const i = idx + mInvoices.length + 1;
-                return `
-                <tr>
-                  <td>${i}</td>
-                  <td>${isRev ? 'إيراد' : 'مصروف'}: ${exp.category}</td>
-                  <td style="color: ${isRev ? '#059669' : '#e11d48'}">${isRev ? 'وارد إضافي' : 'منصرف'}</td>
-                  <td>${formatNum(exp.amount)}</td>
-                </tr>
-              `}).join('')}
-            </tbody>
-          </table>
-          <div class="notes-section"></div>
         </body>
       </html>
     `);
@@ -1143,19 +1155,54 @@ function ReportsTabComponent({
       if (phone.startsWith('0')) {
         phone = '20' + phone.substring(1);
       }
-      window.open(`https://wa.me/${phone}?text=${messageText}`, '_blank');
+      window.location.href = `https://wa.me/${phone}?text=${messageText}`;
     } catch (err: any) {
       console.warn("Using local fallback WA message builder in ReportsTab:", err.message);
       
       const guidelines = settings.aiRetentionGuidelines || 'تقديم رسالة ترحيبية تشجعه على استمرار التعامل معنا، مع توضيح أننا نهتم بوجوده معنا';
-      const fallbackMsg = `السلام عليكم ورحمة الله وبركاته يا فندم 🌹\nمعكم مندوب مبيعات مصنع زيوت وسمن "سوفانا" الفاخرة.\n\nنتشرف بالتعاون الدائم والمثمر معكم في [ ${customer.name} ] بـ [ ${customer.governorate || ''} - ${customer.area} ]. نود في الاخوه EAGS لخدمات التوزيع الإعراب عن عظيم تقديرنا لثقتكم الغالية بمنتجاتنا وزيت وسمن سوفانا ذو الجودة الفائقة.\n\n(✨ سياستنا المعتمدة: ${guidelines})\n\nهل نتشرف بتسليم طلبية جديدة لسيادتكم بأسعار بورصة اليوم الممتازة؟ نحن في خدمتكم دائماً وبالموعد!`;
+      const delegateName = currentUser?.name || 'المندوب';
+      const fallbackMsg = isInactive
+        ? `السلام عليكم ورحمة الله وبركاته،
+
+معكم ${delegateName}، مندوب مبيعات زيت سوفانا.
+
+أتمنى أن تكونوا بخير وفي أتم الصحة والعافية.
+
+🤝 انطلاقًا من حرص مصنع زيت سوفانا على تعزيز علاقته بعملائه الكرام، وحرصي على متابعة احتياجاتكم وتقديم أفضل مستوى من الخدمة، يسعدني التواصل معكم لإطلاعكم على أحدث العروض والأسعار المميزة التي تناسب احتياجاتكم.
+
+📅 يشرفني زيارتكم في الموعد الذي يناسبكم، ويسعدني تلبية أي طلب أو استفسار، مع متابعة طلباتكم شخصيًا حتى يتم تنفيذها بأفضل جودة وفي أسرع وقت.
+
+⭐ نعتز بثقتكم، ونتطلع إلى استمرار التعاون معكم، ويسعدني معرفة اليوم والوقت المناسبين لزيارتكم.
+
+مع خالص الشكر والتقدير،
+
+${delegateName}
+مندوب مبيعات زيت سوفانا`
+        : `السلام عليكم ورحمة الله وبركاته،
+
+معكم ${delegateName}، مندوب مبيعات زيت سوفانا.
+
+أتمنى أن تكونوا بخير وفي أتم الصحة والعافية.
+
+🤝 نتقدم إليكم بخالص الشكر والتقدير على ثقتكم المستمرة في منتجات زيت سوفانا، ونعتز بشراكتكم التي تمثل جزءًا مهمًا من نجاحنا.
+
+نحرص دائمًا على تقديم أفضل العروض والخدمات، والارتقاء بمستوى الخدمة بما يلبي تطلعاتكم ويواكب احتياجاتكم.
+
+📅 يشرفني تجديد اللقاء بكم في الزيارة القادمة، في أقرب وقت يناسبكم، لمواصلة تقديم أفضل خدمة، وتعزيز التعاون المثمر بيننا.
+
+⭐ ثقتكم الغالية محل تقديرنا واعتزازنا، ونسأل الله أن يديم بيننا التعاون، وأن نكون دائمًا عند حسن ظنكم.
+
+وتفضلوا بقبول فائق الاحترام والتقدير،
+
+${delegateName}
+مندوب مبيعات زيت سوفانا`;
       
       const messageText = encodeURIComponent(fallbackMsg);
       let phone = customer.phone;
       if (phone.startsWith('0')) {
         phone = '20' + phone.substring(1);
       }
-      window.open(`https://wa.me/${phone}?text=${messageText}`, '_blank');
+      window.location.href = `https://wa.me/${phone}?text=${messageText}`;
     } finally {
       setWaLoadingId(null);
     }
@@ -1350,58 +1397,105 @@ function ReportsTabComponent({
         const activeWeights = getProductWeightsFallback(product);
         const weight = activeWeights.find(w => String(w.id).trim() === String(combo.weightId).trim()) || activeWeights[0];
         if (!weight) return;
+        const comboKey = `${String(product.id).trim()}-${String(weight.id).trim()}`;
         const loaded = groupData.loads
           .filter(l => String(l.productId).trim() === String(product.id).trim() && String(l.weightId).trim() === String(weight.id).trim())
           .reduce((sum, l) => sum + (l.quantity || 0), 0);
         const sold = groupData.invItems
           .filter(item => String(item.productId).trim() === String(product.id).trim() && String(item.weightId).trim() === String(weight.id).trim())
           .reduce((sum, item) => sum + (item.quantity || 0), 0);
-        const remaining = loaded - sold;
+        // Use cumulative sold/loaded across all groups for real quantities
+        const cumSold = inventoryData.cumulativeSoldMap[comboKey] || 0;
+        const cumLoaded = inventoryData.cumulativeLoadedMap[comboKey] || 0;
+        const remaining = cumLoaded - cumSold;
         const price = weight.price || 0;
-        const value = sold * price;
-        totalLoaded += loaded;
-        totalSold += sold;
+        const value = cumSold * price;
+        totalLoaded += cumLoaded;
+        totalSold += cumSold;
         totalRemaining += remaining;
         grandTotalValue += value;
+        const unitsPerCarton = weight.unitsPerCarton || 12;
+        const formatUnits = (qty: number) => {
+          const absQ = Math.abs(qty);
+          const c = Math.floor(absQ / unitsPerCarton);
+          const u = absQ % unitsPerCarton;
+          let txt = '';
+          if (c > 0) txt += `${c} كرتونة`;
+          if (u > 0) txt += (txt ? ' + ' : '') + `${u} عبوة`;
+          if (!txt) txt = '0';
+          return qty < 0 ? `-${txt}` : txt;
+        };
         tableRows += `<tr>
-          <td style="padding:6px 8px;border:1px solid #e2e8f0;font-size:11px;font-weight:700;color:#1e2a4a;">${product.name}</td>
-          <td style="padding:6px 8px;border:1px solid #e2e8f0;font-size:11px;color:#4a5568;text-align:center;">${weight.size}</td>
-          <td style="padding:6px 8px;border:1px solid #e2e8f0;font-size:11px;color:#4a5568;text-align:center;">${loaded}</td>
-          <td style="padding:6px 8px;border:1px solid #e2e8f0;font-size:11px;color:#4a5568;text-align:center;">${sold}</td>
-          <td style="padding:6px 8px;border:1px solid #e2e8f0;font-size:11px;color:#4a5568;text-align:center;${remaining < 0 ? 'color:#dc2626;font-weight:900;' : remaining === 0 ? '' : 'color:#0d7c5f;font-weight:900;'}">${remaining}</td>
-          <td style="padding:6px 8px;border:1px solid #e2e8f0;font-size:11px;color:#1e2a4a;text-align:right;">${price.toLocaleString('ar-EG')}</td>
-          <td style="padding:6px 8px;border:1px solid #e2e8f0;font-size:11px;color:#1e2a4a;text-align:right;font-weight:700;">${value.toLocaleString('ar-EG')} ج.م</td>
+          <td style="font-weight:800">${product.name}</td>
+          <td style="text-align:center">${weight.size}</td>
+          <td style="text-align:center;font-family:'Tajawal',monospace">${formatUnits(loaded)}</td>
+          <td style="text-align:center;font-family:'Tajawal',monospace">${formatUnits(sold)}</td>
+          <td style="text-align:center;font-weight:800;font-family:'Tajawal',monospace;color:${remaining < 0 ? '#dc2626' : remaining === 0 ? '#64748b' : '#059669'}">${formatUnits(remaining)}</td>
+          <td style="text-align:right;font-family:'Tajawal',monospace">${price.toLocaleString('ar-EG')}</td>
+          <td style="text-align:right;font-weight:800;font-family:'Tajawal',monospace">${value.toLocaleString('ar-EG')} ج.م</td>
         </tr>`;
       });
     });
 
-    const html = `<!DOCTYPE html><html dir="rtl"><head><meta charset="utf-8"><style>@page{margin:15mm}body{font-family:'Segoe UI',Tahoma,sans-serif;margin:0;padding:20px;background:#faf8f5;color:#1e2a4a}</style></head><body>
-      <div style="background:#1e2a4a;border-radius:16px;padding:24px 32px;margin-bottom:20px;color:white;display:flex;justify-content:space-between;align-items:center">
-        <div><h1 style="margin:0;font-size:22px;color:white">تقرير مطابقة المخزون</h1><p style="margin:4px 0 0;font-size:12px;color:#d4a843;font-weight:600">الفترة: ${periodLabel} | تم التصدير: ${new Date().toLocaleDateString('ar-EG')}</p></div>
-        <div style="background:#0d7c5f;border-radius:12px;padding:12px 20px;text-align:center"><span style="font-size:20px;font-weight:900;color:white">${inventoryData.processedGroups.reduce((s, g) => s + g.activeCombinations.length, 0)}</span><br/><span style="font-size:10px;color:#d4a843;font-weight:700">صنف</span></div>
+    const html = `<html dir="rtl" lang="ar"><head>${COMPACT_PRO_CSS}</head><body>
+      <div style="padding:12mm 14mm">
+        <div class="rh">
+          <h1>تقرير مطابقة المخزون</h1>
+          <div class="sub">نظام التوزيع والمبيعات المعتمد</div>
+          <div class="ref">
+            <span>الفترة: ${periodLabel}</span>
+            <span>عدد الأصناف: ${inventoryData.processedGroups.reduce((s, g) => s + g.activeCombinations.length, 0)}</span>
+          </div>
+          <div class="ref" style="margin-top:4px">
+            <span>تاريخ التصدير: ${new Date().toLocaleDateString('ar-EG')}</span>
+          </div>
+        </div>
+
+        <div class="sg">
+          <div class="sb bl">
+            <div class="l">إجمالي المحمل</div>
+            <div class="v">${totalLoaded.toLocaleString('ar-EG')} <span style="font-size:10px">عبوة</span></div>
+          </div>
+          <div class="sb gr">
+            <div class="l">إجمالي المبيع</div>
+            <div class="v">${totalSold.toLocaleString('ar-EG')} <span style="font-size:10px">عبوة</span></div>
+          </div>
+          <div class="sb ${totalRemaining < 0 ? 'rd' : 'am'}">
+            <div class="l">المتبقي</div>
+            <div class="v">${totalRemaining.toLocaleString('ar-EG')} <span style="font-size:10px">عبوة</span></div>
+          </div>
+        </div>
+
+        <div class="st"><span class="i">1</span> تفاصيل المخزون حسب الصنف</div>
+        <table>
+          <thead>
+            <tr>
+              <th>الصنف</th>
+              <th width="60">الوزن</th>
+              <th width="60">المحمل</th>
+              <th width="60">المبيع</th>
+              <th width="60">المتبقي</th>
+              <th width="70">سعر الوحدة</th>
+              <th width="90">قيمة المبيع</th>
+            </tr>
+          </thead>
+          <tbody>${tableRows}</tbody>
+          <tfoot>
+            <tr class="tfoot-success">
+              <td colspan="2" style="padding:8px;font-size:10px;text-align:right">الإجمالي</td>
+              <td style="padding:8px;text-align:center;font-size:10px">${totalLoaded} عبوة</td>
+              <td style="padding:8px;text-align:center;font-size:10px">${totalSold} عبوة</td>
+              <td style="padding:8px;text-align:center;font-size:10px">${totalRemaining} عبوة</td>
+              <td colspan="2" style="padding:8px;text-align:right;font-size:10px">قيمة المبيعات: ${grandTotalValue.toLocaleString('ar-EG')} ج.م</td>
+            </tr>
+          </tfoot>
+        </table>
+
+        <div class="fs" style="margin-top:20px">
+          <div class="sb2"><div class="ti">مدير المستودع</div><div class="ln">التوقيع</div></div>
+          <div class="sb2"><div class="ti">المدير المالي</div><div class="ln">التوقيع</div></div>
+        </div>
       </div>
-      <div style="height:4px;background:linear-gradient(to left,#d4a843,#1e2a4a);border-radius:2px;margin-bottom:24px"></div>
-      <table style="width:100%;border-collapse:collapse;margin-bottom:20px">
-        <thead><tr style="background:#1e2a4a;color:white">
-          <th style="padding:8px;border:1px solid #1e2a4a;font-size:11px;text-align:right">الصنف</th>
-          <th style="padding:8px;border:1px solid #1e2a4a;font-size:11px;text-align:center">الوزن</th>
-          <th style="padding:8px;border:1px solid #1e2a4a;font-size:11px;text-align:center">المحمل</th>
-          <th style="padding:8px;border:1px solid #1e2a4a;font-size:11px;text-align:center">المبيع</th>
-          <th style="padding:8px;border:1px solid #1e2a4a;font-size:11px;text-align:center">المتبقي</th>
-          <th style="padding:8px;border:1px solid #1e2a4a;font-size:11px;text-align:right">سعر الوحدة</th>
-          <th style="padding:8px;border:1px solid #1e2a4a;font-size:11px;text-align:right">قيمة المبيع</th>
-        </tr></thead>
-        <tbody>${tableRows}
-          <tr style="background:#0d7c5f;color:white;font-weight:900">
-            <td colspan="2" style="padding:8px;border:1px solid #0d7c5f;font-size:11px;text-align:right">الإجمالي</td>
-            <td style="padding:8px;border:1px solid #0d7c5f;font-size:11px;text-align:center">${totalLoaded}</td>
-            <td style="padding:8px;border:1px solid #0d7c5f;font-size:11px;text-align:center">${totalSold}</td>
-            <td style="padding:8px;border:1px solid #0d7c5f;font-size:11px;text-align:center">${totalRemaining}</td>
-            <td colspan="2" style="padding:8px;border:1px solid #0d7c5f;font-size:11px;text-align:right">قيمة المبيعات: ${grandTotalValue.toLocaleString('ar-EG')} ج.م</td>
-          </tr>
-        </tbody>
-      </table>
-      <p style="text-align:center;color:#94a3b8;font-size:10px;margin-top:30px">تم التصدير من نظام تتبع المبيعات</p>
     </body></html>`;
 
     iframe.contentDocument?.open();
@@ -1415,81 +1509,127 @@ function ReportsTabComponent({
 
   const downloadInventoryImage = () => {
     const canvas = document.createElement('canvas');
-    canvas.width = 1200;
+    const dpr = window.devicePixelRatio || 1;
+    const W = 1200;
+    canvas.width = W * dpr;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    const headerH = 100;
-    const rowH = 38;
-    const groupHeaderH = 34;
+    const headerH = 130;
+    const rowH = 40;
+    const groupHeaderH = 36;
     let totalRows = 0;
     let groupCount = 0;
     inventoryData.processedGroups.forEach(({ activeCombinations }) => { totalRows += activeCombinations.length; groupCount++; });
-    const totalH = headerH + 60 + groupCount * groupHeaderH + totalRows * rowH + 120;
-    canvas.height = totalH;
+    const totalH = headerH + 50 + groupCount * groupHeaderH + totalRows * rowH + 80;
+    canvas.height = totalH * dpr;
+    canvas.style.width = W + 'px';
+    canvas.style.height = totalH + 'px';
+    ctx.scale(dpr, dpr);
 
-    ctx.fillStyle = '#faf8f5';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#f8fafc';
+    ctx.fillRect(0, 0, W, totalH);
 
-    const grad = ctx.createLinearGradient(0, 0, canvas.width, 0);
-    grad.addColorStop(0, '#1e2a4a');
-    grad.addColorStop(1, '#2b3a5c');
+    const grad = ctx.createLinearGradient(0, 0, W, 0);
+    grad.addColorStop(0, '#0f172a');
+    grad.addColorStop(0.5, '#1e3a5f');
+    grad.addColorStop(1, '#1e40af');
     ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, canvas.width, headerH);
+    ctx.beginPath();
+    ctx.roundRect(16, 12, W - 32, headerH, 12);
+    ctx.fill();
 
     ctx.fillStyle = '#d4a843';
-    ctx.fillRect(0, headerH, canvas.width, 4);
+    ctx.fillRect(16, 12 + headerH - 4, W - 32, 4);
 
     ctx.fillStyle = '#ffffff';
-    ctx.font = '900 20px system-ui, sans-serif';
-    ctx.textAlign = 'right';
-    ctx.fillText('تقرير مطابقة المخزون', canvas.width - 40, 44);
-    ctx.font = '600 12px system-ui, sans-serif';
-    ctx.fillStyle = '#d4a843';
-    ctx.fillText(`الفترة: ${inventoryMatchFilter === 'daily' ? 'يومي' : inventoryMatchFilter === 'weekly' ? 'أسبوعي' : 'شهري'}`, canvas.width - 40, 68);
+    ctx.font = '900 24px Cairo, system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('تقرير مطابقة المخزون', W / 2, 44);
+    ctx.font = '600 12px Cairo, system-ui, sans-serif';
+    ctx.fillStyle = '#94a3b8';
+    ctx.fillText('نظام التوزيع والمبيعات المعتمد', W / 2, 64);
 
     const periodLabel = inventoryMatchFilter === 'daily' ? 'يومي' : inventoryMatchFilter === 'weekly' ? 'أسبوعي' : 'شهري';
-    ctx.fillStyle = '#0d7c5f';
+    const itemCount = inventoryData.processedGroups.reduce((s, g) => s + g.activeCombinations.length, 0);
+    ctx.font = '700 11px Cairo, system-ui, sans-serif';
+
+    // Badges row - centered below subtitle
+    const badgesY = 78;
+    const periodW = ctx.measureText(`الفترة: ${periodLabel}`).width + 24;
+    ctx.fillStyle = '#1e40af';
     ctx.beginPath();
-    ctx.roundRect(canvas.width - 200, 22, 160, 50, 12);
+    ctx.roundRect(W / 2 - periodW - 6, badgesY, periodW, 22, 11);
     ctx.fill();
     ctx.fillStyle = '#ffffff';
-    ctx.font = '900 22px system-ui, sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText(`${inventoryData.processedGroups.reduce((s, g) => s + g.activeCombinations.length, 0)} صنف`, canvas.width - 120, 54);
+    ctx.fillText(`الفترة: ${periodLabel}`, W / 2 - 6, badgesY + 15);
 
-    ctx.textAlign = 'left';
+    const itemW = ctx.measureText(`${itemCount} صنف`).width + 24;
+    ctx.fillStyle = '#059669';
+    ctx.beginPath();
+    ctx.roundRect(W / 2 + 6, badgesY, itemW, 22, 11);
+    ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(`${itemCount} صنف`, W / 2 + 6 + itemW / 2, badgesY + 15);
+
     ctx.fillStyle = '#94a3b8';
-    ctx.font = '500 11px system-ui, sans-serif';
-    ctx.fillText(`تصدير: ${new Date().toLocaleDateString('ar-EG')}`, 40, 44);
+    ctx.font = '500 10px Cairo, system-ui, sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillText(`تصدير: ${new Date().toLocaleDateString('ar-EG')}`, W - 40, badgesY + 15);
 
     let y = headerH + 24;
-    const cols = [30, 220, 350, 430, 520, 610, 760, 960];
-    const headers = ['م', 'الصنف', 'الوزن', 'المحمل', 'المبيع', 'المتبقي', 'سعر الوحدة', 'قيمة المبيع'];
 
-    ctx.fillStyle = '#e2e8f0';
-    ctx.fillRect(20, y, canvas.width - 40, 30);
-    ctx.fillStyle = '#1e2a4a';
-    ctx.font = '700 11px system-ui, sans-serif';
+    const padX = 30;
+    const tableW = W - padX * 2;
+    const colM = W - padX - 25;
+    const colProduct = W - padX - 70;
+    const colWeight = W - padX - 230;
+    const colLoaded = W - padX - 330;
+    const colSold = W - padX - 440;
+    const colRemaining = W - padX - 550;
+    const colPrice = W - padX - 680;
+    const colValue = W - padX - 810;
+
+    const headerGrad = ctx.createLinearGradient(0, y, 0, y + 32);
+    headerGrad.addColorStop(0, '#1e3a5f');
+    headerGrad.addColorStop(1, '#0f172a');
+    ctx.fillStyle = headerGrad;
+    ctx.beginPath();
+    ctx.roundRect(padX, y, tableW, 32, 8);
+    ctx.fill();
+
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '700 11px Cairo, system-ui, sans-serif';
     ctx.textAlign = 'center';
-    headers.forEach((h, i) => {
-      if (i === 0) ctx.textAlign = 'center';
-      else if (i <= 2 || i >= 6) ctx.textAlign = 'right';
-      else ctx.textAlign = 'center';
-      ctx.fillText(h, cols[i] + 40, y + 20);
-    });
-    y += 30;
+    ctx.fillText('م', colM, y + 21);
+    ctx.textAlign = 'right';
+    ctx.fillText('الصنف', colProduct, y + 21);
+    ctx.textAlign = 'center';
+    ctx.fillText('الوزن', colWeight, y + 21);
+    ctx.fillText('المحمل', colLoaded, y + 21);
+    ctx.fillText('المبيع', colSold, y + 21);
+    ctx.fillText('المتبقي', colRemaining, y + 21);
+    ctx.fillText('سعر الوحدة', colPrice, y + 21);
+    ctx.fillText('قيمة المبيع', colValue, y + 21);
+    y += 32;
 
     let rowNum = 0;
     let totalLoaded = 0, totalSold = 0, totalRemaining = 0, grandTotalValue = 0;
 
     inventoryData.processedGroups.forEach(({ groupHeaderLabel, activeCombinations, groupData }) => {
       ctx.fillStyle = '#f1f5f9';
-      ctx.fillRect(20, y, canvas.width - 40, groupHeaderH);
-      ctx.fillStyle = '#1e2a4a';
-      ctx.font = '700 11px system-ui, sans-serif';
+      ctx.beginPath();
+      ctx.roundRect(padX, y, tableW, groupHeaderH, 6);
+      ctx.fill();
+      ctx.strokeStyle = '#e2e8f0';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+
+      ctx.fillStyle = '#1e3a5f';
+      ctx.font = '700 11px Cairo, system-ui, sans-serif';
       ctx.textAlign = 'right';
-      ctx.fillText(`▶ ${groupHeaderLabel} (${activeCombinations.length} أصناف)`, canvas.width - 40, y + 22);
+      ctx.fillText(`▶ ${groupHeaderLabel} (${activeCombinations.length} أصناف)`, W - padX - 16, y + 23);
       y += groupHeaderH;
 
       activeCombinations.forEach(combo => {
@@ -1498,65 +1638,84 @@ function ReportsTabComponent({
         const activeWeights = getProductWeightsFallback(product);
         const weight = activeWeights.find(w => String(w.id).trim() === String(combo.weightId).trim()) || activeWeights[0];
         if (!weight) return;
+        const comboKey = `${String(product.id).trim()}-${String(weight.id).trim()}`;
         const loaded = groupData.loads
           .filter(l => String(l.productId).trim() === String(product.id).trim() && String(l.weightId).trim() === String(weight.id).trim())
           .reduce((sum, l) => sum + (l.quantity || 0), 0);
         const sold = groupData.invItems
           .filter(item => String(item.productId).trim() === String(product.id).trim() && String(item.weightId).trim() === String(weight.id).trim())
           .reduce((sum, item) => sum + (item.quantity || 0), 0);
-        const remaining = loaded - sold;
+        const cumSold = inventoryData.cumulativeSoldMap[comboKey] || 0;
+        const cumLoaded = inventoryData.cumulativeLoadedMap[comboKey] || 0;
+        const remaining = cumLoaded - cumSold;
         const price = weight.price || 0;
-        const value = sold * price;
-        totalLoaded += loaded; totalSold += sold; totalRemaining += remaining; grandTotalValue += value;
+        const value = cumSold * price;
+        totalLoaded += cumLoaded; totalSold += cumSold; totalRemaining += remaining; grandTotalValue += value;
 
-        if (rowNum % 2 === 0) { ctx.fillStyle = '#ffffff'; ctx.fillRect(20, y, canvas.width - 40, rowH); }
-        else { ctx.fillStyle = '#f8fafc'; ctx.fillRect(20, y, canvas.width - 40, rowH); }
-
+        if (rowNum % 2 === 0) { ctx.fillStyle = '#ffffff'; }
+        else { ctx.fillStyle = '#f8fafc'; }
+        ctx.fillRect(padX, y, tableW, rowH);
         ctx.strokeStyle = '#e2e8f0';
-        ctx.lineWidth = 1;
-        ctx.strokeRect(20, y, canvas.width - 40, rowH);
+        ctx.lineWidth = 0.5;
+        ctx.strokeRect(padX, y, tableW, rowH);
+
+        ctx.fillStyle = '#94a3b8';
+        ctx.font = '700 10px Tajawal, system-ui, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(String(rowNum + 1), colM, y + 25);
+
+        ctx.fillStyle = '#1e3a5f';
+        ctx.font = '700 11px Cairo, system-ui, sans-serif';
+        ctx.textAlign = 'right';
+        ctx.fillText(product.name, colProduct, y + 25);
 
         ctx.fillStyle = '#4a5568';
-        ctx.font = '600 11px system-ui, sans-serif';
+        ctx.font = '600 10px Cairo, system-ui, sans-serif';
         ctx.textAlign = 'center';
-        ctx.fillText(String(rowNum + 1), cols[0] + 40, y + 24);
-        ctx.textAlign = 'right';
-        ctx.fillStyle = '#1e2a4a';
-        ctx.font = '700 11px system-ui, sans-serif';
-        ctx.fillText(product.name, cols[1] + 40, y + 24);
-        ctx.font = '600 10px system-ui, sans-serif';
+        ctx.fillText(weight.size, colWeight, y + 25);
+
+        ctx.fillStyle = '#1e40af';
+        ctx.font = '700 11px Tajawal, system-ui, sans-serif';
+        ctx.fillText(`${Math.floor(cumLoaded / (weight.unitsPerCarton || 12)).toLocaleString('ar-EG')} كرتونة`, colLoaded, y + 25);
+
+        ctx.fillStyle = '#059669';
+        ctx.fillText(`${Math.floor(cumSold / (weight.unitsPerCarton || 12)).toLocaleString('ar-EG')} كرتونة`, colSold, y + 25);
+
+        ctx.fillStyle = remaining < 0 ? '#dc2626' : remaining === 0 ? '#64748b' : '#059669';
+        ctx.font = '700 11px Tajawal, system-ui, sans-serif';
+        ctx.fillText(`${Math.floor(remaining / (weight.unitsPerCarton || 12)).toLocaleString('ar-EG')} كرتونة`, colRemaining, y + 25);
+
         ctx.fillStyle = '#4a5568';
-        ctx.textAlign = 'center';
-        ctx.fillText(weight.size, cols[2] + 40, y + 24);
-        ctx.fillText(String(loaded), cols[3] + 40, y + 24);
-        ctx.fillText(String(sold), cols[4] + 40, y + 24);
-        ctx.fillStyle = remaining < 0 ? '#dc2626' : remaining === 0 ? '#64748b' : '#0d7c5f';
-        ctx.font = '700 11px system-ui, sans-serif';
-        ctx.fillText(String(remaining), cols[5] + 40, y + 24);
-        ctx.fillStyle = '#1e2a4a';
-        ctx.font = '600 11px system-ui, sans-serif';
-        ctx.textAlign = 'right';
-        ctx.fillText(`${price.toLocaleString('ar-EG')} ج.م`, cols[6] + 40, y + 24);
-        ctx.font = '700 11px system-ui, sans-serif';
-        ctx.fillText(`${value.toLocaleString('ar-EG')} ج.م`, cols[7] + 40, y + 24);
+        ctx.font = '600 10px Tajawal, system-ui, sans-serif';
+        ctx.fillText(`${price.toLocaleString('ar-EG')} ج.م`, colPrice, y + 25);
+
+        ctx.fillStyle = '#1e3a5f';
+        ctx.font = '700 11px Tajawal, system-ui, sans-serif';
+        ctx.fillText(`${value.toLocaleString('ar-EG')} ج.م`, colValue, y + 25);
 
         y += rowH;
         rowNum++;
       });
     });
 
-    ctx.fillStyle = '#0d7c5f';
-    ctx.fillRect(20, y, canvas.width - 40, 36);
+    const summaryGrad = ctx.createLinearGradient(0, y, 0, y + 40);
+    summaryGrad.addColorStop(0, '#059669');
+    summaryGrad.addColorStop(1, '#047857');
+    ctx.fillStyle = summaryGrad;
+    ctx.beginPath();
+    ctx.roundRect(padX, y, tableW, 40, 8);
+    ctx.fill();
+
     ctx.fillStyle = '#ffffff';
-    ctx.font = '700 12px system-ui, sans-serif';
-    ctx.textAlign = 'right';
-    ctx.fillText(`الإجمالي: ${totalLoaded} محمل | ${totalSold} مبيع | ${totalRemaining} متبقي | قيمة المبيعات: ${grandTotalValue.toLocaleString('ar-EG')} ج.م`, canvas.width - 60, y + 23);
+    ctx.font = '700 12px Cairo, system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(`الإجمالي: ${Math.floor(totalLoaded / 12).toLocaleString('ar-EG')} كرتونة محملة | ${Math.floor(totalSold / 12).toLocaleString('ar-EG')} كرتونة مباعة | ${Math.floor(totalRemaining / 12).toLocaleString('ar-EG')} كرتونة متبقية | قيمة المبيعات: ${grandTotalValue.toLocaleString('ar-EG')} ج.م`, W / 2, y + 25);
 
     y += 56;
     ctx.fillStyle = '#94a3b8';
-    ctx.font = '500 11px system-ui, sans-serif';
+    ctx.font = '500 11px Cairo, system-ui, sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText('تم التصدير من نظام تتبع المبيعات', canvas.width / 2, y);
+    ctx.fillText('تم التصدير من نظام تتبع المبيعات', W / 2, y);
 
     const downloadLink = document.createElement('a');
     downloadLink.download = `تقرير_المخزون_${inventoryMatchFilter}.png`;
@@ -1854,17 +2013,12 @@ function ReportsTabComponent({
               <div className="bg-emerald-50 rounded-2xl p-4 border border-emerald-100 flex flex-col gap-1 text-center justify-between">
                 <div>
                   <span className="text-emerald-850 font-black text-xs block">إجمالي الإيرادات</span>
-                  <span className="text-emerald-600 font-bold text-[9px] block leading-tight mt-0.5">المحصل + إيرادات + مشاوير - المسدد للمصنع - مصروفات</span>
+                  <span className="text-emerald-600 font-bold text-[9px] block leading-tight mt-0.5">المحصل + إيرادات إضافية + أرباح المشاوير</span>
                 </div>
                 <span className="text-xl font-black text-emerald-800 my-1 block">
-                  {formatNum(salesStats.netProfit)}
+                  {formatNum((salesStats.totalCollected + salesStats.extraRevenues + salesStats.totalTripsCollectedProfit) - salesStats.totalPaidToFactoryInPeriod - salesStats.totalSpent)}
                   <span className="text-xs mr-0.5">ج.م</span>
                 </span>
-                {salesStats.totalSales > 0 && (
-                  <span className="text-[9px] font-black text-emerald-600 bg-emerald-100 rounded-full px-2 py-0.5 inline-block">
-                    هامش الإيرادات: {(salesStats.netProfit / salesStats.totalSales * 100).toFixed(1)}%
-                  </span>
-                )}
                 <div className="border-t border-emerald-200/50 pt-1 mt-1 text-[8px] text-emerald-700/80 flex flex-col gap-0.5 text-right font-medium">
                   <div className="flex justify-between">
                     <span>المحصل من العملاء:</span>
@@ -1878,7 +2032,7 @@ function ReportsTabComponent({
                   )}
                   {salesStats.totalTripsCollectedProfit > 0 && (
                     <div className="flex justify-between">
-                      <span>أرباح المشاوير المحصلة:</span>
+                      <span>أرباح المشاوير:</span>
                       <span>{formatNum(salesStats.totalTripsCollectedProfit)}ج</span>
                     </div>
                   )}
@@ -1964,7 +2118,7 @@ function ReportsTabComponent({
                 <h3 className="font-bold text-rose-700 text-sm border-b border-slate-100 pb-2">سجل المصروفات للفترة</h3>
                 {/* Expense Category Breakdown */}
                 {(() => {
-                  const periodExpenses = currentFilteredData.expenses.filter(e => e.type !== 'revenue');
+                  const periodExpenses = currentFilteredData.expenses.filter(e => e.type !== 'revenue' && e.category !== 'سداد للمصنع' && e.type !== 'factory_payment');
                   if (periodExpenses.length === 0) return null;
                   const byCategory = periodExpenses.reduce((acc, e) => {
                     const cat = parseExpenseDescription(e.description);
@@ -1988,7 +2142,7 @@ function ReportsTabComponent({
                 })()}
                 <div className="flex flex-col gap-2">
                   {currentFilteredData.expenses
-                      .filter(e => e.type !== 'revenue')
+                      .filter(e => e.type !== 'revenue' && e.category !== 'سداد للمصنع' && e.type !== 'factory_payment')
                       .sort((a,b) => {
                         const timeA = a.date ? new Date(a.date).getTime() : 0;
                         const timeB = b.date ? new Date(b.date).getTime() : 0;
@@ -2159,8 +2313,8 @@ function ReportsTabComponent({
                       <span className="text-emerald-700" dir="rtl">+ {(salesStats.extraRevenues + salesStats.totalTripsCollectedProfit).toLocaleString('ar-EG')} ج.م</span>
                     </div>
                     <div className="flex justify-between border-b border-dashed border-emerald-200 pb-1.5">
-                      <span className="text-slate-600">يخصم: المسدد للمصنع</span>
-                      <span className="text-rose-700" dir="rtl">- {(salesStats.totalPaidToFactoryInPeriod).toLocaleString('ar-EG')} ج.م</span>
+                      <span className="text-slate-600">يخصم: تكلفة البضاعة المباعة (COGS)</span>
+                      <span className="text-rose-700" dir="rtl">- {(salesStats.factorySoldCost).toLocaleString('ar-EG')} ج.م</span>
                     </div>
                     <div className="flex justify-between border-b border-dashed border-emerald-200 pb-1.5">
                       <span className="text-slate-600">يخصم: إجمالي المصروفات الإدارية والتشغيلية المعتمدة</span>
@@ -2172,7 +2326,7 @@ function ReportsTabComponent({
                     </div>
                   </div>
                   <p className="text-[10px] text-emerald-600 leading-relaxed font-semibold">
-                    * يتم احتساب "الصافي" بناءً على المحصل من العملاء + الإيرادات + أرباح المشاوير مخصوماً منها المسدد للمصنع والمصروفات التشغيلية.
+                    * يتم احتساب "الصافي" بناءً على المحصل من العملاء + الإيرادات + أرباح المشاوير مخصوماً منها تكلفة البضاعة المباعة (COGS) والمصروفات التشغيلية.
                   </p>
                 </div>
               )}
@@ -2180,23 +2334,19 @@ function ReportsTabComponent({
               {activeDetailCard === 'debtors' && (
                 <div className="bg-rose-50/70 border border-rose-200 p-4 rounded-2xl text-right animate-fade-in flex flex-col gap-3">
                   <div className="flex justify-between items-center border-b border-rose-200 pb-2">
-                    <h4 className="font-extrabold text-rose-950 text-xs">🏭 كشف وتحليل المديونيات والمعلقات المالية</h4>
-                    <button onClick={() => setActiveDetailCard(null)} className="text-rose-500 hover:text-rose-950 text-xs font-bold bg-[#FFFFFF] px-2 py-0.5 rounded-lg border border-rose-200 shadow-2xs font-bold">غلق ✕</button>
-                  </div>
-                  
-                  <div className="flex flex-col gap-1.5 text-right">
-                    <span className="text-[11px] font-extrabold text-rose-900 border-b border-rose-200/50 pb-1">١. مديونية المصنع الكلية المتبقية حالياً (للمصنع):</span>
-                    <div className="flex justify-between items-center bg-[#FFFFFF] p-2.5 rounded-xl border border-rose-100 text-xs">
-                      <span className="text-[#1A365D] font-extrabold">الذمة المالية المترتبة للمصنع الأساسي</span>
-                      <span className="text-sm font-black text-rose-800" dir="rtl">{(salesStats.remainingDebtToFactory).toLocaleString('ar-EG')} ج.م</span>
-                    </div>
+                    <h4 className="font-extrabold text-rose-950 text-xs flex items-center gap-1.5">
+                      <CircleDollarSign className="h-4 w-4" />
+                      المديونيات والمعلقات المالية
+                    </h4>
+                    <button onClick={() => setActiveDetailCard(null)} className="text-rose-500 hover:text-rose-950 text-xs font-bold bg-[#FFFFFF] px-2 py-0.5 rounded-lg border border-rose-200 shadow-2xs">غلق ✕</button>
                   </div>
 
-                  <div className="flex flex-col gap-1.5 mt-1 text-right">
-                    <span className="text-[11px] font-extrabold text-indigo-900 border-b border-indigo-200/40 pb-1">٢. مديونيات التحصيل المعلقة علي المناديب (أمانة التحصيل):</span>
+                  {/* Delegate Debts Summary */}
+                  <div className="flex flex-col gap-1.5 text-right">
+                    <span className="text-[11px] font-extrabold text-indigo-900 border-b border-indigo-200/40 pb-1">ديون العملاء والمناديب المعلقة:</span>
                     <div className="flex flex-col gap-1.5 max-h-[150px] overflow-y-auto">
                       {delegateDebtBreakdown.length === 0 ? (
-                        <p className="text-[10px] text-gray-400 text-center py-2 font-bold">لا توجد مديونيات معلقة على المناديب للفترة الحالية.</p>
+                        <p className="text-[10px] text-gray-400 text-center py-2 font-bold">لا توجد مديونيات معلقة حالياً.</p>
                       ) : (
                         delegateDebtBreakdown.map((del, idx) => (
                           <div key={idx} className="flex justify-between items-center bg-[#FFFFFF] p-2 rounded-lg border border-slate-100 text-xs font-bold">
@@ -2209,18 +2359,19 @@ function ReportsTabComponent({
                   </div>
 
                   <div className="flex justify-between items-center border-t border-rose-200 pt-2 text-[10px] text-rose-900 font-extrabold">
-                    <span>إجمالي مديونيات العملاء الميدانية:</span>
-                    <span dir="rtl">{(salesStats.totalRemaining).toLocaleString('ar-EG')} ج.م</span>
+                    <span>إجمالي المديونيات:</span>
+                    <span dir="rtl">{formatNum(salesStats.totalRemaining)} ج.م</span>
                   </div>
 
-                  <button 
+                  <button
                     onClick={() => {
                       setActiveDetailCard(null);
                       setShowDebtorsModal(true);
                     }}
-                    className="w-full bg-[#1A365D] hover:bg-[#2B6CB0] text-[#FFFFFF] font-black text-xs py-2.5 rounded-xl shadow-xs transition-colors cursor-pointer mt-1"
+                    className="w-full bg-[#1A365D] hover:bg-[#2B6CB0] text-[#FFFFFF] font-black text-xs py-2.5 rounded-xl shadow-xs transition-colors cursor-pointer mt-1 flex items-center justify-center gap-1.5"
                   >
-                    🔍 فتح سجل العملاء المدينين والتحصيل التفصيلي
+                    <Search className="h-3.5 w-3.5" />
+                    فتح سجل العملاء المدينين والتحصيل التفصيلي
                   </button>
                 </div>
               )}
@@ -2272,10 +2423,10 @@ function ReportsTabComponent({
                   const cartons = l.cartonsCount !== undefined ? l.cartonsCount : Math.floor((l.quantity || 0) / upc);
                   const loose = l.looseUnitsCount !== undefined ? l.looseUnitsCount : (l.quantity || 0) % upc;
                   const cp = l.cartonPrice !== undefined ? Number(l.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) : 0) || 0);
-                  const up = l.unitPrice !== undefined ? Number(l.unitPrice) : (cp / upc);
+                  const up = l.unitPrice !== undefined ? Number(l.unitPrice) : (Number(weight?.factoryPricePerUnit) || (prod ? Number(prod.price) : 0) || 0);
                   return s + (cartons * cp) + (loose * up);
                 }, 0);
-                const totalPaid = filteredPayments.reduce((s, p) => s + (p.amount || 0), 0);
+                const totalPaid = filteredPayments.reduce((s, p) => s + (p.amount || 0) - (p.appliedToCarriedDebt || 0), 0);
 
                 return (
                   <>
@@ -2846,7 +2997,8 @@ function ReportsTabComponent({
                               const weight = activeWeights.find(w => String(w.id).trim() === String(combo.weightId).trim()) || activeWeights[0];
                               if (!weight) return null;
 
-                              // Recalculate local quantities under this group
+                              // Use cumulative sold/loaded across ALL groups for real quantities
+                              const comboKey = `${String(product.id).trim()}-${String(weight.id).trim()}`;
                               const groupLoaded = groupData.loads
                                 ?.filter(l => String(l.productId).trim() === String(product.id).trim() && String(l.weightId).trim() === String(weight.id).trim())
                                 .reduce((sum, l) => sum + (l.quantity || 0), 0) || 0;
@@ -2855,7 +3007,10 @@ function ReportsTabComponent({
                                 ?.filter(item => String(item.productId).trim() === String(product.id).trim() && String(item.weightId).trim() === String(weight.id).trim())
                                 .reduce((sum, item) => sum + (item.quantity || 0), 0) || 0;
 
-                              const remainingUnits = groupLoaded - groupSold;
+                              // Cumulative (real) sold and loaded across all days
+                              const cumSold = inventoryData.cumulativeSoldMap[comboKey] || 0;
+                              const cumLoaded = inventoryData.cumulativeLoadedMap[comboKey] || 0;
+                              const remainingUnits = cumLoaded - cumSold;
                               const unitsPerCarton = weight.unitsPerCarton || 12;
 
                               const detailKey = `${product.id}-${weight.id}`;
@@ -2911,7 +3066,7 @@ function ReportsTabComponent({
                                       <div className="bg-teal-50/50 border border-teal-100 rounded-lg py-1.5 px-2 flex flex-col gap-0.5">
                                         <span className="font-semibold text-teal-900">المبيعات</span>
                                         <span className="font-black text-teal-700 font-mono text-xs" dir="rtl">
-                                          {formatCartonsAr(groupSold, unitsPerCarton)}
+                                          {formatCartonsAr(cumSold, unitsPerCarton)}
                                         </span>
                                       </div>
                                       <div className={`rounded-lg py-1.5 px-2 flex flex-col gap-0.5 border ${
@@ -3022,6 +3177,61 @@ function ReportsTabComponent({
                   {salesStats.totalRemaining.toLocaleString('ar-EG')}ج.م
                 </strong>
               </div>
+
+              {/* General Settlement Buttons */}
+              {onAddExpense && (
+                <div className="bg-gradient-to-r from-emerald-50 to-teal-50 border border-emerald-200 p-3 rounded-xl flex flex-col gap-2">
+                  <span className="text-[10px] font-extrabold text-emerald-900 text-right">التحصيل والتسوية السريعة:</span>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      onClick={async () => {
+                        const amount = prompt('أدخل مبلغ التحصيل (كإيراد):');
+                        if (!amount || isNaN(Number(amount)) || Number(amount) <= 0) return;
+                        const name = prompt('اسم العميل أو المندوب (اختياري):') || 'غير محدد';
+                        const confirmed = await confirmDialog(`تأكيد تحصيل ${formatNum(Number(amount))} ج.م من "${name}" كإيراد؟`);
+                        if (!confirmed) return;
+                        onAddExpense({
+                          amount: Number(amount),
+                          category: 'تحصيل من عميل',
+                          type: 'revenue',
+                          date: new Date().toISOString(),
+                          description: JSON.stringify({ notes: `تحصيل عام: ${name}`, customerName: name, isGeneralSettlement: true }),
+                          delegateName: name,
+                          delegatePhone: ''
+                        });
+                        showToast(`✓ تم تسجيل تحصيل ${formatNum(Number(amount))} ج.م كإيراد`);
+                      }}
+                      className="bg-emerald-600 hover:bg-emerald-700 text-white font-black text-[10px] py-2 rounded-lg shadow-xs transition-colors cursor-pointer flex items-center justify-center gap-1"
+                    >
+                      <CircleDollarSign className="h-3 w-3" />
+                      تحصيل كإيراد
+                    </button>
+                    <button
+                      onClick={async () => {
+                        const amount = prompt('أدخل مبلغ التنازل (يُخصم من الإيرادات):');
+                        if (!amount || isNaN(Number(amount)) || Number(amount) <= 0) return;
+                        const name = prompt('اسم العميل أو المندوب (اختياري):') || 'غير محدد';
+                        const confirmed = await confirmDialog(`تأكيد التنازل عن ${formatNum(Number(amount))} ج.م من "${name}"؟\n⚠️ سيتم خصم هذا المبلغ من الإيرادات.`);
+                        if (!confirmed) return;
+                        onAddExpense({
+                          amount: Number(amount),
+                          category: 'تنازل عن ديون',
+                          type: 'expense',
+                          date: new Date().toISOString(),
+                          description: JSON.stringify({ notes: `تنازل عام: ${name}`, customerName: name, isWriteOff: true, isGeneralSettlement: true }),
+                          delegateName: name,
+                          delegatePhone: ''
+                        });
+                        showToast(`✓ تم تنازل ${formatNum(Number(amount))} ج.م من "${name}" (يُخصم من الإيرادات)`);
+                      }}
+                      className="bg-rose-600 hover:bg-rose-700 text-white font-black text-[10px] py-2 rounded-lg shadow-xs transition-colors cursor-pointer flex items-center justify-center gap-1"
+                    >
+                      <HandCoins className="h-3 w-3" />
+                      تنازل (خصم من الإيرادات)
+                    </button>
+                  </div>
+                </div>
+              )}
 
               {/* Search Bar for Debtors */}
               <div className="relative">

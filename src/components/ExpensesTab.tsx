@@ -1,5 +1,6 @@
 // @ts-nocheck
 import { confirmDialog } from '../utils/confirm';
+import { COMPACT_PRO_CSS } from '../utils/reportStyles';
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -162,127 +163,94 @@ export default function ExpensesTab({ expenses, onAddExpense, onDeleteExpense, o
 
     doc.open();
     doc.write(`
+      <!DOCTYPE html>
       <html dir="rtl" lang="ar">
-        <head>
-          <title>تقرير ${title} المالي</title>
-          <style>
-            @media print {
-              @page { size: A4; margin: 15mm; }
-              body { margin: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-            }
-            body { font-family: system-ui, -apple-system, sans-serif; color: #0f172a; line-height: 1.5; padding: 20px; text-align: right; background: #faf8f5; }
-            .header { text-align: center; margin-bottom: 25px; background: linear-gradient(135deg, #1e2a4a, #2b3a5c); color: #fff; padding: 20px; border-radius: 12px; }
-            .header h1 { color: #ffffff; margin: 0 0 5px 0; font-size: 22px; font-weight: 900; }
-            .header .subtitle { color: #d4a843; font-size: 13px; font-weight: bold; }
-            .header .period { color: #94a3b8; font-size: 11px; margin-top: 4px; }
-            .gold-bar { height: 4px; background: #d4a843; margin-bottom: 20px; border-radius: 2px; }
-            
-            .summary-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 25px; }
-            .card { background: #ffffff; border: 1px solid #e2e8f0; padding: 14px; border-radius: 10px; text-align: center; }
-            .card.danger { background: #fff5f5; border-color: #fee2e2; }
-            .card.success { background: #f0fdf4; border-color: #dcfce7; }
-            .card.info { background: #eff6ff; border-color: #bfdbfe; }
-            .card span { display: block; font-size: 10px; color: #64748b; font-weight: bold; margin-bottom: 4px; }
-            .card strong { font-size: 16px; color: #0f172a; font-weight: 900; }
-            
-            h2 { font-size: 13px; color: #1e2a4a; margin: 25px 0 10px 0; border-right: 4px solid #d4a843; padding-right: 8px; font-weight: bold; }
-            
-            table { width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 11px; text-align: right; }
-            th, td { border: 1px solid #e2e8f0; padding: 9px 12px; text-align: right; }
-            th { background: #1e2a4a; color: #ffffff; font-weight: 900; }
-            tr:nth-child(even) { background: #f8fafc; }
-            tr:hover { background: #f1f5f9; }
-            .summary-row { background: #0d7c5f !important; color: #ffffff; font-weight: 900; }
-            .summary-row td { border-color: #0d7c5f; }
-            
-            .category-badge { background: #eff6ff; color: #1e40af; padding: 2px 8px; border-radius: 4px; font-weight: bold; font-size: 10px; }
-            
-            .footer-notes { margin-top: 40px; border-top: 1px solid #cbd5e1; padding-top: 15px; display: flex; justify-content: space-between; font-size: 11px; font-weight: bold; color: #475569; }
-          </style>
-        </head>
-        <body>
-          <div class="header">
-            <h1>تقرير ${title} بالتفصيل</h1>
-            <div class="subtitle">${invoiceAppName}</div>
-            <div class="period">الفترة: ${periodLabel} | ${formattedDate}</div>
+      <head>${COMPACT_PRO_CSS}</head>
+      <body>
+        <div class="rh">
+          <h1>تقرير ${title} بالتفصيل</h1>
+          <div class="sub">${invoiceAppName}</div>
+          <div class="ref">
+            <span>الفترة: ${periodLabel}</span>
+            <span>${formattedDate}</span>
           </div>
-          <div class="gold-bar"></div>
-          
-          <div class="summary-cards">
-            <div class="card info">
-              <span>عدد السجلات</span>
-              <strong>${currentRecords.length} سجل</strong>
-            </div>
-            <div class="card danger">
-              <span>الإجمالي</span>
-              <strong style="color:#dc2626;">${totalCurrent.toLocaleString('ar-EG')} ج.م</strong>
-            </div>
-            <div class="card success">
-              <span>المتوسط</span>
-              <strong style="color:#16a34a;">${avgAmount.toLocaleString('ar-EG')} ج.م</strong>
-            </div>
+        </div>
+
+        <div class="sg">
+          <div class="sb bl">
+            <div class="l">عدد السجلات</div>
+            <div class="v">${currentRecords.length} <span style="font-size:10px">سجل</span></div>
           </div>
-          
-          <h2>تفاصيل السجلات (${currentRecords.length} مستند)</h2>
-          <table>
-            <thead>
-              <tr>
-                <th width="40">م</th>
-                <th>البيان</th>
-                ${isExpense ? '<th>الفئة</th>' : ''}
-                <th>المبلغ</th>
-                <th>التاريخ</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${currentRecords.length === 0 ? `<tr><td colspan="${isExpense ? 5 : 4}" style="text-align:center; color:#94a3b8;">لا توجد أي سجلات حالياً.</td></tr>` :
-        currentRecords.map((item, idx) => `
-                  <tr>
-                    <td style="text-align:center">${idx + 1}</td>
-                    <td><b>${parseExpenseDescription(item.description) || '(بدون بيان)'}</b></td>
-                    ${isExpense ? `<td><span class="category-badge">${item.category}</span></td>` : ''}
-                    <td style="font-weight:900; color:#1e2a4a;">${item.amount.toLocaleString('ar-EG')} ج.م</td>
-                    <td>${new Date(item.date).toLocaleString('ar-EG')}</td>
-                  </tr>
-                `).join('')}
-              <tr class="summary-row">
-                <td colspan="${isExpense ? 2 : 1}" style="text-align:center">الإجمالي</td>
-                ${isExpense ? '<td></td>' : ''}
-                <td style="text-align:center; font-weight:900; font-size:13px;">${totalCurrent.toLocaleString('ar-EG')} ج.م</td>
-                <td style="text-align:center">${currentRecords.length} سجل</td>
-              </tr>
-            </tbody>
-          </table>
-          
-          ${isExpense && Object.keys(catTotals).length > 0 ? `
-          <h2>الملخص حسب الفئة</h2>
-          <table>
-            <thead>
-              <tr>
-                <th width="40">م</th>
-                <th>الفئة</th>
-                <th>الإجمالي</th>
-                <th>النسبة</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${Object.entries(catTotals).sort((a, b) => b[1] - a[1]).map(([cat, total], idx) => `
+          <div class="sb rd">
+            <div class="l">الإجمالي</div>
+            <div class="v">${totalCurrent.toLocaleString('ar-EG')} <span style="font-size:10px">ج.م</span></div>
+          </div>
+          <div class="sb gr">
+            <div class="l">المتوسط</div>
+            <div class="v">${avgAmount.toLocaleString('ar-EG')} <span style="font-size:10px">ج.م</span></div>
+          </div>
+        </div>
+
+        <div class="st"><span class="i">1</span> تفاصيل السجلات (${currentRecords.length} مستند)</div>
+        <table>
+          <thead>
+            <tr>
+              <th width="30">م</th>
+              <th>البيان</th>
+              ${isExpense ? '<th>الفئة</th>' : ''}
+              <th>المبلغ</th>
+              <th>التاريخ</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${currentRecords.length === 0 ? `<tr><td colspan="${isExpense ? 5 : 4}" style="text-align:center; color:#94a3b8; padding:20px;">لا توجد أي سجلات حالياً.</td></tr>` :
+              currentRecords.map((item, idx) => `
                 <tr>
-                  <td style="text-align:center">${idx + 1}</td>
-                  <td><span class="category-badge">${cat}</span></td>
-                  <td style="font-weight:900;">${total.toLocaleString('ar-EG')} ج.م</td>
-                  <td style="text-align:center;">${totalCurrent > 0 ? ((total / totalCurrent) * 100).toFixed(1) : 0}%</td>
+                  <td style="text-align:center;font-weight:700;color:#94a3b8">${idx + 1}</td>
+                  <td><b style="color:#1e3a5f">${parseExpenseDescription(item.description) || '(بدون بيان)'}</b></td>
+                  ${isExpense ? `<td><span class="bd-b">${item.category}</span></td>` : ''}
+                  <td style="text-align:center;font-weight:800;color:#1e3a5f;font-family:'Tajawal',monospace">${item.amount.toLocaleString('ar-EG')}</td>
+                  <td style="font-size:9px">${new Date(item.date).toLocaleString('ar-EG')}</td>
                 </tr>
               `).join('')}
-            </tbody>
-          </table>
-          ` : ''}
-          
-          <div class="footer-notes">
-            <div>إعداد المسؤول الحسابي المعتمد: ............................</div>
-            <div>التوقيع والاعتماد النهائي: ............................</div>
-          </div>
-        </body>
+            <tr class="ts">
+              <td colspan="${isExpense ? 2 : 1}" style="text-align:right">الإجمالي</td>
+              ${isExpense ? '<td></td>' : ''}
+              <td style="text-align:center;font-size:12px">${totalCurrent.toLocaleString('ar-EG')} ج.م</td>
+              <td style="text-align:center">${currentRecords.length} سجل</td>
+            </tr>
+          </tbody>
+        </table>
+
+        ${isExpense && Object.keys(catTotals).length > 0 ? `
+        <div class="st"><span class="i">2</span> الملخص حسب الفئة</div>
+        <table>
+          <thead>
+            <tr>
+              <th width="30">م</th>
+              <th>الفئة</th>
+              <th>الإجمالي</th>
+              <th>النسبة</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${Object.entries(catTotals).sort((a, b) => b[1] - a[1]).map(([cat, total], idx) => `
+              <tr>
+                <td style="text-align:center;font-weight:700;color:#94a3b8">${idx + 1}</td>
+                <td><span class="bd-b">${cat}</span></td>
+                <td style="text-align:center;font-weight:800;font-family:'Tajawal',monospace">${total.toLocaleString('ar-EG')} ج.م</td>
+                <td style="text-align:center;font-weight:700;color:#1e3a5f">${totalCurrent > 0 ? ((total / totalCurrent) * 100).toFixed(1) : 0}%</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+        ` : ''}
+
+        <div class="fs">
+          <div class="sb2"><div class="ti">التوقيع والاعتماد النهائي</div><div class="ln">التوقيع</div></div>
+          <div class="sb2"><div class="ti">إعداد المسؤول الحسابي</div><div class="ln">التوقيع</div></div>
+        </div>
+      </body>
       </html>
     `);
     doc.close();

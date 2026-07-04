@@ -2949,6 +2949,7 @@ export default function App() {
             settings={settings}
             usersList={usersList}
             onUpdateInvoice={handleUpdateInvoice}
+            onAddExpense={handleAddExpense}
             onGoBack={() => setActiveTab('dashboard')}
             currentUser={effectiveUser}
             permittedSubTabs={effectiveUser.permittedSubTabs}
