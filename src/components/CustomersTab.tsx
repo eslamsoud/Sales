@@ -1,6 +1,7 @@
 // @ts-nocheck
 import { confirmDialog } from '../utils/confirm';
-import { COMPACT_PRO_CSS } from '../utils/reportStyles';
+import { COMPACT_PRO_CSS, printHTMLInNewWindow } from '../utils/reportStyles';
+import { NEW_CUSTOMER_MSG } from '../utils/messages';
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -285,72 +286,11 @@ export default function CustomersTab({
   const handleGenerateAndSendWA = async (customer: Customer) => {
     setWaLoadingId(customer.id);
     try {
-      const userMessage = `قم بصياغة رسالة واتساب لعميل اسمه: ${customer.name} (حالة العميل: مسجل بقاعدة العملاء ومحله في منطقة: ${customer.area}).
-التعليمات والخطوط العريضة الخاصة بمدير المبيعات (استخدمها للتفاوض والمتابعة):
-"${settings.aiRetentionGuidelines || 'قدم رسالة ترحيبية تشجعه على استمرار التعامل معنا، مع توضيح أننا نهتم بوجوده معنا كشريك نجاح.'}"
-أريد فقط نص الرسالة بدون أي مقدمات أخرى لتكون جاهزة للإرسال مباشرة للعميل وبصيغة جذابة.`;
-
-      const response = await fetch('/api/gemini/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          systemInstruction: 'أنت مساعد مبيعات احترافي.',
-          history: [],
-          message: userMessage
-        })
-      });
-
-      if (!response.ok) {
-        throw new Error('مفتاح الـ API غير صالح أو غير نشط.');
-      }
-
-      const data = await response.json();
-      const messageText = encodeURIComponent(data.text);
-      window.location.href = formatWhatsAppLink(customer.phone, messageText);
-    } catch (err: any) {
-      console.warn("Using premium local pitch message generator due to inactive Gemini API Key:", err.message);
-      
-      const guidelines = settings.aiRetentionGuidelines || 'تقديم عرض ترويجي خاص لزيوت وسمن سوفانا الفاخرة';
       const delegateName = currentUser?.name || 'المندوب';
-      const isActive = (customer.purchasesCount || 0) > 0 || (customer.totalSpent || 0) > 0;
-      const fallbackPitchMsg = isActive
-        ? `السلام عليكم ورحمة الله وبركاته،
-
-معكم ${delegateName}، مندوب مبيعات زيت سوفانا.
-
-أتمنى أن تكونوا بخير وفي أتم الصحة والعافية.
-
-🤝 نتقدم إليكم بخالص الشكر والتقدير على ثقتكم المستمرة في منتجات زيت سوفانا، ونعتز بشراكتكم التي تمثل جزءًا مهمًا من نجاحنا.
-
-نحرص دائمًا على تقديم أفضل العروض والخدمات، والارتقاء بمستوى الخدمة بما يلبي تطلّعاتكم ويواكب احتياجاتكم.
-
-📅 يشرفني تجديد اللقاء بكم في الزيارة القادمة، في أقرب وقت يناسبكم، لمواصلة تقديم أفضل خدمة، وتعزيز التعاون المثمر بيننا.
-
-⭐ ثقتكم الغالية محل تقديرنا واعتزازنا، ونسأل الله أن يديم بيننا التعاون، وأن نكون دائمًا عند حسن ظنكم.
-
-وتفضلوا بقبول فائق الاحترام والتقدير،
-
-${delegateName}
-مندوب مبيعات زيت سوفانا`
-        : `السلام عليكم ورحمة الله وبركاته،
-
-معكم ${delegateName}، مندوب مبيعات زيت سوفانا.
-
-أتمنى أن تكونوا بخير وفي أتم الصحة والعافية.
-
-🤝 انطلاقًا من حرص مصنع زيت سوفانا على تعزيز علاقته بعملائه الكرام، وحرصي على متابعة احتياجاتكم وتقديم أفضل مستوى من الخدمة، يسعدني التواصل معكم لإطلاعكم على أحدث العروض والأسعار المميزة التي تناسب احتياجاتكم.
-
-📅 يشرفني زيارتكم في الموعد الذي يناسبكم، ويسعدني تلبية أي طلب أو استفسار، مع متابعة طلباتكم شخصيًا حتى يتم تنفيذها بأفضل جودة وفي أسرع وقت.
-
-⭐ نعتز بثقتكم، ونتطلع إلى استمرار التعاون معكم، ويسعدني معرفة اليوم والوقت المناسبين لزيارتكم.
-
-مع خالص الشكر والتقدير،
-
-${delegateName}
-مندوب مبيعات زيت سوفانا`;
-      
-      const messageText = encodeURIComponent(fallbackPitchMsg);
-      window.location.href = formatWhatsAppLink(customer.phone, messageText);
+      const messageText = NEW_CUSTOMER_MSG(delegateName);
+      window.location.href = formatWhatsAppLink(customer.phone, encodeURIComponent(messageText));
+    } catch (err: any) {
+      console.error("WA message error:", err);
     } finally {
       setWaLoadingId(null);
     }
@@ -747,24 +687,7 @@ ${delegateName}
 
   const generateAIPitchMessage = (type: string, clientName: string) => {
     const delegateName = currentUser?.name || 'المندوب';
-    return `السلام عليكم ورحمة الله وبركاته،
-
-معكم ${delegateName}، مندوب مبيعات زيت سوفانا.
-
-أتمنى أن تكونوا بخير وفي أتم الصحة والعافية.
-
-يسعدني التواصل معكم والتعريف بمنتجات زيت سوفانا، التي تحظى بثقة العديد من العملاء بفضل جودتها العالية، وتنوع عبواتها، وأسعارها التنافسية، مع الالتزام بتقديم خدمة متميزة وسرعة في تلبية الطلبات.
-
-🤝 يشرفني أن أكون مسؤولًا عن خدمتكم، وأن أقدم لكم أحدث العروض، وأجيب عن جميع استفساراتكم، بما يساعدكم على اختيار المنتجات المناسبة لاحتياجاتكم.
-
-📅 أتطلع إلى فرصة تشريفكم بزيارة في أقرب وقت يناسبكم، للتعريف بمنتجات زيت سوفانا واستعراض العروض الحالية، وبداية تعاون مثمر بإذن الله.
-
-نسعد بثقتكم، ونتطلع إلى بناء شراكة ناجحة ومستدامة معكم.
-
-وتفضلوا بقبول فائق الاحترام والتقدير،
-
-${delegateName}
-مندوب مبيعات زيت سوفانا`;
+    return NEW_CUSTOMER_MSG(delegateName);
   };
 
   const handleAddMapLeadToGoogleLeads = (lead: any) => {
@@ -1033,23 +956,11 @@ ${delegateName}
   };
 
   const exportCustomersDirectoryAsPDF = () => {
-    const iframe = document.createElement('iframe');
-    iframe.style.position = 'fixed';
-    iframe.style.top = '-1000px';
-    iframe.style.left = '-1000px';
-    iframe.style.width = '210mm';
-    iframe.style.height = '297mm';
-    document.body.appendChild(iframe);
-
-    const doc = iframe.contentWindow?.document;
-    if (!doc) return;
-
     let filterSummary = 'عرض دليل ومستند العملاء بالكامل';
     if (searchQuery.trim()) filterSummary += ` - تصفية البحث بالعبارة: "${searchQuery}"`;
     if (govSearchQuery.trim()) filterSummary += ` - المحافظة: "${govSearchQuery}"`;
 
-    doc.open();
-    doc.write(`
+    const html = `
       <html dir="rtl" lang="ar">
         <head>${COMPACT_PRO_CSS}</head>
         <body>
@@ -1101,16 +1012,8 @@ ${delegateName}
           </div>
         </body>
       </html>
-    `);
-    doc.close();
-
-    setTimeout(() => {
-      iframe.contentWindow?.focus();
-      iframe.contentWindow?.print();
-      setTimeout(() => {
-        document.body.removeChild(iframe);
-      }, 500);
-    }, 500);
+    `;
+    printHTMLInNewWindow(html);
   };
 
   // Filtering

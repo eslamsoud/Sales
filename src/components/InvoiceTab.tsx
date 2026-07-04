@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { COMPACT_PRO_CSS } from '../utils/reportStyles';
+import { COMPACT_PRO_CSS, printHTMLInNewWindow, ensureFontsLoaded } from '../utils/reportStyles';
 import { confirmDialog, duaConfirmDialog } from '../utils/confirm';
 /**
  * @license
@@ -654,7 +654,8 @@ export default function InvoiceTab({
     const customerObj = inv.customer || customers.find((c: any) => c.id === inv.customerId);
     if (!customerObj) return null;
 
-    // Retrieve settings
+    ensureFontsLoaded();
+
     const storedSetStr = localStorage.getItem('app_settings_sys');
     let invoiceAppName = 'فاتورة مبيعات معتمدة';
     let invoiceRepName = inv.delegateName?.replace(/ \(.*?\)/g, '').trim() || currentUser?.name?.replace(/ \(.*?\)/g, '').trim() || '';
@@ -664,225 +665,299 @@ export default function InvoiceTab({
         const parsed = JSON.parse(storedSetStr);
         if (parsed.appName && parsed.appName !== 'الاخوه EAGS لخدمات التوزيع') {
           invoiceAppName = parsed.appName;
-        } else {
-          invoiceAppName = 'فاتورة مبيعات معتمدة';
         }
         if (!invoiceRepName && parsed.representativeName) invoiceRepName = parsed.representativeName;
         if (!invoiceRepPhone && parsed.representativePhone) invoiceRepPhone = parsed.representativePhone;
-      } catch (e) {
-        console.error(e);
-      }
+      } catch {}
     }
+    const formattedDate = new Date(inv.date).toLocaleString('ar-EG');
+
+    const W = 1600;
+    const padX = 50;
+    const tableW = W - padX * 2;
+    const rowH = 72;
+    const headerH = 200;
+    const customerBoxH = 130;
+    const tableHeaderH = 52;
+    const tableRowsH = inv.items.length * rowH;
+    const summaryH = (inv._debtPaid || inv._partialPayment !== undefined ? 260 : 220);
+    const footerH = 110;
+    const totalH = headerH + 16 + customerBoxH + 24 + tableHeaderH + tableRowsH + 24 + summaryH + footerH + 40;
 
     const canvas = document.createElement('canvas');
-    const rowHeight = 45;
-    const baseHeight = 350;
-    canvas.width = 650;
-    canvas.height = baseHeight + inv.items.length * rowHeight + 300;
-
+    const TARGET_W = 3840;
+    const dpr = Math.max(window.devicePixelRatio || 1, TARGET_W / W);
+    canvas.width = W * dpr;
+    canvas.height = totalH * dpr;
+    canvas.style.width = W + 'px';
+    canvas.style.height = totalH + 'px';
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
+    ctx.scale(dpr, dpr);
     ctx.direction = 'rtl';
 
-    // Fill white background
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    const rr = (x: number, y: number, w: number, h: number, r: number) => {
+      ctx.beginPath(); ctx.moveTo(x+r, y); ctx.lineTo(x+w-r, y);
+      ctx.quadraticCurveTo(x+w, y, x+w, y+r); ctx.lineTo(x+w, y+h-r);
+      ctx.quadraticCurveTo(x+w, y+h, x+w-r, y+h); ctx.lineTo(x+r, y+h);
+      ctx.quadraticCurveTo(x, y+h, x, y+h-r); ctx.lineTo(x, y+r);
+      ctx.quadraticCurveTo(x, y, x+r, y); ctx.closePath();
+    };
 
-    ctx.fillStyle = '#1e3a8a';
-    ctx.fillRect(15, 20, canvas.width - 30, 120);
+    ctx.fillStyle = '#faf8f5';
+    ctx.fillRect(0, 0, W, totalH);
 
-    // Brand titles
-    ctx.fillStyle = '#ffffff';
-    ctx.textAlign = 'right';
-    ctx.font = 'bold 24px system-ui, sans-serif';
-    ctx.fillText('فاتورة مبيعات معتمدة', canvas.width - 40, 65);
-
-    ctx.font = 'bold 13px system-ui, sans-serif';
-    ctx.fillStyle = '#93c5fd';
-    ctx.fillText('التوزيع والمبيعات الميدانية الذكية', canvas.width - 40, 95);
-
-    ctx.textAlign = 'left';
-    ctx.font = 'bold 14px system-ui, sans-serif';
-    ctx.fillStyle = '#38bdf8';
-    ctx.fillText(`رقم الفاتورة: ${inv.invoiceNumber}`, 40, 65);
-
-    ctx.font = '500 11px system-ui, sans-serif';
-    ctx.fillStyle = '#ffffff';
-    const formattedDate = new Date(inv.date).toLocaleString('ar-EG');
-    ctx.fillText(`التاريخ: ${formattedDate}`, 40, 95);
-
-    // Customer Information Block
-    let y = 175;
-    ctx.fillStyle = '#f8fafc';
-    ctx.fillRect(35, y - 20, canvas.width - 70, 75);
-    ctx.strokeStyle = '#e2e8f0';
-    ctx.lineWidth = 1;
-    ctx.strokeRect(35, y - 20, canvas.width - 70, 75);
-
-    ctx.fillStyle = '#0f172a';
-    ctx.textAlign = 'right';
-    ctx.font = 'bold 14px system-ui, sans-serif';
-    ctx.fillText(`العميل: ${customerObj.name}`, canvas.width - 55, y + 10);
-    
-    ctx.font = '500 12px system-ui, sans-serif';
-    ctx.fillStyle = '#475569';
-    ctx.fillText(`المحافظة والمنطقة: ${customerObj.governorate ? `${customerObj.governorate} - ` : ''}${customerObj.area}   |   رقم الهاتف: ${customerObj.phone}`, canvas.width - 55, y + 38);
-
-    // Table Header
-    y += 100;
-    ctx.fillStyle = '#1e293b';
-    ctx.fillRect(35, y - 25, canvas.width - 70, 35);
+    // ── Header ──
+    const headerGrad = ctx.createLinearGradient(0, 0, W, 0);
+    headerGrad.addColorStop(0, '#0f172a');
+    headerGrad.addColorStop(0.5, '#1e3a5f');
+    headerGrad.addColorStop(1, '#1e40af');
+    ctx.fillStyle = headerGrad;
+    rr(12, 12, W - 24, headerH, 10);
+    ctx.fill();
+    ctx.fillStyle = '#d4a843';
+    ctx.fillRect(12, 12 + headerH - 4, W - 24, 4);
 
     ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 12px system-ui, sans-serif';
-    
-    ctx.textAlign = 'right';
-    ctx.fillText('المنتج والصنف', canvas.width - 55, y - 3);
-
     ctx.textAlign = 'center';
-    ctx.fillText('الكمية', canvas.width - 220, y - 3);
-    ctx.fillText('السعر', canvas.width - 310, y - 3);
-    ctx.fillText('الخصم', canvas.width - 400, y - 3);
+    ctx.font = '900 36px Cairo, system-ui, sans-serif';
+    ctx.fillText('فاتورة مبيعات معتمدة', W / 2, 72);
+    ctx.font = '600 20px Cairo, system-ui, sans-serif';
+    ctx.fillStyle = '#94a3b8';
+    ctx.fillText(invoiceAppName, W / 2, 104);
 
+    // Badges - positioned from edges to prevent overlap
+    const badgesY = 128;
+    const invBadgeText = `رقم: ${inv.invoiceNumber}`;
+    const invBadgeW = ctx.measureText(invBadgeText).width + 40;
+    ctx.fillStyle = '#1e40af';
+    rr(W - padX - invBadgeW, badgesY, invBadgeW, 34, 17);
+    ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '700 16px Cairo, system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(invBadgeText, W - padX - invBadgeW / 2, badgesY + 22);
+
+    const dateBadgeText = formattedDate;
+    const dateBadgeW = ctx.measureText(dateBadgeText).width + 40;
+    ctx.fillStyle = '#059669';
+    rr(padX, badgesY, dateBadgeW, 34, 17);
+    ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(dateBadgeText, padX + dateBadgeW / 2, badgesY + 22);
+
+    ctx.fillStyle = '#cbd5e1';
+    ctx.font = '500 16px Cairo, system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('فاتورة مبيعات', W / 2, badgesY + 22);
+
+    let y = 12 + headerH + 16;
+
+    // ── Customer Box ──
+    ctx.fillStyle = '#f0f9ff';
+    rr(padX, y, tableW, customerBoxH, 12);
+    ctx.fill();
+    ctx.strokeStyle = '#bae6fd';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(padX + 14, y);
+    ctx.lineTo(padX + tableW - 14, y);
+    ctx.stroke();
+
+    ctx.fillStyle = '#1e293b';
+    ctx.font = '800 22px Cairo, system-ui, sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillText(`العميل: ${customerObj.name}`, padX + tableW - 30, y + 44);
+
+    ctx.fillStyle = '#475569';
+    ctx.font = '600 18px Cairo, system-ui, sans-serif';
+    ctx.fillText(`المحافظة: ${customerObj.governorate || '—'} - ${customerObj.area || '—'}   |   الهاتف: ${customerObj.phone}`, padX + tableW - 30, y + 82);
+
+    y += customerBoxH + 20;
+
+    // ── Table Header ──
+    const thGrad = ctx.createLinearGradient(0, y, 0, y + tableHeaderH);
+    thGrad.addColorStop(0, '#1e3a5f');
+    thGrad.addColorStop(1, '#0f172a');
+    ctx.fillStyle = thGrad;
+    rr(padX, y, tableW, tableHeaderH, 10);
+    ctx.fill();
+
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '700 18px Cairo, system-ui, sans-serif';
+    const colNum = padX + tableW - 50;
+    const colProduct = padX + tableW - 250;
+    const colQty = padX + tableW - 500;
+    const colPrice = padX + tableW - 700;
+    const colDiscount = padX + tableW - 900;
+    const colTotal = padX + 100;
+    ctx.textAlign = 'center';
+    ctx.fillText('م', colNum, y + 34);
+    ctx.textAlign = 'right';
+    ctx.fillText('المنتج والحجم', colProduct, y + 34);
+    ctx.textAlign = 'center';
+    ctx.fillText('الكمية', colQty, y + 34);
+    ctx.fillText('السعر', colPrice, y + 34);
+    ctx.fillText('الخصم', colDiscount, y + 34);
     ctx.textAlign = 'left';
-    ctx.fillText('الصافي', 60, y - 3);
+    ctx.fillText('الصافي', colTotal, y + 34);
+    y += tableHeaderH;
 
-    // Loop through bill items
-    y += 15;
+    // ── Table Rows ──
     inv.items.forEach((item: InvoiceItem, idx: number) => {
       const prod = products.find(p => String(p.id).trim() === String(item.productId).trim());
       const ws = prod ? getProductWeightsFallback(prod) : [];
       const weight = ws.find(w => String(w.id).trim() === String(item.weightId).trim()) || ws[0];
-      const prodName = prod ? prod.name : 'منتج غير معروف';
+      const prodName = prod ? prod.name : 'منتج';
       const sizeLabel = weight ? weight.size : '';
-
       const multiplier = weight ? (weight.unitsPerCarton || 12) : 12;
       const qtyLabel = formatCartonsAndPieces(item.quantity, multiplier);
       const cartonOriginalPrice = item.originalPrice * multiplier;
-      const cartonFinalPrice = item.finalPrice * multiplier;
+      const singleItemTotal = item.finalPrice * item.quantity;
 
-      if (idx % 2 === 0) {
-        ctx.fillStyle = '#f8fafc';
-        ctx.fillRect(35, y - 10, canvas.width - 70, rowHeight);
-      } else {
-        ctx.fillStyle = '#ffffff';
-        ctx.fillRect(35, y - 10, canvas.width - 70, rowHeight);
-      }
+      ctx.fillStyle = idx % 2 === 0 ? '#ffffff' : '#f1f5f9';
+      ctx.fillRect(padX, y, tableW, rowH);
+      ctx.strokeStyle = '#e2e8f0';
+      ctx.lineWidth = 0.5;
+      ctx.beginPath();
+      ctx.moveTo(padX, y + rowH);
+      ctx.lineTo(padX + tableW, y + rowH);
+      ctx.stroke();
 
-      ctx.strokeStyle = '#f1f5f9';
-      ctx.lineWidth = 1;
-      ctx.strokeRect(35, y - 10, canvas.width - 70, rowHeight);
-
-      ctx.fillStyle = '#b91c1c';
-      ctx.font = 'bold 12px system-ui, sans-serif';
+      ctx.fillStyle = '#94a3b8';
+      ctx.font = '700 18px Cairo, system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(String(idx + 1), colNum, y + 42);
       ctx.textAlign = 'right';
-      // Truncate long names
-      const maxNameLen = 18;
+      ctx.fillStyle = '#1e3a5f';
+      ctx.font = '700 18px Cairo, system-ui, sans-serif';
+      const maxNameLen = 22;
       const truncName = prodName.length > maxNameLen ? prodName.substring(0, maxNameLen) + '..' : prodName;
-      ctx.fillText(`${truncName} (${sizeLabel})`, canvas.width - 55, y + 16);
-
+      ctx.fillText(`${truncName} (${sizeLabel})`, colProduct, y + 42);
       ctx.textAlign = 'center';
       ctx.fillStyle = '#0f172a';
-      ctx.fillText(qtyLabel, canvas.width - 220, y + 16);
-
+      ctx.font = '600 18px Cairo, system-ui, sans-serif';
+      ctx.fillText(qtyLabel, colQty, y + 42);
       ctx.fillStyle = '#475569';
-      ctx.font = 'bold 12px system-ui, sans-serif';
-      ctx.fillText(`${cartonOriginalPrice.toFixed(0)} ج.م`, canvas.width - 310, y + 16);
-      
-      ctx.fillStyle = '#ea580c';
-      ctx.font = 'bold 12px system-ui, sans-serif';
-      ctx.fillText(`${item.discountPercent}%`, canvas.width - 400, y + 16);
-
+      ctx.font = '700 18px Tajawal, system-ui, sans-serif';
+      ctx.fillText(`${cartonOriginalPrice.toLocaleString('ar-EG')} ج.م`, colPrice, y + 42);
+      ctx.fillStyle = item.discountPercent > 0 ? '#dc2626' : '#94a3b8';
+      ctx.fillText(item.discountPercent > 0 ? `${item.discountPercent}%` : '—', colDiscount, y + 42);
       ctx.textAlign = 'left';
-      ctx.fillStyle = '#0f172a';
-      ctx.font = 'extrabold 12px system-ui, sans-serif';
-      const singleItemTotal = item.finalPrice * item.quantity;
-      ctx.fillText(`${singleItemTotal.toFixed(0)} ج.م`, 60, y + 16);
-
-      y += rowHeight;
+      ctx.fillStyle = '#1e3a5f';
+      ctx.font = '800 20px Tajawal, system-ui, sans-serif';
+      ctx.fillText(`${singleItemTotal.toLocaleString('ar-EG')} ج.م`, colTotal, y + 42);
+      y += rowH;
     });
 
-    // Summary calculations card
-    y += 15;
+    y += 16;
+
+    // ── Summary Card ──
     const isPartialOrPaid = inv._debtPaid || inv._partialPayment !== undefined;
-    const summaryLines = isPartialOrPaid ? 6 : 5;
-    const cardHeight = summaryLines * 25 + 10;
-    
+    const sumCardH = isPartialOrPaid ? 240 : 200;
     ctx.fillStyle = '#eff6ff';
-    ctx.fillRect(35, y, canvas.width - 70, cardHeight);
+    rr(padX, y, tableW * 0.55, sumCardH, 12);
+    ctx.fill();
     ctx.strokeStyle = '#bfdbfe';
-    ctx.lineWidth = 1.5;
-    ctx.strokeRect(35, y, canvas.width - 70, cardHeight);
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(padX + tableW * 0.55 - 14, y);
+    ctx.lineTo(padX + 14, y);
+    ctx.stroke();
 
     ctx.textAlign = 'right';
-    let summaryY = y + 22;
-
-    const drawLine = (label: string, value: string, color: string, isBold: boolean = false) => {
+    let sumY = y + 32;
+    const drawLine = (label: string, value: string, color: string, bold = false) => {
       ctx.fillStyle = '#1e3a8a';
+      ctx.font = '700 19px Cairo, system-ui, sans-serif';
       ctx.textAlign = 'right';
-      ctx.font = 'bold 13px system-ui, sans-serif';
-      ctx.fillText(label, canvas.width - 55, summaryY);
-
+      ctx.fillText(label, padX + tableW * 0.55 - 20, sumY);
       ctx.textAlign = 'left';
       ctx.fillStyle = color;
-      ctx.font = isBold ? 'extrabold 15px system-ui, sans-serif' : 'bold 13px system-ui, sans-serif';
-      ctx.fillText(value, 55, summaryY);
-      summaryY += 25;
+      ctx.font = bold ? '900 22px Tajawal, system-ui, sans-serif' : '700 19px Tajawal, system-ui, sans-serif';
+      ctx.fillText(value, padX + 20, sumY);
+      sumY += 36;
     };
 
-    drawLine('الإجمالي قبل الخصم:', `${formatNum(inv.totalBeforeDiscount)}ج.م`, '#475569');
-    drawLine('إجمالي الخصومات:', `-${formatNum(inv.totalBeforeDiscount - inv.totalAfterDiscount)}ج.م`, '#dc2626');
-    drawLine('الصافي المطلوب:', `${formatNum(inv.totalAfterDiscount)}ج.م`, '#1e40af', true);
+    drawLine('الإجمالي قبل الخصم:', `${inv.totalBeforeDiscount.toLocaleString('ar-EG')} ج.م`, '#475569');
+    drawLine('إجمالي الخصومات:', `-${(inv.totalBeforeDiscount - inv.totalAfterDiscount).toLocaleString('ar-EG')} ج.م`, '#dc2626');
+    drawLine('الصافي المطلوب:', `${inv.totalAfterDiscount.toLocaleString('ar-EG')} ج.م`, '#1e40af', true);
 
     if (isPartialOrPaid) {
       const prev = inv._previousPaid || 0;
       const currentPay = inv._debtPaid ? (inv.totalAfterDiscount - prev) : inv._partialPayment;
       const remainingNow = inv.totalAfterDiscount - (prev + currentPay);
-
-      drawLine('المسدد من قبل:', `${formatNum(prev)} ج.m`, '#475569');
-      drawLine('المسدد الآن:', `${formatNum(currentPay)}ج.م`, '#16a34a', true);
-      drawLine(inv._debtPaid ? 'حالة الفاتورة:' : 'المتبقي الحالي:', inv._debtPaid ? 'خالصة ✔️' : `${formatNum(remainingNow)}ج.م`, inv._debtPaid ? '#10b981' : '#ea580c', true);
+      drawLine('المسدد من قبل:', `${prev.toLocaleString('ar-EG')} ج.م`, '#475569');
+      drawLine('المسدد الآن:', `${currentPay.toLocaleString('ar-EG')} ج.م`, '#16a34a', true);
+      drawLine(inv._debtPaid ? 'حالة الفاتورة:' : 'المتبقي:', inv._debtPaid ? 'خالصة' : `${remainingNow.toLocaleString('ar-EG')} ج.م`, inv._debtPaid ? '#10b981' : '#ea580c', true);
     } else {
-      drawLine('المسدد:', `${formatNum(inv.paidAmount)}ج.م`, '#16a34a', true);
-      drawLine('المتبقي:', `${formatNum(inv.totalAfterDiscount - inv.paidAmount)}ج.م`, '#ea580c', true);
+      drawLine('المسدد:', `${inv.paidAmount.toLocaleString('ar-EG')} ج.م`, '#16a34a', true);
+      drawLine('المتبقي (مديونية):', `${(inv.totalAfterDiscount - inv.paidAmount).toLocaleString('ar-EG')} ج.م`, '#ea580c', true);
     }
 
-    // Footer
-    y = summaryY + 15;
+    y += sumCardH + 20;
 
-    ctx.strokeStyle = '#cbd5e1';
-    ctx.lineWidth = 1;
+    // ── Footer ──
+    ctx.strokeStyle = '#d5d0c8';
+    ctx.lineWidth = 1.5;
     ctx.beginPath();
-    ctx.moveTo(35, y);
-    ctx.lineTo(canvas.width - 35, y);
+    ctx.moveTo(padX, y);
+    ctx.lineTo(W - padX, y);
     ctx.stroke();
+    y += 16;
 
-    y += 24;
+    const sigW = (tableW - 30) / 2;
+    const sigH = 72;
+    rr(padX, y, sigW, sigH, 8);
+    ctx.fillStyle = '#ffffff';
+    ctx.fill();
+    ctx.strokeStyle = '#cbd5e1';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    ctx.fillStyle = '#1e293b';
+    ctx.font = '700 18px Cairo, system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('مستلم البضاعة (العميل)', padX + sigW / 2, y + 30);
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = '500 16px Cairo, system-ui, sans-serif';
+    ctx.fillText('التوقيع', padX + sigW / 2, y + 56);
+
+    rr(padX + sigW + 30, y, sigW, sigH, 8);
+    ctx.fillStyle = '#ffffff';
+    ctx.fill();
+    ctx.strokeStyle = '#cbd5e1';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    ctx.fillStyle = '#1e293b';
+    ctx.font = '700 18px Cairo, system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('المندوب المفوض', padX + sigW + 30 + sigW / 2, y + 30);
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = '500 16px Cairo, system-ui, sans-serif';
+    ctx.fillText('التوقيع', padX + sigW + 30 + sigW / 2, y + 56);
+
+    y += sigH + 16;
+
+    // Rep info
     ctx.fillStyle = '#1e3a8a';
     ctx.textAlign = 'right';
-    ctx.font = 'bold 12px system-ui, sans-serif';
-    
+    ctx.font = '600 16px Cairo, system-ui, sans-serif';
     if (invoiceRepName) {
-      ctx.fillText(`المندوب المفوض: ${invoiceRepName}   |   رقم هاتف التواصل: ${invoiceRepPhone}`, canvas.width - 40, y);
+      ctx.fillText(`المندوب المفوض: ${invoiceRepName}  |  هاتف التواصل: ${invoiceRepPhone}`, W - padX, y);
     } else {
-      ctx.fillText('إدارة المبيعات والتوزيع المعتمدة   |   هاتف التواصل والطلب: 01228466613', canvas.width - 40, y);
+      ctx.fillText('إدارة المبيعات والتوزيع المعتمدة  |  هاتف التواصل: 01228466613', W - padX, y);
     }
 
-    ctx.fillStyle = '#64748b';
     ctx.textAlign = 'left';
-    ctx.font = 'bold 10px system-ui, sans-serif';
-    ctx.fillText('تاريخ التوريد والطباعة', 40, y);
+    ctx.fillStyle = '#10b981';
+    ctx.font = '700 16px Cairo, system-ui, sans-serif';
+    ctx.fillText('صحيح ومعتمد', padX, y);
 
-    y += 20;
+    y += 24;
     ctx.fillStyle = '#94a3b8';
-    ctx.textAlign = 'right';
-    ctx.font = '500 10px system-ui, sans-serif';
-    ctx.fillText(`نظام المبيعات الذكي - بوابة تأمين المبيعات والمناديب الذكية`, canvas.width - 40, y);
-
-    ctx.textAlign = 'left';
-    ctx.font = 'bold 10px system-ui, sans-serif';
-    ctx.fillStyle = '#ea580c';
-    ctx.fillText('صحيح ومعتمد ✔️', 40, y);
+    ctx.textAlign = 'center';
+    ctx.font = '500 14px Cairo, system-ui, sans-serif';
+    ctx.fillText(`نظام المبيعات الذكي  —  ${formattedDate}`, W / 2, y);
 
     if (returnDataUrl) {
       return canvas.toDataURL('image/png');
@@ -891,7 +966,7 @@ export default function InvoiceTab({
     if (shareDirectly && navigator.share) {
       canvas.toBlob((blob) => {
         if (blob) {
-          const file = new File([blob], `فاتورة_مبيعات_${customerObj.name}_${inv.invoiceNumber}.png`, { type: 'image/png' });
+          const file = new File([blob], `فاتورة_${customerObj.name}_${inv.invoiceNumber}.png`, { type: 'image/png' });
           navigator.share({
             title: `فاتورة ${inv.invoiceNumber}`,
             text: `الفاتورة الخاصة بالعميل ${customerObj.name}`,
@@ -902,7 +977,7 @@ export default function InvoiceTab({
     } else {
       const downloadLink = document.createElement('a');
       downloadLink.href = canvas.toDataURL('image/png');
-      downloadLink.download = `فاتورة_مبيعات_${customerObj.name}_${inv.invoiceNumber}.png`;
+      downloadLink.download = `فاتورة_${customerObj.name}_${inv.invoiceNumber}.png`;
       downloadLink.click();
     }
   };
@@ -926,23 +1001,11 @@ export default function InvoiceTab({
   const printInvoiceHTMLDirectly = (inv: any) => {
     if (isPrintingRef.current) return;
     isPrintingRef.current = true;
-    setIsPrinting(true); // تفعيل القفل لمنع إرسال 6 أوامر طباعة للطابعة بالخطأ
-    
-    const iframe = document.createElement('iframe');
-    iframe.style.position = 'fixed';
-    iframe.style.top = '-1000px';
-    iframe.style.left = '-1000px';
-    iframe.style.width = '210mm';
-    iframe.style.height = '297mm';
-    document.body.appendChild(iframe);
-
-    const doc = iframe.contentWindow?.document;
-    if (!doc) return;
+    setIsPrinting(true);
 
     const customerObj = inv.customer || customers.find((c: any) => c.id === inv.customerId);
     const formattedDate = new Date(inv.date).toLocaleString('ar-EG', { dateStyle: 'medium', timeStyle: 'short' });
 
-    // Retrieve settings
     const storedSetStr = localStorage.getItem('app_settings_sys');
     let invoiceAppName = 'سمن وزيت سوفانا الفاخر';
     let invoiceRepName = inv.delegateName?.replace(/ \(.*?\)/g, '').trim() || currentUser?.name?.replace(/ \(.*?\)/g, '').trim() || '';
@@ -958,8 +1021,7 @@ export default function InvoiceTab({
       }
     }
 
-    doc.open();
-    doc.write(`
+    const html = `
       <!DOCTYPE html>
       <html dir="rtl" lang="ar">
       <head>${COMPACT_PRO_CSS}</head>
@@ -974,18 +1036,18 @@ export default function InvoiceTab({
           </div>
         </div>
         
-        <div class="sg">
+        <div class="sg" style="grid-template-columns:repeat(2,1fr)">
           <div class="sb bl">
             <div class="l">العميل المستلم</div>
-            <div class="v" style="font-size:11px;text-align:right">اسم المحل: <b>${customerObj?.name || 'غير معروف'}</b></div>
-            <div class="v" style="font-size:11px;text-align:right">المحافظة والمنطقة: <b>${customerObj?.governorate ? `${customerObj.governorate} - ` : ''}${customerObj?.area || 'المنطقة الافتراضية'}</b></div>
-            <div class="v" style="font-size:11px;text-align:right">الهاتف: <span style="font-family:monospace">${customerObj?.phone || 'غير متوفر'}</span></div>
+            <div class="v" style="font-size:13px;text-align:right">اسم المحل: <b>${customerObj?.name || 'غير معروف'}</b></div>
+            <div class="v" style="font-size:13px;text-align:right">المحافظة والمنطقة: <b>${customerObj?.governorate ? `${customerObj.governorate} - ` : ''}${customerObj?.area || 'المنطقة الافتراضية'}</b></div>
+            <div class="v" style="font-size:13px;text-align:right">الهاتف: <span style="font-family:monospace">${customerObj?.phone || 'غير متوفر'}</span></div>
           </div>
           <div class="sb gr">
             <div class="l">المندوب المسؤول</div>
-            <div class="v" style="font-size:11px;text-align:right">اسم المندوب: <b>${invoiceRepName || 'شريك مبيعات معتمد'}</b></div>
-            <div class="v" style="font-size:11px;text-align:right">هاتف التواصل: <span style="font-family:monospace">${invoiceRepPhone || '—'}</span></div>
-            ${inv.notes ? `<div class="v" style="font-size:11px;text-align:right">ملاحظات: <span style="color:#d97706">${inv.notes}</span></div>` : ''}
+            <div class="v" style="font-size:13px;text-align:right">اسم المندوب: <b>${invoiceRepName || 'شريك مبيعات معتمد'}</b></div>
+            <div class="v" style="font-size:13px;text-align:right">هاتف التواصل: <span style="font-family:monospace">${invoiceRepPhone || '—'}</span></div>
+            ${inv.notes ? `<div class="v" style="font-size:13px;text-align:right">ملاحظات: <span style="color:#d97706">${inv.notes}</span></div>` : ''}
           </div>
         </div>
         
@@ -1030,7 +1092,7 @@ export default function InvoiceTab({
           </tbody>
         </table>
         
-        <table style="width:45%;margin-left:0;margin-right:auto">
+        <table style="width:55%;margin-left:0;margin-right:auto">
           <thead>
             <tr class="tt">
               <td colspan="2" style="text-align:center;font-weight:900;font-size:12px">ملخص الفاتورة</td>
@@ -1072,17 +1134,11 @@ export default function InvoiceTab({
         </div>
       </body>
       </html>
-    `);
-    doc.close();
-
+    `;
+    printHTMLInNewWindow(html);
     setTimeout(() => {
-      iframe.contentWindow?.focus();
-      iframe.contentWindow?.print();
-      setTimeout(() => {
-        document.body.removeChild(iframe);
-        isPrintingRef.current = false;
-        setIsPrinting(false);
-      }, 500);
+      isPrintingRef.current = false;
+      setIsPrinting(false);
     }, 500);
   };
 

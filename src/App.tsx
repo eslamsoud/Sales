@@ -345,6 +345,7 @@ export default function App() {
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   const [googleLeads, setGoogleLeads] = useState<any[]>([]);
   const [potentialLeads, setPotentialLeads] = useState<any[]>([]);
+  const [archiveCycles, setArchiveCycles] = useState<any[]>([]);
 
   useEffect(() => {
     localStorage.setItem('google_leads_staging_sys', JSON.stringify(googleLeads));
@@ -421,8 +422,8 @@ export default function App() {
   // مرجع لتخزين أحدث حالة للبيانات لمنع مشكلة (Stale Closure) أثناء المزامنة التلقائية
   const latestDataRef = useRef({ products, factoryLoads, customers, invoices, expenses, trips, usersList, googleLeads, potentialLeads, settings, dbVersion, currentUser });
   useEffect(() => {
-    latestDataRef.current = { products, factoryLoads, customers, invoices, expenses, trips, usersList, googleLeads, potentialLeads, settings, dbVersion, currentUser };
-  }, [products, factoryLoads, customers, invoices, expenses, trips, usersList, googleLeads, potentialLeads, settings, dbVersion, currentUser]);
+    latestDataRef.current = { products, factoryLoads, customers, invoices, expenses, trips, usersList, googleLeads, potentialLeads, settings, dbVersion, currentUser, archiveCycles };
+  }, [products, factoryLoads, customers, invoices, expenses, trips, usersList, googleLeads, potentialLeads, settings, dbVersion, currentUser, archiveCycles]);
 
   // ☁️ مزامنة تلقائية صامتة عند بدء تشغيل التطبيق لضمان سحب أحدث بيانات المناديب والأسعار من السحاب
   useEffect(() => {
@@ -485,10 +486,10 @@ export default function App() {
   useEffect(() => {
     async function loadData() {
       try {
-        const [ prod, fact, cust, inv, exp, tr, logs, set ] = await Promise.all([
+        const [ prod, fact, cust, inv, exp, tr, logs, set, archive ] = await Promise.all([
           idbGet('products_sys'), idbGet('factory_sys'), idbGet('customers_sys'),
           idbGet('invoices_sys'), idbGet('expenses_sys'), idbGet('trips_sys'),
-          idbGet('sync_logs_sys'), idbGet('settings_sys')
+          idbGet('sync_logs_sys'), idbGet('settings_sys'), idbGet('factory_archive_cycles_sys')
         ]);
 
         const migrate = (idbData: any, localKey: string, defaultData: any) => {
@@ -595,6 +596,33 @@ export default function App() {
         setGoogleLeads(loadedGoogleLeads);
         setPotentialLeads(loadedPotentialLeads);
         setSettings({ ...loadedSettings, workAreas: derivedWorkAreas });
+
+        // تحميل أرشيف دورات المصنع مع ترحيل من localStorage القديم
+        let loadedArchive: any[] = archive || [];
+        if (!loadedArchive || loadedArchive.length === 0) {
+          // محاولة ترحيل من localStorage القديم (كل المفاتيح المحتملة)
+          const delegatePhones = new Set<string>();
+          for (let i = 0; i < localStorage.length; i++) {
+            const k = localStorage.key(i);
+            if (k && k.startsWith('factory_archive_cycles_')) {
+              const suffix = k.replace('factory_archive_cycles_', '');
+              delegatePhones.add(suffix);
+            }
+          }
+          delegatePhones.forEach(suffix => {
+            try {
+              const raw = localStorage.getItem(`factory_archive_cycles_${suffix}`);
+              if (raw) {
+                const parsed = JSON.parse(raw);
+                if (Array.isArray(parsed) && parsed.length > 0) {
+                  loadedArchive = [...loadedArchive, ...parsed];
+                }
+                localStorage.removeItem(`factory_archive_cycles_${suffix}`);
+              }
+            } catch {}
+          });
+        }
+        setArchiveCycles(loadedArchive);
       } catch (e) { console.error("DB Load Error", e); } finally { setIsDbLoaded(true); }
     }
     loadData();
@@ -742,6 +770,7 @@ export default function App() {
   useEffect(() => { if (isDbLoaded) idbSet('expenses_sys', expenses); }, [expenses, isDbLoaded]);
   useEffect(() => { if (isDbLoaded) idbSet('trips_sys', trips); }, [trips, isDbLoaded]);
   useEffect(() => { if (isDbLoaded) idbSet('sync_logs_sys', syncLogs); }, [syncLogs, isDbLoaded]);
+  useEffect(() => { if (isDbLoaded) idbSet('factory_archive_cycles_sys', archiveCycles); }, [archiveCycles, isDbLoaded]);
   useEffect(() => { 
     if (isDbLoaded) {
       idbSet('settings_sys', settings);
@@ -952,29 +981,39 @@ export default function App() {
   const handleArchiveFactoryCycle = (delegatePhone: string, delegateName: string) => {
     const cleanName = (delegateName || '').replace(/\s*\(.*?\)/g, '').trim();
     
-    setFactoryLoads(prev => prev.filter(l => {
-      const lPhone = (l.delegatePhone || '').trim();
-      const lName = (l.delegateName || '').replace(/\s*\(.*?\)/g, '').trim();
-      
-      const match = (delegatePhone && lPhone === delegatePhone) || (cleanName && lName === cleanName);
-      return !match;
-    }));
+    const ref = latestDataRef.current;
 
-    setExpenses(prev => prev.filter(e => {
-      if (e.category === 'سداد للمصنع' || e.type === 'factory_payment') {
-        const ePhone = (e.delegatePhone || '').trim();
-        const eName = (e.delegateName || '').replace(/\s*\(.*?\)/g, '').trim();
-        const eNotes = e.description || '';
-        
-        const matchByPhone = delegatePhone && ePhone === delegatePhone;
-        const matchByName = cleanName && eName === cleanName;
-        const matchByAdmin = ePhone === 'admin' || eName === 'المدير العام';
-        const matchByNote = eNotes.includes('نيابة عن') && delegateName && eNotes.includes(delegateName);
-        
-        return !(matchByPhone || matchByName || matchByAdmin || matchByNote);
-      }
-      return true;
-    }));
+    // 1) Compute IDs to delete from CURRENT state (not from setState callback)
+    const toDeleteLoadIds = ref.factoryLoads
+      .filter(l => {
+        const lPhone = (l.delegatePhone || '').trim();
+        const lName = (l.delegateName || '').replace(/\s*\(.*?\)/g, '').trim();
+        return (delegatePhone && lPhone === delegatePhone) || (cleanName && lName === cleanName);
+      })
+      .map(l => l.id);
+
+    const toDeleteExpenseIds = ref.expenses
+      .filter(e => {
+        if (e.category === 'سداد للمصنع' || e.type === 'factory_payment') {
+          const ePhone = (e.delegatePhone || '').trim();
+          const eName = (e.delegateName || '').replace(/\s*\(.*?\)/g, '').trim();
+          const eNotes = e.description || '';
+          const matchByPhone = delegatePhone && ePhone === delegatePhone;
+          const matchByName = cleanName && eName === cleanName;
+          const matchByAdmin = ePhone === 'admin' || eName === 'المدير العام';
+          const matchByNote = eNotes.includes('نيابة عن') && delegateName && eNotes.includes(delegateName);
+          return matchByPhone || matchByName || matchByAdmin || matchByNote;
+        }
+        return false;
+      })
+      .map(e => e.id);
+
+    // 2) Now call setState (filter out the matched records)
+    setFactoryLoads(prev => prev.filter(l => !toDeleteLoadIds.includes(l.id)));
+    setExpenses(prev => prev.filter(e => !toDeleteExpenseIds.includes(e.id)));
+
+    // 3) markAsDeleted with the PRE-COMPUTED IDs (not empty arrays!)
+    [...toDeleteLoadIds, ...toDeleteExpenseIds].forEach(id => markAsDeleted(id));
 
     promptForSync('أرشفة دورة حساب المصنع');
   };
@@ -1470,6 +1509,7 @@ export default function App() {
           type: l.type || '',
           dateAdded: l.dateAdded || ''
         })),
+        factoryArchiveCycles: ref.archiveCycles || [],
         settings: {
           workAreas: ref.settings.workAreas || [],
           googleSheetsUrl: ref.settings.googleSheetsUrl || '',
@@ -1527,16 +1567,7 @@ export default function App() {
         localStorage.setItem('last_sync_duration_ms_sys', String(elapsed));
       } catch(e) {}
 
-      // 🚨 إزالة المحذوفات التي تم رفعها بنجاح فقط لتجنب ضياع الحذوفات التي تمت أثناء الرفع (منع التعارض)
-      try {
-        const currentDeleted = JSON.parse(localStorage.getItem('deleted_records_sys') || '[]');
-        const remainingDeleted = currentDeleted.filter((id: string) => !deletedIds.includes(id));
-        if (remainingDeleted.length > 0) {
-          localStorage.setItem('deleted_records_sys', JSON.stringify(remainingDeleted));
-        } else {
-          localStorage.removeItem('deleted_records_sys');
-        }
-      } catch(e) {}
+      // 🚨 لا نُفرّغ deletedRecords_sys — المعرفات تبقى دائماً لمنع ظهور البيانات المحذوفة عند السحب من Google Sheets
 
       setIsHeaderSyncing(false);
       return true;
@@ -2270,6 +2301,36 @@ export default function App() {
           setFactoryLoads(finalLoads);
         }
 
+        if (data.factoryArchiveCycles && Array.isArray(data.factoryArchiveCycles)) {
+          const mappedArchive = data.factoryArchiveCycles.map((c: any) => ({
+            id: c.id || String(Date.now()),
+            settledAt: c.settledAt || '',
+            settledFully: c.settledFully !== false,
+            loads: c.loads || [],
+            payments: c.payments || [],
+            rawLoadedValue: Number(c.rawLoadedValue || 0),
+            totalWithdrawnValue: Number(c.totalWithdrawnValue || 0),
+            totalAdvancePayments: Number(c.totalAdvancePayments || 0),
+            creditBalance: Number(c.creditBalance || 0),
+            carriedOverDebtAtTime: Number(c.carriedOverDebtAtTime || 0),
+            waivedAmount: Number(c.waivedAmount || 0),
+            delegatePhone: c.delegatePhone || '',
+            delegateName: c.delegateName || ''
+          }));
+          if (shouldReplace) {
+            setArchiveCycles(mappedArchive);
+          } else {
+            const mappedIds = new Set(mappedArchive.map((c: any) => String(c.id)));
+            const merged = [...ref.archiveCycles];
+            mappedArchive.forEach((nc: any) => {
+              const idx = merged.findIndex(c => c.id === nc.id);
+              if (idx > -1) merged[idx] = nc;
+              else merged.push(nc);
+            });
+            setArchiveCycles(merged.filter(c => mappedIds.has(String(c.id))));
+          }
+        }
+
         // Write explicitly to IndexedDB to guarantee persistence before reload
         await Promise.all([
           idbSet('products_sys', finalProducts),
@@ -2278,7 +2339,8 @@ export default function App() {
           idbSet('expenses_sys', finalExpenses),
           idbSet('trips_sys', finalTrips),
           idbSet('factory_sys', finalLoads),
-          idbSet('settings_sys', updatedSettings)
+          idbSet('settings_sys', updatedSettings),
+          idbSet('factory_archive_cycles_sys', ref.archiveCycles)
         ]);
 
         if (!isSilent) {
@@ -2846,6 +2908,8 @@ export default function App() {
             onEditExpense={handleEditExpense}
             currentUser={effectiveUser}
             onArchiveFactoryCycle={handleArchiveFactoryCycle}
+            archiveCycles={archiveCycles}
+            onUpdateArchiveCycles={setArchiveCycles}
           />
         )}
 

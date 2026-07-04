@@ -364,12 +364,12 @@ export const COMPACT_PRO_CSS = `
   @media print{body{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}}
   *{margin:0;padding:0;box-sizing:border-box}
   body{font-family:'Cairo','Tajawal',system-ui,sans-serif;color:#1e293b;background:#fff;width:210mm;min-height:297mm;padding:12mm 14mm;direction:rtl;line-height:1.5}
-  .rh{text-align:center;padding:20px 0 16px;margin-bottom:18px;background:linear-gradient(135deg,#0f172a 0%,#1e3a5f 50%,#1e40af 100%);border-radius:16px;color:#fff;position:relative;overflow:hidden}
+  .rh{text-align:center;padding:24px 16px 20px;margin-bottom:18px;background:linear-gradient(135deg,#0f172a 0%,#1e3a5f 50%,#1e40af 100%);border-radius:16px;color:#fff;position:relative;overflow:visible}
   .rh::before{content:'';position:absolute;top:-50%;left:-50%;width:200%;height:200%;background:radial-gradient(circle,rgba(255,255,255,.05) 0%,transparent 60%)}
-  .rh h1{font-size:22px;font-weight:900;letter-spacing:.5px;margin-bottom:4px;text-shadow:0 2px 4px rgba(0,0,0,.3)}
-  .rh .sub{font-size:11px;color:#94a3b8;font-weight:600}
-  .rh .ref{margin-top:10px;display:flex;justify-content:center;gap:20px;font-size:10px;color:#cbd5e1}
-  .rh .ref span{background:rgba(255,255,255,.1);padding:3px 12px;border-radius:12px}
+  .rh h1{font-size:24px;font-weight:900;letter-spacing:.5px;margin-bottom:6px;text-shadow:0 2px 4px rgba(0,0,0,.3)}
+  .rh .sub{font-size:13px;color:#94a3b8;font-weight:600}
+  .rh .ref{margin-top:12px;display:flex;justify-content:center;gap:12px;flex-wrap:wrap;font-size:11px;color:#cbd5e1}
+  .rh .ref span{background:rgba(255,255,255,.12);padding:5px 16px;border-radius:14px;white-space:nowrap}
   .sg{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:18px}
   .sb{border-radius:14px;padding:14px 10px;text-align:center;position:relative;overflow:hidden}
   .sb::after{content:'';position:absolute;top:0;left:0;right:0;height:3px}
@@ -383,13 +383,13 @@ export const COMPACT_PRO_CSS = `
   .sb.bl .v{color:#1e40af}.sb.gr .v{color:#15803d}.sb.rd .v{color:#dc2626}.sb.pu .v{color:#7c3aed}.sb.am .v{color:#b45309}
   .st{font-size:12px;font-weight:800;color:#1e3a5f;margin:16px 0 8px;padding:6px 14px;background:linear-gradient(90deg,#f1f5f9,#fff);border-right:4px solid #f97316;border-radius:0 8px 8px 0;display:flex;align-items:center;gap:6px}
   .st .i{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;background:#f97316;color:#fff;border-radius:5px;font-size:10px}
-  table{width:100%;border-collapse:collapse;margin-bottom:14px;font-size:10px}
-  th{background:linear-gradient(180deg,#1e3a5f,#0f172a);color:#fff;font-weight:700;padding:8px 6px;font-size:9.5px}
+  table{width:100%;border-collapse:collapse;margin-bottom:14px;font-size:11px;table-layout:fixed}
+  th{background:linear-gradient(180deg,#1e3a5f,#0f172a);color:#fff;font-weight:700;padding:10px 8px;font-size:11px}
   th:first-child{border-radius:0 8px 0 0}th:last-child{border-radius:8px 0 0 0}
-  td{padding:7px 6px;border-bottom:1px solid #e2e8f0;font-weight:500}
+  td{padding:9px 8px;border-bottom:1px solid #e2e8f0;font-weight:500;word-wrap:break-word;overflow-wrap:break-word}
   tbody tr:nth-child(even){background:#f8fafc}
   tbody tr:last-child td:first-child{border-radius:0 0 0 8px}tbody tr:last-child td:last-child{border-radius:0 0 8px 0}
-  tfoot td{font-weight:800;padding:9px 6px}
+  tfoot td{font-weight:800;padding:11px 8px}
   .tt{background:linear-gradient(135deg,#0f172a,#1e3a5f)!important;color:#fff!important}
   .ts{background:linear-gradient(135deg,#059669,#10b981)!important;color:#fff!important}
   .td{background:linear-gradient(135deg,#dc2626,#ef4444)!important;color:#fff!important}
@@ -398,3 +398,17 @@ export const COMPACT_PRO_CSS = `
   .fs{margin-top:30px;display:flex;justify-content:space-between;padding-top:14px;border-top:2px solid #e2e8f0}
   .fs .sb2{text-align:center;width:40%}.fs .sb2 .ln{border-top:1px solid #94a3b8;margin:30px 10px 0;padding-top:6px;font-size:10px;font-weight:700;color:#475569}.fs .sb2 .ti{font-size:10px;font-weight:800;color:#1e3a5f}
 </style>`;
+
+// ═══════════════════════════════════════════════════════════════
+// انتظار تحميل الخطوط قبل رسم Canvas
+// ═══════════════════════════════════════════════════════════════
+let fontsLoaded = false;
+export async function ensureFontsLoaded(): Promise<void> {
+  if (fontsLoaded) return;
+  try {
+    await document.fonts.ready;
+    fontsLoaded = true;
+  } catch {
+    fontsLoaded = true;
+  }
+}

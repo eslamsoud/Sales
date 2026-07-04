@@ -9,7 +9,8 @@ import { Invoice, Expense, Product, Customer, Trip, AppSettings, formatNum, Fact
 import { ArrowRight, FileSpreadsheet, Send, TrendingUp, TrendingDown, Clock, Search, Eye, Filter, Check, ShieldAlert, MapPin, Printer, ChevronDown, AlertCircle, Activity, Package, Wallet, UserCheck, HandCoins, CircleDollarSign } from 'lucide-react';
 import { showToast } from '../utils/toast';
 import { confirmDialog } from '../utils/confirm';
-import { COMPACT_PRO_CSS } from '../utils/reportStyles';
+import { COMPACT_PRO_CSS, printHTMLInNewWindow } from '../utils/reportStyles';
+import { ACTIVE_CUSTOMER_MSG, INACTIVE_CUSTOMER_MSG } from '../utils/messages';
 import SecurePhoneDisplay from './SecurePhoneDisplay';
 
 interface ReportsTabProps {
@@ -695,21 +696,9 @@ function ReportsTabComponent({
   }, [currentFilteredData]);
 
   const exportComprehensiveReportAsPDF = () => {
-    const iframe = document.createElement('iframe');
-    iframe.style.position = 'fixed';
-    iframe.style.top = '-1000px';
-    iframe.style.left = '-1000px';
-    iframe.style.width = '210mm';
-    iframe.style.height = '297mm';
-    document.body.appendChild(iframe);
-
     let periodLabel = periodFilter === 'all' ? 'جميع الفترات' : periodFilter === 'today' ? 'يومي (اليوم الحالي)' : periodFilter === 'week' ? 'أسبوعي (آخر 7 أيام)' : periodFilter === 'month' ? 'شهري (هذا الشهر)' : `مخصص (${customStartDate || '...'} → ${customEndDate || '...'})`;
 
-    const doc = iframe.contentWindow?.document;
-    if (!doc) return;
-
-    doc.open();
-    doc.write(`
+    const html = `
       <!DOCTYPE html>
       <html dir="rtl" lang="ar">
       <head>${COMPACT_PRO_CSS}</head>
@@ -863,16 +852,8 @@ function ReportsTabComponent({
 
       </body>
       </html>
-    `);
-    doc.close();
-
-    setTimeout(() => {
-      iframe.contentWindow?.focus();
-      iframe.contentWindow?.print();
-      setTimeout(() => {
-        document.body.removeChild(iframe);
-      }, 500);
-    }, 800);
+    `;
+    printHTMLInNewWindow(html);
   };
 
   // Group invoices by month
@@ -998,16 +979,6 @@ function ReportsTabComponent({
   }, [permittedSubTabs, activeSubTab]);
 
   const exportMonthlyReportAsPDF = (monthStr: string, displayDate: string, sales: number, collected: number, revenuesParam: number, expensesParam: number, profit: number) => {
-    // 1. Create iframe
-    const iframe = document.createElement('iframe');
-    iframe.style.position = 'fixed';
-    iframe.style.top = '-1000px';
-    iframe.style.left = '-1000px';
-    iframe.style.width = '210mm';
-    iframe.style.height = '297mm';
-    document.body.appendChild(iframe);
-
-    // 2. Prepare content
     const mInvoices = delFilteredInvoices.filter(inv => inv && typeof inv.date === 'string' && inv.date.startsWith(monthStr));
     const mExpenses = delFilteredExpenses.filter(exp => exp && typeof exp.date === 'string' && exp.date.startsWith(monthStr));
     
@@ -1015,11 +986,7 @@ function ReportsTabComponent({
     const mDisc = mInvoices.reduce((sum, i) => sum + ((i.totalBeforeDiscount || 0) - (i.totalAfterDiscount || 0)), 0);
     const remaining = sales - collected;
 
-    const doc = iframe.contentWindow?.document;
-    if (!doc) return;
-
-    doc.open();
-    doc.write(`
+    const html = `
       <html dir="rtl" lang="ar">
         <head>${COMPACT_PRO_CSS}</head>
         <body>
@@ -1112,97 +1079,25 @@ function ReportsTabComponent({
           </div>
         </body>
       </html>
-    `);
-    doc.close();
-
-    // 3. Print and remove
-    setTimeout(() => {
-      iframe.contentWindow?.focus();
-      iframe.contentWindow?.print();
-      setTimeout(() => {
-        document.body.removeChild(iframe);
-      }, 500);
-    }, 500);
+    `;
+    printHTMLInNewWindow(html);
   };
   
   const handleGenerateAndSendWA = async (customer: any) => {
     setWaLoadingId(customer.id);
     try {
-      const isInactive = customer.invoicesCount === 0 || !customer.isActive;
-      const statusText = isInactive ? "خامل / توقف عن الشراء" : "نشط / يقوم بمسحوبات";
-      const userMessage = `قم بصياغة رسالة واتساب لعميل اسمه: ${customer.name} (حالة العميل في الفترة المحددة: ${statusText}، إجمالي مسحوباته في الفترة: ${customer.totalPurchases}ج.م ومحله في: ${customer.governorate || ''} - ${customer.area}).
-التعليمات والخطوط العريضة الخاصة بمدير المبيعات:
-"${settings.aiRetentionGuidelines || 'قدم رسالة ترحيبية تشجعه على استمرار التعامل معنا، مع توضيح أننا نهتم بوجوده معنا كشريك نجاح.'}"
-أريد فقط نص الرسالة بدون أي مقدمات أخرى لتكون جاهزة للإرسال.`;
-
-      const response = await fetch('/api/gemini/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          systemInstruction: 'أنت مساعد مبيعات احترافي.',
-          history: [],
-          message: userMessage
-        })
-      });
-
-      if (!response.ok) {
-        throw new Error('الخادم الخارجي للذكاء الاصطناعي معطل حالياً.');
-      }
-
-      const data = await response.json();
-      const messageText = encodeURIComponent(data.text);
-      let phone = customer.phone;
-      if (phone.startsWith('0')) {
-        phone = '20' + phone.substring(1);
-      }
-      window.location.href = `https://wa.me/${phone}?text=${messageText}`;
-    } catch (err: any) {
-      console.warn("Using local fallback WA message builder in ReportsTab:", err.message);
-      
-      const guidelines = settings.aiRetentionGuidelines || 'تقديم رسالة ترحيبية تشجعه على استمرار التعامل معنا، مع توضيح أننا نهتم بوجوده معنا';
       const delegateName = currentUser?.name || 'المندوب';
-      const fallbackMsg = isInactive
-        ? `السلام عليكم ورحمة الله وبركاته،
+      const messageText = customer.isActive ? ACTIVE_CUSTOMER_MSG(delegateName) : INACTIVE_CUSTOMER_MSG(delegateName);
 
-معكم ${delegateName}، مندوب مبيعات زيت سوفانا.
-
-أتمنى أن تكونوا بخير وفي أتم الصحة والعافية.
-
-🤝 انطلاقًا من حرص مصنع زيت سوفانا على تعزيز علاقته بعملائه الكرام، وحرصي على متابعة احتياجاتكم وتقديم أفضل مستوى من الخدمة، يسعدني التواصل معكم لإطلاعكم على أحدث العروض والأسعار المميزة التي تناسب احتياجاتكم.
-
-📅 يشرفني زيارتكم في الموعد الذي يناسبكم، ويسعدني تلبية أي طلب أو استفسار، مع متابعة طلباتكم شخصيًا حتى يتم تنفيذها بأفضل جودة وفي أسرع وقت.
-
-⭐ نعتز بثقتكم، ونتطلع إلى استمرار التعاون معكم، ويسعدني معرفة اليوم والوقت المناسبين لزيارتكم.
-
-مع خالص الشكر والتقدير،
-
-${delegateName}
-مندوب مبيعات زيت سوفانا`
-        : `السلام عليكم ورحمة الله وبركاته،
-
-معكم ${delegateName}، مندوب مبيعات زيت سوفانا.
-
-أتمنى أن تكونوا بخير وفي أتم الصحة والعافية.
-
-🤝 نتقدم إليكم بخالص الشكر والتقدير على ثقتكم المستمرة في منتجات زيت سوفانا، ونعتز بشراكتكم التي تمثل جزءًا مهمًا من نجاحنا.
-
-نحرص دائمًا على تقديم أفضل العروض والخدمات، والارتقاء بمستوى الخدمة بما يلبي تطلعاتكم ويواكب احتياجاتكم.
-
-📅 يشرفني تجديد اللقاء بكم في الزيارة القادمة، في أقرب وقت يناسبكم، لمواصلة تقديم أفضل خدمة، وتعزيز التعاون المثمر بيننا.
-
-⭐ ثقتكم الغالية محل تقديرنا واعتزازنا، ونسأل الله أن يديم بيننا التعاون، وأن نكون دائمًا عند حسن ظنكم.
-
-وتفضلوا بقبول فائق الاحترام والتقدير،
-
-${delegateName}
-مندوب مبيعات زيت سوفانا`;
-      
-      const messageText = encodeURIComponent(fallbackMsg);
       let phone = customer.phone;
       if (phone.startsWith('0')) {
         phone = '20' + phone.substring(1);
       }
-      window.location.href = `https://wa.me/${phone}?text=${messageText}`;
+
+      const url = `https://wa.me/${phone}?text=${encodeURIComponent(messageText)}`;
+      window.open(url, '_blank');
+    } catch (err: any) {
+      console.error("WA message error:", err);
     } finally {
       setWaLoadingId(null);
     }
@@ -1221,15 +1116,21 @@ ${delegateName}
     
     const totalLines = mInvoices.length + mExpenses.length;
     const baseHeight = 385;
-    canvas.width = 650;
-    canvas.height = baseHeight + totalLines * rowHeight + 150;
+    const W = 650;
+    const TARGET_W = 3840;
+    const dpr = Math.max(window.devicePixelRatio || 1, TARGET_W / W);
+    canvas.width = W * dpr;
+    canvas.height = (baseHeight + totalLines * rowHeight + 150) * dpr;
+    canvas.style.width = W + 'px';
+    canvas.style.height = (baseHeight + totalLines * rowHeight + 150) + 'px';
 
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
+    ctx.scale(dpr, dpr);
     ctx.direction = 'rtl';
 
     ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillRect(0, 0, W, baseHeight + totalLines * rowHeight + 150);
 
     ctx.fillStyle = '#312e81';
     ctx.fillRect(15, 20, canvas.width - 30, 100);
@@ -1377,14 +1278,6 @@ ${delegateName}
   };
 
   const downloadInventoryPDF = () => {
-    const iframe = document.createElement('iframe');
-    iframe.style.position = 'fixed';
-    iframe.style.top = '-1000px';
-    iframe.style.left = '-1000px';
-    iframe.style.width = '210mm';
-    iframe.style.height = '297mm';
-    document.body.appendChild(iframe);
-
     const periodLabel = inventoryMatchFilter === 'daily' ? 'يومي' : inventoryMatchFilter === 'weekly' ? 'أسبوعي' : 'شهري';
     let tableRows = '';
     let totalLoaded = 0, totalSold = 0, totalRemaining = 0;
@@ -1497,20 +1390,14 @@ ${delegateName}
         </div>
       </div>
     </body></html>`;
-
-    iframe.contentDocument?.open();
-    iframe.contentDocument?.write(html);
-    iframe.contentDocument?.close();
-    setTimeout(() => {
-      iframe.contentWindow?.print();
-      setTimeout(() => document.body.removeChild(iframe), 2000);
-    }, 500);
+    printHTMLInNewWindow(html);
   };
 
   const downloadInventoryImage = () => {
     const canvas = document.createElement('canvas');
-    const dpr = window.devicePixelRatio || 1;
     const W = 1200;
+    const TARGET_W = 3840;
+    const dpr = Math.max(window.devicePixelRatio || 1, TARGET_W / W);
     canvas.width = W * dpr;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
@@ -1760,22 +1647,28 @@ ${delegateName}
     });
 
     // Calculate stats based on period
+    const TEN_DAYS_MS = 10 * 24 * 60 * 60 * 1000;
+    const now = Date.now();
     return list.map(c => {
       const custInvoices = invoicesByCustomer.get(c.id) || [];
       
       const totalPurchases = custInvoices.reduce((sum, inv) => sum + (inv.totalAfterDiscount || 0), 0);
       const invoicesCount = custInvoices.length;
+      const recentInvoices = [...custInvoices].sort((a,b) => {
+        const timeA = a.date ? new Date(a.date).getTime() : 0;
+        const timeB = b.date ? new Date(b.date).getTime() : 0;
+        return (isNaN(timeB) ? 0 : timeB) - (isNaN(timeA) ? 0 : timeA);
+      });
+      const lastInvoiceDate = recentInvoices[0]?.date ? new Date(recentInvoices[0].date).getTime() : 0;
+      const daysSinceLastInvoice = lastInvoiceDate > 0 ? Math.floor((now - lastInvoiceDate) / (24 * 60 * 60 * 1000)) : 999;
       
       return {
         ...c,
         totalPurchases,
         invoicesCount,
-        recentInvoices: [...custInvoices].sort((a,b) => {
-          const timeA = a.date ? new Date(a.date).getTime() : 0;
-          const timeB = b.date ? new Date(b.date).getTime() : 0;
-          return (isNaN(timeB) ? 0 : timeB) - (isNaN(timeA) ? 0 : timeA);
-        }),
-        isActive: totalPurchases > 0
+        recentInvoices,
+        daysSinceLastInvoice,
+        isActive: totalPurchases > 0 && (now - lastInvoiceDate) < TEN_DAYS_MS
       };
     }).filter(c => {
       if (custStatusFilter === 'active') return c.isActive;
@@ -2858,6 +2751,11 @@ ${delegateName}
                           </span>
                           <span className="text-[10px] text-[#2B6CB0] font-medium">
                             {c.governorate || 'محافظة غير محددة'} - {c.area} • مسحوبات: <strong className="text-[#1A365D]">{formatNum(c.totalPurchases)}ج.م</strong>
+                            {c.invoicesCount > 0 && c.daysSinceLastInvoice !== undefined && (
+                              <span className={`ml-1 ${c.daysSinceLastInvoice > 10 ? 'text-rose-500' : 'text-emerald-500'}`}>
+                                ({c.daysSinceLastInvoice === 0 ? 'اليوم' : `منذ ${c.daysSinceLastInvoice} يوم`})
+                              </span>
+                            )}
                           </span>
                         </div>
                         <div className="bg-[#FFFFFF] border border-slate-200 min-w-8 text-center py-1 px-2 rounded-lg text-[10px] shadow-sm font-black text-[#2B6CB0]">

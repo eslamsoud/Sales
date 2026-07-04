@@ -1,7 +1,7 @@
 // @ts-nocheck
 import { confirmDialog, duaConfirmDialog } from '../utils/confirm';
 import { jsPDF } from 'jspdf';
-import { COMPACT_PRO_CSS } from '../utils/reportStyles';
+import { COMPACT_PRO_CSS, printHTMLInNewWindow } from '../utils/reportStyles';
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -37,6 +37,8 @@ interface FactoryTabProps {
   onEditExpense?: (id: string, updates: Partial<Omit<Expense, 'id'>>) => void;
   currentUser?: UserAuth | null;
   onArchiveFactoryCycle?: (delegatePhone: string, delegateName: string) => void;
+  archiveCycles?: any[];
+  onUpdateArchiveCycles?: (cycles: any[] | ((prev: any[]) => any[])) => void;
 }
 
 export default function FactoryTab({
@@ -63,7 +65,9 @@ export default function FactoryTab({
   onDeleteExpense,
   onEditExpense,
   currentUser,
-  onArchiveFactoryCycle
+  onArchiveFactoryCycle,
+  archiveCycles: archiveCyclesProp,
+  onUpdateArchiveCycles
 }: FactoryTabProps) {
   const [activeSubTab, setActiveSubTab] = useState<'loads' | 'products' | 'previous_loads' | 'factory_account' | 'trips'>(() => {
     if (permittedSubTabs && permittedSubTabs.length > 0) {
@@ -93,7 +97,8 @@ export default function FactoryTab({
 
   // Helper: High-DPI canvas setup for crisp image downloads
   const setupHiDPICanvas = (W: number, H: number): { canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D; dpr: number } => {
-    const dpr = window.devicePixelRatio || 1;
+    const TARGET_W = 3840;
+    const dpr = Math.max(window.devicePixelRatio || 1, TARGET_W / W);
     const canvas = document.createElement('canvas');
     canvas.width = W * dpr;
     canvas.height = H * dpr;
@@ -197,7 +202,18 @@ export default function FactoryTab({
   const isManager = currentUser?.role === 'owner' || currentUser?.phone === '01228466613';
 
   // Delegate filtering state for factory account
-  const [factoryDelegateFilter, setFactoryDelegateFilter] = useState<string>('all');
+  const [factoryDelegateFilter, _setFactoryDelegateFilter] = useState<string>(() => {
+    try {
+      return localStorage.getItem('factory_delegate_filter') || 'all';
+    } catch {
+      return 'all';
+    }
+  });
+
+  const setFactoryDelegateFilterPersisted = (val: string) => {
+    _setFactoryDelegateFilter(val);
+    try { localStorage.setItem('factory_delegate_filter', val); } catch {}
+  };
 
   const selectedDelegatePhone = useMemo(() => {
     if (!isManager) return currentUser?.phone || '';
@@ -262,25 +278,11 @@ export default function FactoryTab({
     }
   }, [carriedOverDebtDate, currentDelegateKey]);
 
-  const [archiveCycles, setArchiveCycles] = useState<any[]>([]);
-  useEffect(() => {
-    if (currentDelegateKey) {
-      try {
-        const saved = localStorage.getItem(`factory_archive_cycles_${currentDelegateKey}`);
-        setArchiveCycles(saved ? JSON.parse(saved) : []);
-      } catch (_) {
-        setArchiveCycles([]);
-      }
-    } else {
-      setArchiveCycles([]);
-    }
-  }, [currentDelegateKey]);
-
-  useEffect(() => {
-    if (currentDelegateKey) {
-      localStorage.setItem(`factory_archive_cycles_${currentDelegateKey}`, JSON.stringify(archiveCycles));
-    }
-  }, [archiveCycles, currentDelegateKey]);
+  const archiveCycles = archiveCyclesProp || [];
+  const setArchiveCycles = React.useCallback((updater: any[] | ((prev: any[]) => any[])) => {
+    if (!onUpdateArchiveCycles) return;
+    onUpdateArchiveCycles(updater);
+  }, [onUpdateArchiveCycles]);
 
   const lastArchiveTimestamp = useMemo(() => {
     if (!archiveCycles || archiveCycles.length === 0) return 0;
@@ -1199,7 +1201,8 @@ export default function FactoryTab({
     const totalH = headerH + 10 + loadsTableH + summaryRowH + 15 + bottomBoxH + footerH + 30;
 
     const canvas = document.createElement('canvas');
-    const dpr = window.devicePixelRatio || 1;
+    const TARGET_W = 3840;
+    const dpr = Math.max(window.devicePixelRatio || 1, TARGET_W / W);
     canvas.width = W * dpr;
     canvas.height = totalH * dpr;
     canvas.style.width = W + 'px';
@@ -1423,7 +1426,8 @@ export default function FactoryTab({
     const totalH = headerH + 10 + loadsTableH + summaryRowH + 15 + bottomBoxH + footerH + 30;
 
     const canvas = document.createElement('canvas');
-    const dpr = window.devicePixelRatio || 1;
+    const TARGET_W = 3840;
+    const dpr = Math.max(window.devicePixelRatio || 1, TARGET_W / W);
     canvas.width = W * dpr;
     canvas.height = totalH * dpr;
     canvas.style.width = W + 'px';
@@ -1625,17 +1629,6 @@ export default function FactoryTab({
   };
 
   const exportFactoryLedgerAsPDF = () => {
-    const iframe = document.createElement('iframe');
-    iframe.style.position = 'fixed';
-    iframe.style.top = '-1000px';
-    iframe.style.left = '-1000px';
-    iframe.style.width = '210mm';
-    iframe.style.height = '297mm';
-    document.body.appendChild(iframe);
-
-    const doc = iframe.contentWindow?.document;
-    if (!doc) return;
-
     const selectedDel = archiveDelegates.find(d => d.phone === factoryDelegateFilter || d.name === factoryDelegateFilter);
     const delegateHeader = selectedDel ? `<div style="display:inline-block;background:#e0e7ff;color:#3730a3;padding:4px 16px;border-radius:20px;font-size:12px;font-weight:700;margin-top:8px;">المندوب: ${selectedDel.name} ${selectedDel.phone !== 'مجهول' ? `(${selectedDel.phone})` : ''}</div>` : '';
 
@@ -1658,8 +1651,7 @@ export default function FactoryTab({
     const totalSoldValuePdf = soldItems.reduce((sum, item) => sum + item.factoryValue, 0);
     const totalLoadedValuePdf = soldItems.reduce((sum, item) => sum + (item.loaded * item.factoryCartonPrice), 0);
 
-    doc.open();
-    doc.write(`
+    const html = `
       <!DOCTYPE html>
       <html dir="rtl" lang="ar">
       <head>${COMPACT_PRO_CSS}</head>
@@ -1825,16 +1817,8 @@ export default function FactoryTab({
 
       </body>
       </html>
-    `);
-    doc.close();
-
-    setTimeout(() => {
-      iframe.contentWindow?.focus();
-      iframe.contentWindow?.print();
-      setTimeout(() => {
-        document.body.removeChild(iframe);
-      }, 500);
-    }, 800);
+    `;
+    printHTMLInNewWindow(html);
   };
 
   // Compute comprehensive factory account statement: withdrawn vs sold vs remaining financial balance
@@ -2208,7 +2192,8 @@ export default function FactoryTab({
     const totalH = 24 + headerH + 32 + (list.length * rowH) + summaryRowH + 12 + bottomBoxH + footerH + 24;
 
     const canvas = document.createElement('canvas');
-    const dpr = window.devicePixelRatio || 1;
+    const TARGET_W = 3840;
+    const dpr = Math.max(window.devicePixelRatio || 1, TARGET_W / W);
     canvas.width = W * dpr;
     canvas.height = totalH * dpr;
     canvas.style.width = W + 'px';
@@ -2416,7 +2401,7 @@ export default function FactoryTab({
     }
   }, [factoryBalanceDetails.netRemainingDueToFactory, carriedOverDebtDate, carriedOverDebt]);
 
-  // Auto-archive when remaining balance becomes exactly 0 (after payment settles it) — uses TOTAL factory balance
+  // Auto-archive when remaining balance becomes exactly 0 (after payment settles it)
   const prevNetRemainingRef = React.useRef(totalFactoryBalanceDetails.netRemainingDueToFactory);
   useEffect(() => {
     const prev = prevNetRemainingRef.current;
@@ -2471,7 +2456,11 @@ export default function FactoryTab({
               carriedOverDebtAtTime: carriedOverDebt,
               settledFully: true
             };
-            setArchiveCycles(prev => [...prev, newCycle]);
+            setArchiveCycles(prev => {
+              const next = [...prev, newCycle];
+              
+              return next;
+            });
             setCarriedOverDebt(0);
             setCarriedOverDebtDate('');
 
@@ -2535,7 +2524,8 @@ export default function FactoryTab({
     const totalH = headerH + 10 + loadsTableH + 15 + bottomBoxH + footerH + 40;
 
     const canvas = document.createElement('canvas');
-    const dpr = window.devicePixelRatio || 1;
+    const TARGET_W = 3840;
+    const dpr = Math.max(window.devicePixelRatio || 1, TARGET_W / W);
     canvas.width = W * dpr;
     canvas.height = totalH * dpr;
     canvas.style.width = W + 'px';
@@ -2843,7 +2833,8 @@ export default function FactoryTab({
     const totalH = headerH + 10 + loadsTableH + summaryRowH + 15 + bottomBoxH + footerH + 40;
 
     const canvas = document.createElement('canvas');
-    const dpr = window.devicePixelRatio || 1;
+    const TARGET_W = 3840;
+    const dpr = Math.max(window.devicePixelRatio || 1, TARGET_W / W);
     canvas.width = W * dpr;
     canvas.height = totalH * dpr;
     canvas.style.width = W + 'px';
@@ -3322,7 +3313,8 @@ export default function FactoryTab({
     const totalH = headerH + 10 + totalContentH + footerH + 40;
 
     const canvas = document.createElement('canvas');
-    const dpr = window.devicePixelRatio || 1;
+    const TARGET_W = 3840;
+    const dpr = Math.max(window.devicePixelRatio || 1, TARGET_W / W);
     canvas.width = W * dpr;
     canvas.height = totalH * dpr;
     canvas.style.width = W + 'px';
@@ -3581,7 +3573,8 @@ export default function FactoryTab({
     const totalH = headerH + 10 + totalRows * rowH + summaryRowH + footerH + 40;
 
     const canvas = document.createElement('canvas');
-    const dpr = window.devicePixelRatio || 1;
+    const TARGET_W = 3840;
+    const dpr = Math.max(window.devicePixelRatio || 1, TARGET_W / W);
     canvas.width = W * dpr;
     canvas.height = totalH * dpr;
     canvas.style.width = W + 'px';
@@ -3705,7 +3698,8 @@ export default function FactoryTab({
     const totalH = headerH + 10 + 32 + pendingTrips.length * rowH + summaryRowH + 15 + 120 + footerH + 30;
 
     const canvas = document.createElement('canvas');
-    const dpr = window.devicePixelRatio || 1;
+    const TARGET_W = 3840;
+    const dpr = Math.max(window.devicePixelRatio || 1, TARGET_W / W);
     canvas.width = W * dpr;
     canvas.height = totalH * dpr;
     canvas.style.width = W + 'px';
@@ -3918,7 +3912,8 @@ export default function FactoryTab({
     const totalH = headerH + 10 + 32 + filteredArchiveTrips.length * rowH + summaryRowH + 15 + 120 + footerH + 30;
 
     const canvas = document.createElement('canvas');
-    const dpr = window.devicePixelRatio || 1;
+    const TARGET_W = 3840;
+    const dpr = Math.max(window.devicePixelRatio || 1, TARGET_W / W);
     canvas.width = W * dpr;
     canvas.height = totalH * dpr;
     canvas.style.width = W + 'px';
@@ -4138,7 +4133,8 @@ export default function FactoryTab({
     }
 
     const canvas = document.createElement('canvas');
-    const dpr = window.devicePixelRatio || 1;
+    const TARGET_W = 3840;
+    const dpr = Math.max(window.devicePixelRatio || 1, TARGET_W / W);
     canvas.width = W * dpr;
     canvas.height = totalH * dpr;
     canvas.style.width = W + 'px';
@@ -4347,7 +4343,8 @@ export default function FactoryTab({
     const totalH = headerH + 10 + loadsTableH + summaryRowH + 15 + bottomBoxH + footerH + 30;
 
     const canvas = document.createElement('canvas');
-    const dpr = window.devicePixelRatio || 1;
+    const TARGET_W = 3840;
+    const dpr = Math.max(window.devicePixelRatio || 1, TARGET_W / W);
     canvas.width = W * dpr;
     canvas.height = totalH * dpr;
     canvas.style.width = W + 'px';
@@ -5487,7 +5484,11 @@ export default function FactoryTab({
                             onClick={async () => {
                               const confirmed = await confirmDialog(`هل تريد رجوع الدورة رقم ${archiveCycles.length - cycleIdx} للدورة الحالية؟\n⚠️ سيتم حذف هذه الدورة من الأرشيف. الحمولات والدفعات ستظهر مجدداً في الحساب.`);
                               if (confirmed) {
-                                setArchiveCycles(prev => prev.filter(c => c.id !== cycle.id));
+                                setArchiveCycles(prev => {
+                                  const next = prev.filter(c => c.id !== cycle.id);
+                                  
+                                  return next;
+                                });
                                 showToast('✓ تم رجوع الدورة من الأرشيف! الحمولات والدفعات ستظهر في الحساب.');
                               }
                             }}
@@ -5562,13 +5563,17 @@ export default function FactoryTab({
                                             if (isNaN(parsed) || parsed < 0) { showToast('⚠️ مبلغ غير صحيح!'); return; }
                                             const newNotes = prompt('تعديل البيان:', pay.notes || '') || pay.notes;
                                             const newRecipient = prompt('تعديل المستلم:', pay.recipient || '') || pay.recipient;
-                                            setArchiveCycles(prev => prev.map(c => {
-                                              if (c.id !== cycle.id) return c;
-                                              const updatedPayments = [...(c.payments || [])];
-                                              updatedPayments[i] = { ...updatedPayments[i], amount: parsed, notes: newNotes, recipient: newRecipient };
-                                              const totalPayments = updatedPayments.reduce((s: number, p: any) => s + (p.amount || 0), 0);
-                                              return { ...c, payments: updatedPayments, totalAdvancePayments: totalPayments };
-                                            }));
+                                            setArchiveCycles(prev => {
+                                              const next = prev.map(c => {
+                                                if (c.id !== cycle.id) return c;
+                                                const updatedPayments = [...(c.payments || [])];
+                                                updatedPayments[i] = { ...updatedPayments[i], amount: parsed, notes: newNotes, recipient: newRecipient };
+                                                const totalPayments = updatedPayments.reduce((s: number, p: any) => s + (p.amount || 0), 0);
+                                                return { ...c, payments: updatedPayments, totalAdvancePayments: totalPayments };
+                                              });
+                                              
+                                              return next;
+                                            });
                                             showToast('✓ تم تعديل الدفعة في الدورة المؤرشفة!');
                                           }}
                                           className="text-indigo-600 hover:text-indigo-800 bg-white hover:bg-indigo-50 p-1 rounded border border-slate-200 cursor-pointer transition-all active:scale-95"
@@ -5803,7 +5808,7 @@ export default function FactoryTab({
                           const total = filteredArchiveExtraPayments.reduce((s, p) => s + p.amount, 0);
                           const W = 700; const padX = 20; const rowH = 32; const headerH = 80; const footerH = 40;
                           const totalH = headerH + 10 + filteredArchiveExtraPayments.length * rowH + 50 + footerH + 20;
-                          const canvas = document.createElement('canvas'); const dpr = window.devicePixelRatio || 1;
+                          const canvas = document.createElement('canvas'); const TARGET_W = 3840; const dpr = Math.max(window.devicePixelRatio || 1, TARGET_W / W);
                           canvas.width = W * dpr; canvas.height = totalH * dpr; canvas.style.width = W + 'px'; canvas.style.height = totalH + 'px';
                           const ctx = canvas.getContext('2d'); if (!ctx) return; ctx.scale(dpr, dpr);
                           ctx.fillStyle = '#faf8f5'; ctx.fillRect(0, 0, W, totalH); ctx.strokeStyle = '#1a1a1a'; ctx.lineWidth = 3; ctx.strokeRect(6, 6, W - 12, totalH - 12);
@@ -5864,12 +5869,16 @@ export default function FactoryTab({
                                   if (!newAmount || newAmount <= 0) { showToast("⚠️ يرجى إدخال قيمة صحيحة!"); return; }
                                   const oldAmount = pay.amount;
                                   const diff = newAmount - oldAmount;
-                                  setArchiveCycles(prev => prev.map(c => {
-                                    if (c.id !== cycle.id) return c;
-                                    const updatedPayments = (c.payments || []).map((p: any) => p.id === pay.id ? { ...p, amount: newAmount, notes: editingPaymentNotes || p.notes } : p);
-                                    const totalPayments = updatedPayments.reduce((s: number, p: any) => s + (p.amount || 0), 0);
-                                    return { ...c, payments: updatedPayments, totalAdvancePayments: totalPayments };
-                                  }));
+                                  setArchiveCycles(prev => {
+                                    const next = prev.map(c => {
+                                      if (c.id !== cycle.id) return c;
+                                      const updatedPayments = (c.payments || []).map((p: any) => p.id === pay.id ? { ...p, amount: newAmount, notes: editingPaymentNotes || p.notes } : p);
+                                      const totalPayments = updatedPayments.reduce((s: number, p: any) => s + (p.amount || 0), 0);
+                                      return { ...c, payments: updatedPayments, totalAdvancePayments: totalPayments };
+                                    });
+                                    
+                                    return next;
+                                  });
                                   setEditingPaymentId(null);
                                   showToast(diff > 0 ? `✓ تم تعديل الدفعة. المصنع مدين بـ ${formatNum(diff)} ج.م إضافية` : diff < 0 ? `✓ تم تعديل الدفعة. تم خصم ${formatNum(Math.abs(diff))} ج.م من المصنع` : '✓ تم تعديل الدفعة!');
                                 }} className="px-3 py-1 rounded bg-[#DD6B20] hover:bg-[#C05621] text-white text-[10px] font-bold cursor-pointer transition-all active:scale-95">حفظ</button>
@@ -5889,12 +5898,16 @@ export default function FactoryTab({
                                 <button type="button" onClick={async () => {
                                   const confirmed = await confirmDialog(`هل تريد حذف هذه الدفعة بقيمة ${formatNum(pay.amount)}ج.م؟\n⚠️ سيتم خصم هذا المبلغ من إجمالي الدفعات (المصنع سيصبح مديناً بهذا المبلغ).`);
                                   if (!confirmed) return;
-                                  setArchiveCycles(prev => prev.map(c => {
-                                    if (c.id !== cycle.id) return c;
-                                    const updatedPayments = (c.payments || []).filter((p: any) => p.id !== pay.id);
-                                    const totalPayments = updatedPayments.reduce((s: number, p: any) => s + (p.amount || 0), 0);
-                                    return { ...c, payments: updatedPayments, totalAdvancePayments: totalPayments };
-                                  }));
+                                  setArchiveCycles(prev => {
+                                    const next = prev.map(c => {
+                                      if (c.id !== cycle.id) return c;
+                                      const updatedPayments = (c.payments || []).filter((p: any) => p.id !== pay.id);
+                                      const totalPayments = updatedPayments.reduce((s: number, p: any) => s + (p.amount || 0), 0);
+                                      return { ...c, payments: updatedPayments, totalAdvancePayments: totalPayments };
+                                    });
+                                    
+                                    return next;
+                                  });
                                   showToast(`✓ تم حذف الدفعة. الم_factory مدين بـ ${formatNum(pay.amount)} ج.م`);
                                 }} className="text-rose-500 hover:text-rose-700 bg-white hover:bg-rose-50 p-1.5 rounded-lg border border-slate-200 cursor-pointer transition-all active:scale-95" title="حذف"><Trash2 className="h-3.5 w-3.5" /></button>
                               </div>
@@ -6693,7 +6706,7 @@ export default function FactoryTab({
                 <span className="text-xs font-black text-[#1A365D]">تصفية حساب المصنع حسب المندوب:</span>
                 <select
                   value={factoryDelegateFilter}
-                  onChange={(e) => setFactoryDelegateFilter(e.target.value)}
+                  onChange={(e) => setFactoryDelegateFilterPersisted(e.target.value)}
                   className="bg-[#F7FAFC] border border-slate-200 rounded-lg p-2 text-xs font-bold text-[#1A365D]"
                 >
                   <option value="all">كل المناديب (تجميعي)</option>
@@ -6979,7 +6992,11 @@ export default function FactoryTab({
                                   carriedOverDebtAtTime: carriedOverDebt,
                                   settledFully: true
                                 };
-                                setArchiveCycles(prev => [...prev, newCycle]);
+                                setArchiveCycles(prev => {
+                                  const next = [...prev, newCycle];
+                                  
+                                  return next;
+                                });
                                 setCarriedOverDebt(0);
                                 setCarriedOverDebtDate('');
 
@@ -7053,7 +7070,11 @@ export default function FactoryTab({
                                   carriedOverDebtAtTime: carriedOverDebt,
                                   waivedAmount: netRemaining
                                 };
-                                setArchiveCycles(prev => [...prev, newCycle]);
+                                setArchiveCycles(prev => {
+                                  const next = [...prev, newCycle];
+                                  
+                                  return next;
+                                });
                                 setCarriedOverDebt(0);
                                 setCarriedOverDebtDate('');
                                 if (onArchiveFactoryCycle) {
@@ -7165,7 +7186,11 @@ export default function FactoryTab({
                                   creditBalance: trueCredit,
                                   carriedOverDebtAtTime: carriedOverDebt
                                 };
-                                setArchiveCycles(prev => [...prev, newCycle]);
+                                setArchiveCycles(prev => {
+                                  const next = [...prev, newCycle];
+                                  
+                                  return next;
+                                });
                                 setCarriedOverDebt(trueCredit > 0 ? -trueCredit : 0);
                                 setCarriedOverDebtDate('');
                                 
@@ -7271,7 +7296,7 @@ export default function FactoryTab({
                       const total = filteredCurrentPayments.reduce((s, p) => s + p.amount, 0);
                       const W = 700; const padX = 20; const rowH = 32; const headerH = 80; const footerH = 40;
                       const totalH = headerH + 10 + filteredCurrentPayments.length * rowH + 50 + footerH + 20;
-                      const canvas = document.createElement('canvas'); const dpr = window.devicePixelRatio || 1;
+                      const canvas = document.createElement('canvas'); const TARGET_W = 3840; const dpr = Math.max(window.devicePixelRatio || 1, TARGET_W / W);
                       canvas.width = W * dpr; canvas.height = totalH * dpr; canvas.style.width = W + 'px'; canvas.style.height = totalH + 'px';
                       const ctx = canvas.getContext('2d'); if (!ctx) return; ctx.scale(dpr, dpr);
                       ctx.fillStyle = '#faf8f5'; ctx.fillRect(0, 0, W, totalH); ctx.strokeStyle = '#1a1a1a'; ctx.lineWidth = 3; ctx.strokeRect(6, 6, W - 12, totalH - 12);
@@ -7676,7 +7701,8 @@ export default function FactoryTab({
                   type="button"
                   onClick={() => {
                     const canvas = document.createElement('canvas');
-                    const dpr = window.devicePixelRatio || 1;
+                    const TARGET_W = 3840;
+                    const dpr = Math.max(window.devicePixelRatio || 1, TARGET_W / W);
                     const W = 920;
                     const padX = 30;
                     const tableW = W - padX * 2;
@@ -8013,7 +8039,11 @@ export default function FactoryTab({
                           totalAdvancePayments: paySum,
                           creditBalance: credit
                         };
-                        setArchiveCycles((prev: any) => prev.map((c: any) => c.id === editData.id ? updatedCycle : c));
+                        setArchiveCycles((prev: any) => {
+                          const next = prev.map((c: any) => c.id === editData.id ? updatedCycle : c);
+                          
+                          return next;
+                        });
                         setEditingCycle(null);
                         setEditData(null);
                         showToast("✓ تم حفظ التعديلات على الدورة المؤرشفة!");
@@ -8026,7 +8056,11 @@ export default function FactoryTab({
                       type="button"
                       onClick={async () => {
                         if (await confirmDialog(`هل أنت متأكد من حذف هذه الدورة المؤرشفة بالكامل؟ (${editData.loads?.length || 0} حمولة، ${editData.payments?.length || 0} دفعة)`)) {
-                          setArchiveCycles((prev: any) => prev.filter((c: any) => c.id !== editData.id));
+                          setArchiveCycles((prev: any) => {
+                            const next = prev.filter((c: any) => c.id !== editData.id);
+                            
+                            return next;
+                          });
                           setEditingCycle(null);
                           setEditData(null);
                           showToast("✓ تم حذف الدورة المؤرشفة!");

@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { confirmDialog } from '../utils/confirm';
-import { COMPACT_PRO_CSS } from '../utils/reportStyles';
+import { COMPACT_PRO_CSS, printHTMLInNewWindow, ensureFontsLoaded } from '../utils/reportStyles';
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -131,17 +131,6 @@ export default function ExpensesTab({ expenses, onAddExpense, onDeleteExpense, o
   const periodLabel = periodFilter === 'all' ? 'الكل' : periodFilter === 'today' ? 'يومي' : periodFilter === 'week' ? 'أسبوعي' : 'شهري';
 
   const printFinancialReportHTMLDirectly = () => {
-    const iframe = document.createElement('iframe');
-    iframe.style.position = 'fixed';
-    iframe.style.top = '-1000px';
-    iframe.style.left = '-1000px';
-    iframe.style.width = '210mm';
-    iframe.style.height = '297mm';
-    document.body.appendChild(iframe);
-
-    const doc = iframe.contentWindow?.document;
-    if (!doc) return;
-
     const formattedDate = new Date().toLocaleDateString('ar-EG', { dateStyle: 'long' });
 
     const storedSetStr = localStorage.getItem('app_settings_sys');
@@ -161,8 +150,7 @@ export default function ExpensesTab({ expenses, onAddExpense, onDeleteExpense, o
       catTotals[cat] = (catTotals[cat] || 0) + e.amount;
     });
 
-    doc.open();
-    doc.write(`
+    const html = `
       <!DOCTYPE html>
       <html dir="rtl" lang="ar">
       <head>${COMPACT_PRO_CSS}</head>
@@ -176,7 +164,7 @@ export default function ExpensesTab({ expenses, onAddExpense, onDeleteExpense, o
           </div>
         </div>
 
-        <div class="sg">
+        <div class="sg" style="grid-template-columns:repeat(2,1fr)">
           <div class="sb bl">
             <div class="l">عدد السجلات</div>
             <div class="v">${currentRecords.length} <span style="font-size:10px">سجل</span></div>
@@ -184,10 +172,6 @@ export default function ExpensesTab({ expenses, onAddExpense, onDeleteExpense, o
           <div class="sb rd">
             <div class="l">الإجمالي</div>
             <div class="v">${totalCurrent.toLocaleString('ar-EG')} <span style="font-size:10px">ج.م</span></div>
-          </div>
-          <div class="sb gr">
-            <div class="l">المتوسط</div>
-            <div class="v">${avgAmount.toLocaleString('ar-EG')} <span style="font-size:10px">ج.م</span></div>
           </div>
         </div>
 
@@ -252,224 +236,381 @@ export default function ExpensesTab({ expenses, onAddExpense, onDeleteExpense, o
         </div>
       </body>
       </html>
-    `);
-    doc.close();
-
-    setTimeout(() => {
-      iframe.contentWindow?.focus();
-      iframe.contentWindow?.print();
-      setTimeout(() => {
-        document.body.removeChild(iframe);
-      }, 500);
-    }, 500);
+    `;
+    printHTMLInNewWindow(html);
   };
 
   const downloadExpensesImage = () => {
+    ensureFontsLoaded();
     const catTotals: Record<string, number> = {};
     currentRecords.forEach(e => {
       const cat = e.category || 'أخرى';
       catTotals[cat] = (catTotals[cat] || 0) + e.amount;
     });
 
-    const canvas = document.createElement('canvas');
-    canvas.width = 1200;
-    const rowH = 38;
-    const headerH = 100;
-    const summaryCardH = 80;
-    const catSummaryH = isExpense && Object.keys(catTotals).length > 0 ? 60 + Object.keys(catTotals).length * 36 : 0;
-    const totalH = headerH + 30 + summaryCardH + 30 + currentRecords.length * rowH + 60 + catSummaryH + 80;
-    canvas.height = totalH;
+    const storedSetStr = localStorage.getItem('app_settings_sys');
+    let invoiceAppName = 'سمن وزيت سوفانا الفاخر';
+    if (storedSetStr) {
+      try {
+        const parsed = JSON.parse(storedSetStr);
+        if (parsed.appName) invoiceAppName = parsed.appName;
+      } catch {}
+    }
+    const formattedDate = new Date().toLocaleDateString('ar-EG', { dateStyle: 'long' });
 
+    const W = 920;
+    const padX = 30;
+    const tableW = W - padX * 2;
+    const rowH = 40;
+    const headerH = 130;
+    const summaryCardH = 80;
+    const sectionTitleH = 40;
+    const tableHeaderH = 34;
+    const tableRowH = currentRecords.length * rowH;
+    const totalsRowH = 38;
+    const catTableH = isExpense && Object.keys(catTotals).length > 0
+      ? sectionTitleH + tableHeaderH + Object.keys(catTotals).length * rowH : 0;
+    const footerH = 80;
+    const totalH = headerH + 12 + summaryCardH + 20 + sectionTitleH + tableHeaderH + tableRowH + totalsRowH + 20 + catTableH + footerH + 30;
+
+    const canvas = document.createElement('canvas');
+    const TARGET_W = 3840;
+    const dpr = Math.max(window.devicePixelRatio || 1, TARGET_W / W);
+    canvas.width = W * dpr;
+    canvas.height = totalH * dpr;
+    canvas.style.width = W + 'px';
+    canvas.style.height = totalH + 'px';
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
+    ctx.scale(dpr, dpr);
+    ctx.direction = 'rtl';
 
-    const formatNum = (n: number) => n.toLocaleString('ar-EG');
+    const rr = (x: number, y: number, w: number, h: number, r: number) => {
+      ctx.beginPath(); ctx.moveTo(x+r, y); ctx.lineTo(x+w-r, y);
+      ctx.quadraticCurveTo(x+w, y, x+w, y+r); ctx.lineTo(x+w, y+h-r);
+      ctx.quadraticCurveTo(x+w, y+h, x+w-r, y+h); ctx.lineTo(x+r, y+h);
+      ctx.quadraticCurveTo(x, y+h, x, y+h-r); ctx.lineTo(x, y+r);
+      ctx.quadraticCurveTo(x, y, x+r, y); ctx.closePath();
+    };
 
     ctx.fillStyle = '#faf8f5';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillRect(0, 0, W, totalH);
 
-    const grad = ctx.createLinearGradient(0, 0, canvas.width, 0);
-    grad.addColorStop(0, '#1e2a4a');
-    grad.addColorStop(1, '#2b3a5c');
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, canvas.width, headerH);
-
+    // ── Header (gradient like PDF) ──
+    const headerGrad = ctx.createLinearGradient(0, 0, W, 0);
+    headerGrad.addColorStop(0, '#0f172a');
+    headerGrad.addColorStop(0.5, '#1e3a5f');
+    headerGrad.addColorStop(1, '#1e40af');
+    ctx.fillStyle = headerGrad;
+    rr(12, 12, W - 24, headerH, 10);
+    ctx.fill();
     ctx.fillStyle = '#d4a843';
-    ctx.fillRect(0, headerH, canvas.width, 4);
+    ctx.fillRect(12, 12 + headerH - 4, W - 24, 4);
 
     ctx.fillStyle = '#ffffff';
-    ctx.font = '900 20px system-ui, sans-serif';
-    ctx.textAlign = 'right';
-    ctx.fillText(`تقرير ${title} بالتفصيل`, canvas.width - 40, 40);
-    ctx.font = '600 12px system-ui, sans-serif';
-    ctx.fillStyle = '#d4a843';
-    ctx.fillText(`الفترة: ${periodLabel}`, canvas.width - 40, 62);
+    ctx.textAlign = 'center';
+    ctx.font = '900 24px Cairo, system-ui, sans-serif';
+    ctx.fillText(`تقرير ${title} بالتفصيل`, W / 2, 52);
+    ctx.font = '600 13px Cairo, system-ui, sans-serif';
+    ctx.fillStyle = '#94a3b8';
+    ctx.fillText(invoiceAppName, W / 2, 74);
 
-    ctx.fillStyle = '#0d7c5f';
-    ctx.beginPath();
-    ctx.roundRect(canvas.width - 200, 20, 160, 50, 12);
+    // Badges row
+    const badgesY = 88;
+    const periodText = `الفترة: ${periodLabel}`;
+    const countText = `${currentRecords.length} سجل`;
+    const periodW = ctx.measureText(periodText).width + 28;
+    const countW = ctx.measureText(countText).width + 28;
+    const badgesGap = 10;
+    const totalBadgesW = periodW + countW + badgesGap;
+    const badgesStartX = W / 2 - totalBadgesW / 2;
+
+    ctx.fillStyle = '#1e40af';
+    rr(badgesStartX, badgesY, periodW, 24, 12);
     ctx.fill();
     ctx.fillStyle = '#ffffff';
-    ctx.font = '900 20px system-ui, sans-serif';
+    ctx.font = '700 11px Cairo, system-ui, sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText(`${currentRecords.length} سجل`, canvas.width - 120, 52);
+    ctx.fillText(periodText, badgesStartX + periodW / 2, badgesY + 16);
 
-    ctx.textAlign = 'left';
-    ctx.fillStyle = '#94a3b8';
-    ctx.font = '500 11px system-ui, sans-serif';
-    ctx.fillText(`تصدير: ${new Date().toLocaleDateString('ar-EG')}`, 40, 40);
+    ctx.fillStyle = '#059669';
+    rr(badgesStartX + periodW + badgesGap, badgesY, countW, 24, 12);
+    ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(countText, badgesStartX + periodW + badgesGap + countW / 2, badgesY + 16);
 
-    let y = headerH + 20;
+    ctx.fillStyle = '#cbd5e1';
+    ctx.font = '500 11px Cairo, system-ui, sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillText(formattedDate, W - 50, badgesY + 16);
 
-    const cardW = (canvas.width - 80) / 3;
+    let y = 12 + headerH + 12;
+
+    // ── Summary Cards (2 cards: blue, red) ──
+    const cardGap = 12;
+    const cardW = (tableW - cardGap) / 2;
     const cards = [
-      { label: 'عدد السجلات', value: `${currentRecords.length} سجل`, color: '#eff6ff', textColor: '#1e40af' },
-      { label: 'الإجمالي', value: `${formatNum(totalCurrent)} ج.م`, color: '#fff5f5', textColor: '#dc2626' },
-      { label: 'المتوسط', value: `${formatNum(avgAmount)} ج.م`, color: '#f0fdf4', textColor: '#16a34a' }
+      { label: 'عدد السجلات', value: `${currentRecords.length} سجل`, border: '#3b82f6', bg: '#eff6ff', text: '#1e40af' },
+      { label: 'الإجمالي', value: `${totalCurrent.toLocaleString('ar-EG')} ج.م`, border: '#ef4444', bg: '#fff5f5', text: '#dc2626' }
     ];
     cards.forEach((card, i) => {
-      const cx = 30 + i * (cardW + 10);
-      ctx.fillStyle = card.color;
-      ctx.beginPath();
-      ctx.roundRect(cx, y, cardW, summaryCardH, 10);
+      const cx = padX + i * (cardW + cardGap);
+      ctx.fillStyle = card.bg;
+      rr(cx, y, cardW, summaryCardH, 10);
       ctx.fill();
-      ctx.strokeStyle = '#e2e8f0';
-      ctx.lineWidth = 1;
+      ctx.strokeStyle = card.border;
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.moveTo(cx + 10, y);
+      ctx.lineTo(cx + cardW - 10, y);
+      ctx.quadraticCurveTo(cx + cardW, y, cx + cardW, y + 10);
+      ctx.lineTo(cx + cardW, y + summaryCardH - 10);
+      ctx.quadraticCurveTo(cx + cardW, y + summaryCardH, cx + cardW - 10, y + summaryCardH);
+      ctx.lineTo(cx + 10, y + summaryCardH);
+      ctx.quadraticCurveTo(cx, y + summaryCardH, cx, y + summaryCardH - 10);
+      ctx.lineTo(cx, y + 10);
+      ctx.quadraticCurveTo(cx, y, cx + 10, y);
+      ctx.closePath();
       ctx.stroke();
       ctx.fillStyle = '#64748b';
-      ctx.font = '600 11px system-ui, sans-serif';
+      ctx.font = '600 12px Cairo, system-ui, sans-serif';
       ctx.textAlign = 'center';
-      ctx.fillText(card.label, cx + cardW / 2, y + 28);
-      ctx.fillStyle = card.textColor;
-      ctx.font = '900 16px system-ui, sans-serif';
-      ctx.fillText(card.value, cx + cardW / 2, y + 55);
+      ctx.fillText(card.label, cx + cardW / 2, y + 30);
+      ctx.fillStyle = card.text;
+      ctx.font = '900 18px Tajawal, system-ui, sans-serif';
+      ctx.fillText(card.value, cx + cardW / 2, y + 58);
     });
-    y += summaryCardH + 20;
+    y += summaryCardH + 16;
 
-    const tableX = 30;
-    const tableW = canvas.width - 60;
-    const cols = isExpense
-      ? [tableX, tableX + 50, tableX + 250, tableX + 450, tableX + 600]
-      : [tableX, tableX + 50, tableX + 350, tableX + 600];
-    const headers = isExpense
-      ? ['م', 'البيان', 'الفئة', 'المبلغ', 'التاريخ']
-      : ['م', 'البيان', 'المبلغ', 'التاريخ'];
-
-    ctx.fillStyle = '#1e2a4a';
-    ctx.fillRect(tableX, y, tableW, 32);
+    // ── Section 1: تفاصيل السجلات ──
+    ctx.fillStyle = '#f8fafc';
+    rr(padX, y, tableW, sectionTitleH, 8);
+    ctx.fill();
+    ctx.strokeStyle = '#e2e8f0';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(padX + 10, y + sectionTitleH);
+    ctx.lineTo(padX + tableW - 10, y + sectionTitleH);
+    ctx.stroke();
+    // Number badge
+    ctx.fillStyle = '#f59e0b';
+    ctx.beginPath();
+    ctx.arc(padX + tableW - 20, y + sectionTitleH / 2, 14, 0, Math.PI * 2);
+    ctx.fill();
     ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 12px system-ui, sans-serif';
-    headers.forEach((h, i) => {
-      ctx.textAlign = i === 0 ? 'center' : 'right';
-      ctx.fillText(h, cols[i] + (i === 0 ? 20 : 10), y + 22);
-    });
-    y += 32;
+    ctx.font = '900 13px Cairo, system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('1', padX + tableW - 20, y + sectionTitleH / 2 + 5);
+    // Section title
+    ctx.fillStyle = '#1e293b';
+    ctx.font = '800 14px Cairo, system-ui, sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillText(`تفاصيل السجلات (${currentRecords.length} مستند)`, padX + tableW - 45, y + sectionTitleH / 2 + 5);
+    y += sectionTitleH;
 
+    // ── Table Header ──
+    const tHeaderGrad = ctx.createLinearGradient(0, y, 0, y + tableHeaderH);
+    tHeaderGrad.addColorStop(0, '#1e3a5f');
+    tHeaderGrad.addColorStop(1, '#0f172a');
+    ctx.fillStyle = tHeaderGrad;
+    rr(padX, y, tableW, tableHeaderH, 8);
+    ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '700 12px Cairo, system-ui, sans-serif';
+    const colM = padX + tableW - 35;
+    const colDesc = padX + tableW - 180;
+    const colCat = isExpense ? padX + tableW - 340 : 0;
+    const colAmount = isExpense ? padX + tableW - 500 : padX + tableW - 350;
+    const colDate = padX + 50;
+    ctx.textAlign = 'center';
+    ctx.fillText('م', colM, y + 22);
+    ctx.textAlign = 'right';
+    ctx.fillText('البيان', colDesc, y + 22);
+    if (isExpense) { ctx.fillText('الفئة', colCat, y + 22); }
+    ctx.textAlign = 'center';
+    ctx.fillText('المبلغ', colAmount, y + 22);
+    ctx.textAlign = 'left';
+    ctx.fillText('التاريخ', colDate, y + 22);
+    y += tableHeaderH;
+
+    // ── Table Rows ──
     currentRecords.forEach((item, idx) => {
-      ctx.fillStyle = idx % 2 === 0 ? '#ffffff' : '#f8fafc';
-      ctx.fillRect(tableX, y, tableW, rowH);
+      ctx.fillStyle = idx % 2 === 0 ? '#ffffff' : '#f1f5f9';
+      rr(padX, y, tableW, rowH, 0);
+      ctx.fill();
       ctx.strokeStyle = '#e2e8f0';
       ctx.lineWidth = 0.5;
-      ctx.strokeRect(tableX, y, tableW, rowH);
+      ctx.beginPath();
+      ctx.moveTo(padX, y + rowH);
+      ctx.lineTo(padX + tableW, y + rowH);
+      ctx.stroke();
 
-      ctx.fillStyle = '#4a5568';
-      ctx.font = '12px system-ui, sans-serif';
+      ctx.fillStyle = '#94a3b8';
+      ctx.font = '700 12px Cairo, system-ui, sans-serif';
       ctx.textAlign = 'center';
-      ctx.fillText(String(idx + 1), cols[0] + 20, y + 24);
+      ctx.fillText(String(idx + 1), colM, y + 24);
       ctx.textAlign = 'right';
-      ctx.fillStyle = '#1e2a4a';
-      ctx.font = '700 11px system-ui, sans-serif';
-      ctx.fillText(parseExpenseDescription(item.description) || '(بدون بيان)', cols[1] + 10, y + 24);
-
-      let amountColIdx = 2;
+      ctx.fillStyle = '#1e3a5f';
+      ctx.font = '700 12px Cairo, system-ui, sans-serif';
+      ctx.fillText(parseExpenseDescription(item.description) || '(بدون بيان)', colDesc, y + 24);
       if (isExpense) {
         ctx.fillStyle = '#1e40af';
-        ctx.font = '600 10px system-ui, sans-serif';
-        ctx.fillText(item.category, cols[2] + 10, y + 24);
-        amountColIdx = 3;
+        ctx.font = '600 11px Cairo, system-ui, sans-serif';
+        ctx.textAlign = 'right';
+        ctx.fillText(item.category, colCat, y + 24);
       }
-
-      ctx.fillStyle = '#1e2a4a';
-      ctx.font = '900 12px system-ui, sans-serif';
-      ctx.textAlign = 'right';
-      ctx.fillText(`${formatNum(item.amount)} ج.م`, cols[amountColIdx] + 10, y + 24);
-
+      ctx.fillStyle = '#1e3a5f';
+      ctx.font = '800 13px Tajawal, system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(`${item.amount.toLocaleString('ar-EG')} ج.م`, colAmount, y + 24);
       ctx.fillStyle = '#64748b';
-      ctx.font = '11px system-ui, sans-serif';
-      ctx.textAlign = 'right';
-      ctx.fillText(new Date(item.date).toLocaleDateString('ar-EG'), cols[amountColIdx + 1] + 10, y + 24);
-
+      ctx.font = '500 10px Cairo, system-ui, sans-serif';
+      ctx.textAlign = 'left';
+      ctx.fillText(new Date(item.date).toLocaleString('ar-EG'), colDate, y + 24);
       y += rowH;
     });
 
-    ctx.fillStyle = '#0d7c5f';
-    ctx.fillRect(tableX, y, tableW, 36);
+    // ── Totals Row ──
+    const tsGrad = ctx.createLinearGradient(0, y, 0, y + totalsRowH);
+    tsGrad.addColorStop(0, '#059669');
+    tsGrad.addColorStop(1, '#047857');
+    ctx.fillStyle = tsGrad;
+    rr(padX, y, tableW, totalsRowH, 8);
+    ctx.fill();
     ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 13px system-ui, sans-serif';
+    ctx.font = '800 13px Cairo, system-ui, sans-serif';
     ctx.textAlign = 'right';
-    ctx.fillText(`الإجمالي: ${formatNum(totalCurrent)} ج.م`, tableX + tableW - 20, y + 24);
+    ctx.fillText(`الإجمالي: ${totalCurrent.toLocaleString('ar-EG')} ج.م`, padX + tableW - 20, y + 24);
     ctx.textAlign = 'center';
-    ctx.fillText(`${currentRecords.length} سجل`, tableX + tableW / 2, y + 24);
-    y += 50;
+    ctx.fillText(`${currentRecords.length} سجل`, padX + tableW / 2, y + 24);
+    y += totalsRowH + 16;
 
+    // ── Section 2: الملخص حسب الفئة ──
     if (isExpense && Object.keys(catTotals).length > 0) {
-      ctx.fillStyle = '#1e2a4a';
-      ctx.font = '700 13px system-ui, sans-serif';
-      ctx.textAlign = 'right';
-      ctx.fillText('الملخص حسب الفئة', tableX + tableW - 10, y + 16);
-      y += 30;
-
-      ctx.fillStyle = '#1e2a4a';
-      ctx.fillRect(tableX, y, tableW, 30);
+      ctx.fillStyle = '#f8fafc';
+      rr(padX, y, tableW, sectionTitleH, 8);
+      ctx.fill();
+      ctx.strokeStyle = '#e2e8f0';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(padX + 10, y + sectionTitleH);
+      ctx.lineTo(padX + tableW - 10, y + sectionTitleH);
+      ctx.stroke();
+      ctx.fillStyle = '#f59e0b';
+      ctx.beginPath();
+      ctx.arc(padX + tableW - 20, y + sectionTitleH / 2, 14, 0, Math.PI * 2);
+      ctx.fill();
       ctx.fillStyle = '#ffffff';
-      ctx.font = 'bold 11px system-ui, sans-serif';
+      ctx.font = '900 13px Cairo, system-ui, sans-serif';
       ctx.textAlign = 'center';
-      ctx.fillText('م', tableX + 25, y + 20);
+      ctx.fillText('2', padX + tableW - 20, y + sectionTitleH / 2 + 5);
+      ctx.fillStyle = '#1e293b';
+      ctx.font = '800 14px Cairo, system-ui, sans-serif';
       ctx.textAlign = 'right';
-      ctx.fillText('الفئة', tableX + 80, y + 20);
-      ctx.fillText('الإجمالي', tableX + tableW / 2, y + 20);
+      ctx.fillText('الملخص حسب الفئة', padX + tableW - 45, y + sectionTitleH / 2 + 5);
+      y += sectionTitleH;
+
+      const catHeaderGrad = ctx.createLinearGradient(0, y, 0, y + tableHeaderH);
+      catHeaderGrad.addColorStop(0, '#1e3a5f');
+      catHeaderGrad.addColorStop(1, '#0f172a');
+      ctx.fillStyle = catHeaderGrad;
+      rr(padX, y, tableW, tableHeaderH, 8);
+      ctx.fill();
+      ctx.fillStyle = '#ffffff';
+      ctx.font = '700 12px Cairo, system-ui, sans-serif';
+      const catColM = padX + tableW - 35;
+      const catColName = padX + tableW - 180;
+      const catColTotal = padX + tableW / 2;
+      const catColPercent = padX + 50;
+      ctx.textAlign = 'center';
+      ctx.fillText('م', catColM, y + 22);
+      ctx.textAlign = 'right';
+      ctx.fillText('الفئة', catColName, y + 22);
+      ctx.textAlign = 'center';
+      ctx.fillText('الإجمالي', catColTotal, y + 22);
       ctx.textAlign = 'left';
-      ctx.fillText('النسبة', tableX + tableW - 40, y + 20);
-      y += 30;
+      ctx.fillText('النسبة', catColPercent, y + 22);
+      y += tableHeaderH;
 
       Object.entries(catTotals).sort((a, b) => b[1] - a[1]).forEach(([cat, total], idx) => {
-        ctx.fillStyle = idx % 2 === 0 ? '#ffffff' : '#f8fafc';
-        ctx.fillRect(tableX, y, tableW, 34);
+        ctx.fillStyle = idx % 2 === 0 ? '#ffffff' : '#f1f5f9';
+        ctx.fillRect(padX, y, tableW, rowH);
         ctx.strokeStyle = '#e2e8f0';
         ctx.lineWidth = 0.5;
-        ctx.strokeRect(tableX, y, tableW, 34);
-
-        ctx.fillStyle = '#4a5568';
-        ctx.font = '12px system-ui, sans-serif';
+        ctx.beginPath();
+        ctx.moveTo(padX, y + rowH);
+        ctx.lineTo(padX + tableW, y + rowH);
+        ctx.stroke();
+        ctx.fillStyle = '#94a3b8';
+        ctx.font = '700 12px Cairo, system-ui, sans-serif';
         ctx.textAlign = 'center';
-        ctx.fillText(String(idx + 1), tableX + 25, y + 22);
+        ctx.fillText(String(idx + 1), catColM, y + 24);
         ctx.textAlign = 'right';
         ctx.fillStyle = '#1e40af';
-        ctx.font = '600 11px system-ui, sans-serif';
-        ctx.fillText(cat, tableX + 80, y + 22);
-        ctx.fillStyle = '#1e2a4a';
-        ctx.font = '700 11px system-ui, sans-serif';
-        ctx.fillText(`${formatNum(total)} ج.م`, tableX + tableW / 2, y + 22);
+        ctx.font = '600 12px Cairo, system-ui, sans-serif';
+        ctx.fillText(cat, catColName, y + 24);
+        ctx.fillStyle = '#1e3a5f';
+        ctx.font = '800 13px Tajawal, system-ui, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(`${total.toLocaleString('ar-EG')} ج.م`, catColTotal, y + 24);
+        ctx.fillStyle = '#1e3a5f';
+        ctx.font = '700 12px Cairo, system-ui, sans-serif';
         ctx.textAlign = 'left';
-        ctx.fillStyle = '#64748b';
-        ctx.fillText(`${totalCurrent > 0 ? ((total / totalCurrent) * 100).toFixed(1) : 0}%`, tableX + tableW - 40, y + 22);
-
-        y += 34;
+        ctx.fillText(`${totalCurrent > 0 ? ((total / totalCurrent) * 100).toFixed(1) : 0}%`, catColPercent, y + 24);
+        y += rowH;
       });
     }
 
-    y += 20;
+    y += 16;
+
+    // ── Footer: Signature sections ──
     ctx.strokeStyle = '#d5d0c8';
     ctx.lineWidth = 1;
     ctx.beginPath();
-    ctx.moveTo(30, y);
-    ctx.lineTo(canvas.width - 30, y);
+    ctx.moveTo(padX, y);
+    ctx.lineTo(W - padX, y);
     ctx.stroke();
-    y += 18;
-    ctx.fillStyle = '#94a3b8';
-    ctx.font = '500 11px system-ui, sans-serif';
+    y += 12;
+
+    const sigW = (tableW - 20) / 2;
+    const sigH = 50;
+    // Right signature box
+    rr(padX, y, sigW, sigH, 6);
+    ctx.fillStyle = '#ffffff';
+    ctx.fill();
+    ctx.strokeStyle = '#cbd5e1';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.fillStyle = '#1e293b';
+    ctx.font = '700 11px Cairo, system-ui, sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText(`تم التصدير من نظام تتبع المبيعات — ${new Date().toLocaleDateString('ar-EG')}`, canvas.width / 2, y);
+    ctx.fillText('التوقيع والاعتماد النهائي', padX + sigW / 2, y + 22);
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = '500 10px Cairo, system-ui, sans-serif';
+    ctx.fillText('التوقيع', padX + sigW / 2, y + 40);
+
+    // Left signature box
+    rr(padX + sigW + 20, y, sigW, sigH, 6);
+    ctx.fillStyle = '#ffffff';
+    ctx.fill();
+    ctx.strokeStyle = '#cbd5e1';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.fillStyle = '#1e293b';
+    ctx.font = '700 11px Cairo, system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('إعداد المسؤول الحسابي', padX + sigW + 20 + sigW / 2, y + 22);
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = '500 10px Cairo, system-ui, sans-serif';
+    ctx.fillText('التوقيع', padX + sigW + 20 + sigW / 2, y + 40);
+
+    y += sigH + 16;
+
+    // Final footer
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = '500 10px Cairo, system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(`تم التصدير من نظام تتبع المبيعات — ${formattedDate}`, W / 2, y);
 
     const link = document.createElement('a');
     link.download = `تقرير_${title}_${new Date().toISOString().substring(0, 10)}.png`;
