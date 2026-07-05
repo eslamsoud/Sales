@@ -18,7 +18,10 @@ import {
   DEFAULT_FACTORY_LOADS,
   DEFAULT_INVOICES,
   DEFAULT_EXPENSES,
-  DEFAULT_SETTINGS
+  DEFAULT_SETTINGS,
+  nowEgyptISO,
+  todayEgyptISO,
+  todayEgyptLocale
 } from './utils/storage';
 
 // Import newly created tab components
@@ -101,6 +104,10 @@ export default function App() {
   const [lockError, setLockError] = useState('');
   const [lockFailedAttempts, setLockFailedAttempts] = useState(0);
   const [isHeaderSyncing, setIsHeaderSyncing] = useState(false);
+  const isHeaderSyncingRef = useRef(false);
+  useEffect(() => {
+    isHeaderSyncingRef.current = isHeaderSyncing;
+  }, [isHeaderSyncing]);
   const [isFetchingData, setIsFetchingData] = useState(false);
   const [lastSyncInfo, setLastSyncInfo] = useState<string>('');
   const [lastSyncFailed, setLastSyncFailed] = useState(false);
@@ -200,7 +207,7 @@ export default function App() {
       maxExtraDiscountAmount: 1000000,
       password: btoa(encodeURIComponent(localStorage.getItem('owner_passcode_sys') || '1987')),
       customRoleName: 'المدير العام 👑',
-      createdAt: new Date().toISOString()
+      createdAt: nowEgyptISO()
     };
 
     const raw = localStorage.getItem('users_permissions_sys');
@@ -428,8 +435,13 @@ export default function App() {
   // ☁️ مزامنة تلقائية صامتة عند بدء تشغيل التطبيق لضمان سحب أحدث بيانات المناديب والأسعار من السحاب
   useEffect(() => {
     if (isDbLoaded && currentUser) {
-      const timer = setTimeout(() => {
-        handleUpdateData(true); // سحب صامت لدمج البيانات الجديدة دون مسح البيانات الحالية
+      const timer = setTimeout(async () => {
+        try {
+          await handleUpdateData(true); // سحب صامت لدمج البيانات الجديدة دون مسح البيانات الحالية
+          showToast("✅ تم تحديث البيانات والأسعار من السحابة بنجاح");
+        } catch {
+          showToast("⚠️ تعمل الآن بالبيانات المحلية — تحقق من اتصال الإنترنت");
+        }
       }, 1500);
       return () => clearTimeout(timer);
     }
@@ -548,7 +560,7 @@ export default function App() {
             const stableId = (e.id && String(e.id).includes('-') && !String(e.id).includes('fix')) ? e.id : `exp-fix-${e.amount}-${e.category}-${e.delegatePhone || 'sys'}`;
             return {
               id: stableId,
-              date: (e.id && String(e.id).includes('-')) ? e.id : new Date().toISOString(), // استعادة التاريخ الحقيقي
+              date: (e.id && String(e.id).includes('-')) ? e.id : nowEgyptISO(), // استعادة التاريخ الحقيقي
               category: (e.category && e.category !== 'expense' && e.category !== 'revenue') ? e.category : (e.date !== 'مصروف' && e.date !== 'إيراد' && e.date ? e.date : 'أخرى'),
               type: (e.type === 'revenue' || e.date === 'إيراد') ? 'revenue' : 'expense',
               amount: Number(e.amount) || 0,
@@ -667,12 +679,7 @@ export default function App() {
     }
   }, [isDbLoaded, currentUser, products, customers, invoices, expenses, trips, factoryLoads, settings, usersList, syncLogs]);
 
-  // السحب الصامت من السحابة عند بدء التشغيل لضمان حصول الجميع على آخر البيانات
-  useEffect(() => {
-    if (isDbLoaded) {
-      handleUpdateData(true); // جلب البيانات صامتاً في الخلفية
-    }
-  }, [isDbLoaded]);
+  // 🚨 تم إزالة السحب المكرر هنا — يتم السحب الصامت مرة واحدة فقط من useEffect أعلاه (بعد isDbLoaded && currentUser)
 
   // ⏱️ سحب دوري صامت كل 5 دقائق للتأكد من حصول المناديب على آخر التحديثات من الشيت
   useEffect(() => {
@@ -798,7 +805,7 @@ export default function App() {
                   amount: pay.amount,
                   category: 'سداد للمصنع',
                   type: 'factory_payment',
-                  date: pay.date && pay.date.includes('-') ? pay.date : new Date().toISOString(),
+                  date: pay.date && pay.date.includes('-') ? pay.date : nowEgyptISO(),
                   description: JSON.stringify({
                     notes: pay.notes || 'تسديد مباشر',
                     appliedToCarriedDebt: pay.appliedToCarriedDebt || 0
@@ -1261,6 +1268,10 @@ export default function App() {
   };
 
   async function syncAllDataToGoogle(silent = false): Promise<boolean> {
+    if (isHeaderSyncingRef.current) {
+      console.log("Sync skipped: already syncing");
+      return false;
+    }
     const ref = latestDataRef.current;
     const scriptUrl = getSafeScriptUrl(ref.settings.googleSheetsUrl);
     const requestId = `sync-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
@@ -1393,7 +1404,7 @@ export default function App() {
           description: t.description,
           price: t.price,
           status: t.collected ? 'محصلة' : 'غير محصلة',
-          date: t.date || new Date().toISOString(),
+          date: t.date || nowEgyptISO(),
           delegateName: t.delegateName || 'مجهول',
           delegatePhone: t.delegatePhone || '',
           odometerStart: t.odometerStart || '',
@@ -1742,13 +1753,8 @@ export default function App() {
           <div className="border-t border-slate-100 pt-2 text-center">
             <button
               onClick={async () => {
-                if (await confirmDialog("هل أنت متأكد من تسجيل الخروج وتبديل الحساب؟", false)) {
-                  localStorage.removeItem('authed_user_phone');
-                  setCurrentUser(null);
-                  setIsLockedByTimeout(false);
-                  setLockPassword('');
-                  setLockError('');
-                }
+                // 🛡️ حماية الخروج بالحفظ الإجباري — لا يُسمح بالخروج بدون حفظ
+                await handleSecureExit();
               }}
               className="text-red-500 hover:text-red-700 hover:underline text-xs font-black cursor-pointer transition-colors"
             >
@@ -1783,8 +1789,11 @@ export default function App() {
     setIsHeaderSyncing(false);
 
     if (success) {
-      showToast("✓ تم الحفظ السحابي بنجاح! جاري الخروج...");
-      await new Promise(r => setTimeout(r, 1000));
+      showToast("✅ تم حفظ جميع البيانات بنجاح في السحابة!");
+      await new Promise(r => setTimeout(r, 1200));
+      // تأكيد نهائي قبل الخروج الفعلي بعد الحفظ الناجح
+      const finalConfirm = await confirmDialog("✅ تم الحفظ بنجاح.\n\nهل تريد الخروج الآن؟", false);
+      if (!finalConfirm) return;
     } else {
       const forceProceed = await confirmDialog("⚠️ تعذر الحفظ السحابي بعد 3 محاولات.\nهل تريد المغادرة مع الحفظ المحلي فقط؟", true);
       if (!forceProceed) return;
@@ -1809,6 +1818,10 @@ export default function App() {
   }
 
   async function handleUpdateData(isSilent = false) {
+    if (isHeaderSyncingRef.current) {
+      console.log("Update skipped: sync in progress");
+      return;
+    }
     const ref = latestDataRef.current;
     const scriptUrl = getSafeScriptUrl(ref.settings.googleSheetsUrl);
     const startTime = performance.now();
@@ -2007,7 +2020,8 @@ export default function App() {
                   merged.push(np as Product);
               }
             });
-            finalProducts = merged.filter(p => mappedIds.has(p.id));
+            // 🛡️ الإبقاء على الأصناف المحلية الجديدة غير المزامنة بعد (بدلاً من حذفها)
+            finalProducts = merged;
           }
           setProducts(finalProducts);
         } else if (data.products && Array.isArray(data.products)) {
@@ -2031,7 +2045,8 @@ export default function App() {
               if (idx > -1) merged[idx] = np;
               else merged.push(np);
             });
-            finalProducts = merged.filter(p => mappedIds.has(p.id));
+            // 🛡️ الإبقاء على الأصناف المحلية الجديدة غير المزامنة بعد
+            finalProducts = merged;
           }
           setProducts(finalProducts);
         }
@@ -2069,7 +2084,8 @@ export default function App() {
                 merged.push(nc);
               }
             });
-            finalCustomers = merged.filter(c => mappedIds.has(c.id));
+            // 🛡️ الإبقاء على العملاء المحليين الجدد غير المزامنين بعد
+            finalCustomers = merged;
           }
           setCustomers(finalCustomers);
 
@@ -2115,7 +2131,7 @@ export default function App() {
               customerId: cust ? cust.id : (inv.customerId || 'cust_' + Date.now()),
               customerName: inv.customerName || (cust ? cust.name : 'عميل مجهول'),
               customerArea: inv.area || (cust ? cust.area : 'منطقة مجهولة'),
-              date: inv.date || new Date().toISOString(),
+              date: inv.date || nowEgyptISO(),
               items: Array.isArray(inv.items) ? inv.items : [],
               discount: inv.discount || 0,
               totalBeforeDiscount: Number(inv.totalBeforeDiscount) || Number(inv.total) || 0,
@@ -2207,7 +2223,7 @@ export default function App() {
               const stableId = (e.id && String(e.id).includes('-')) ? e.id : `exp-fix-${e.amount}-${(e.category || 'other').trim()}-${(e.delegatePhone || 'sys').trim()}`;
               return {
                 id: stableId,
-                date: (e.id && String(e.id).includes('-') && !String(e.id).includes('fix')) ? e.id : new Date().toISOString(),
+                date: (e.id && String(e.id).includes('-') && !String(e.id).includes('fix')) ? e.id : nowEgyptISO(),
                 category: (e.category && e.category !== 'expense' && e.category !== 'revenue') ? e.category : (e.date !== 'مصروف' && e.date !== 'إيراد' && e.date ? e.date : 'أخرى'),
                 type: (e.type === 'revenue' || e.date === 'إيراد') ? 'revenue' : 'expense',
                 amount: Number(e.amount) || 0,
@@ -2237,7 +2253,8 @@ export default function App() {
               if (idx > -1) merged[idx] = ne;
               else merged.push(ne);
             });
-            finalExpenses = merged.filter(e => mappedIds.has(e.id));
+            // 🛡️ الإبقاء على المصروفات المحلية الجديدة غير المزامنة بعد
+            finalExpenses = merged;
           }
           setExpenses(finalExpenses);
         }
@@ -2264,7 +2281,8 @@ export default function App() {
               if (idx > -1) merged[idx] = nt;
               else merged.push(nt);
             });
-            finalTrips = merged.filter(t => mappedIds.has(t.id));
+            // 🛡️ الإبقاء على المشاوير المحلية الجديدة غير المزامنة بعد
+            finalTrips = merged;
           }
           setTrips(finalTrips);
         }
@@ -2296,13 +2314,20 @@ export default function App() {
               if (idx > -1) merged[idx] = nl;
               else merged.push(nl);
             });
-            finalLoads = merged.filter(l => mappedIds.has(l.id));
+            // 🛡️ الإبقاء على حمولات المصنع المحلية الجديدة غير المزامنة بعد
+            finalLoads = merged;
           }
           setFactoryLoads(finalLoads);
         }
 
         if (data.factoryArchiveCycles && Array.isArray(data.factoryArchiveCycles)) {
-          const mappedArchive = data.factoryArchiveCycles.map((c: any) => ({
+          let deletedArchiveIds: string[] = [];
+          try {
+            deletedArchiveIds = JSON.parse(localStorage.getItem('deleted_records_sys') || '[]');
+          } catch {}
+          const mappedArchive = data.factoryArchiveCycles
+            .filter((c: any) => !deletedArchiveIds.includes(c.id))
+            .map((c: any) => ({
             id: c.id || String(Date.now()),
             settledAt: c.settledAt || '',
             settledFully: c.settledFully !== false,
@@ -2409,9 +2434,17 @@ export default function App() {
 
   return (
     <APIProvider key={activeKey || 'no-key'} apiKey={activeKey} version="beta" libraries={MAPS_LIBRARIES}>
-      <div className="bg-[#F7FAFC] min-h-screen text-[#1A365D] transition-all font-sans antialiased flex flex-col justify-between animate-fade-in" id="app-root-wrapper">
-      {/* 🛡️ Secure Header Bar */}
-      <header className="bg-[#1A365D] text-white py-3 px-4 shadow-md flex justify-between items-center sm:px-6" dir="rtl">
+      <div 
+        className="bg-[#F7FAFC] min-h-screen text-[#1A365D] transition-all font-sans antialiased flex flex-col justify-between animate-fade-in" 
+        id="app-root-wrapper"
+        style={{
+          ['--header-offset' as any]: simulatedDelegate ? '96px' : '56px'
+        }}
+      >
+      {/* 🛡️ Sticky Navigation Block */}
+      <div className="sticky top-0 z-[50] flex flex-col w-full">
+        {/* Header Bar */}
+        <header className="bg-[#1A365D] text-white py-3 px-4 shadow-md flex justify-between items-center sm:px-6" dir="rtl">
         <div className="flex items-center gap-3">
           <div className="h-2.5 w-2.5 rounded-full bg-emerald-400 animate-pulse"></div>
           <span className="text-xs font-black">
@@ -2561,6 +2594,7 @@ export default function App() {
           </div>
         </div>
       )}
+      </div>
 
       {/* 📡 Delegates Selector Modal / Portal */}
       <AnimatePresence>
@@ -3014,9 +3048,11 @@ export default function App() {
             usersList={usersList}
             onUpdateInvoice={handleUpdateInvoice}
             onAddExpense={handleAddExpense}
+            onDeleteExpense={handleDeleteExpense}
             onGoBack={() => setActiveTab('dashboard')}
             currentUser={effectiveUser}
             permittedSubTabs={effectiveUser.permittedSubTabs}
+            archiveCycles={archiveCycles}
           />
         )}
 

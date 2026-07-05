@@ -2,6 +2,7 @@
 import React, { useState } from 'react';
 import { UserAuth, Customer } from '../types';
 import { Shield, Phone, User, Key, CheckCircle, Info, LogOut, Fingerprint, Lock, Check, RefreshCw } from 'lucide-react';
+import { nowEgyptISO } from '../utils/storage';
 
 interface AuthGateProps {
   usersList: UserAuth[];
@@ -79,7 +80,7 @@ export default function AuthGate({ usersList, customersList = [], onUpdateUsers,
             canUseAiAssistant: false,
             password: btoa(encodeURIComponent('0000')), // الزوار لا يستخدمون الباسورد أصلاً
             customRoleName: 'عميل زائر للعرض 👀',
-            createdAt: new Date().toISOString()
+            createdAt: nowEgyptISO()
           };
           
           const updatedList = [...usersList, initialVisitor];

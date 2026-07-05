@@ -10,6 +10,7 @@ import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { Customer, Product, ProductWeight, Invoice, InvoiceItem, FactoryLoad, getProductWeightsFallback, formatNum, getItemFactoryCost } from '../types';
 import { Receipt, Plus, Trash2, ArrowRight, Save, User, MapPin, Percent, HelpCircle, Package, AlertTriangle, Scale, Eye, Search, Check, Loader2, Download, Share2, FileText, Printer, ScanLine, Copy } from 'lucide-react';
 import { showToast } from '../utils/toast';
+import { nowEgyptISO, todayEgyptISO } from '../utils/storage';
 import SecurePhoneDisplay from './SecurePhoneDisplay';
 import { jsPDF } from 'jspdf';
 import BarcodeScanner from './BarcodeScanner';
@@ -92,6 +93,7 @@ export default function InvoiceTab({
   // Archiving/Debtors subtab state
   const [searchInvoice, setSearchInvoice] = useState('');
   const [dateFilter, setDateFilter] = useState<'all' | 'today' | 'week' | 'month'>('all');
+  const [weekDayFilter, setWeekDayFilter] = useState<string[]>([]);
   const [selectedInvoice, setSelectedInvoice] = useState<Invoice | null>(null);
   const [filterGovernorateList, setFilterGovernorateList] = useState('');
   const [filterAreaList, setFilterAreaList] = useState('');
@@ -270,29 +272,32 @@ export default function InvoiceTab({
     return customers.find(c => c.id === selectedCustomerId);
   }, [selectedCustomerId, customers]);
 
-  // Available governorates present in customers list
+  // تطبيع الحروف العربية: ة → ه لتوحيد مقارنة أسماء المناطق
+  const normalizeArabic = (s: string) => (s || '').replace(/ة/g, 'ه').replace(/ى/g, 'ي');
+
+  // Available governorates present in customers list (مطبّع)
   const availableGovernorates = useMemo(() => {
-    const govs = customers.map(c => c.governorate).filter(Boolean);
+    const govs = customers.map(c => normalizeArabic(c.governorate)).filter(Boolean);
     return Array.from(new Set(govs)).sort();
   }, [customers]);
 
-  // Available geographical areas based on chosen governorate
+  // Available geographical areas based on chosen governorate (مطبّع)
   const availableAreas = useMemo(() => {
     const filteredCustomers = filterGovernorate
-      ? customers.filter(c => c.governorate === filterGovernorate)
+      ? customers.filter(c => normalizeArabic(c.governorate) === filterGovernorate)
       : customers;
-    const areas = filteredCustomers.map(c => c.area).filter(Boolean);
+    const areas = filteredCustomers.map(c => normalizeArabic(c.area)).filter(Boolean);
     return Array.from(new Set(areas)).sort();
   }, [customers, filterGovernorate]);
 
-  // Filtered customer list by chosen governorate and area
+  // Filtered customer list by chosen governorate and area (مطبّع)
   const filteredCustomersByArea = useMemo(() => {
     let result = customers;
     if (filterGovernorate) {
-      result = result.filter(c => c.governorate === filterGovernorate);
+      result = result.filter(c => normalizeArabic(c.governorate) === filterGovernorate);
     }
     if (filterArea) {
-      result = result.filter(c => c.area === filterArea);
+      result = result.filter(c => normalizeArabic(c.area) === filterArea);
     }
     return result;
   }, [customers, filterGovernorate, filterArea]);
@@ -1195,26 +1200,26 @@ export default function InvoiceTab({
     window.location.href = `whatsapp://send?phone=${finalPhone}&text=${encodedText}`;
   };
 
-  // Available governorates in the invoices list (based on customers who have invoices)
+  // Available governorates in the invoices list (مطبّع)
   const listGovernorates = useMemo(() => {
     const govs = invoices.map(inv => {
       const cust = customers.find(c => c.id === inv.customerId);
-      return cust?.governorate;
+      return normalizeArabic(cust?.governorate || '');
     }).filter(Boolean);
     return Array.from(new Set(govs)).sort();
   }, [invoices, customers]);
 
-  // Available areas in the invoices list based on selected list governorate
+  // Available areas in the invoices list (مطبّع)
   const listAreas = useMemo(() => {
     const filteredInvs = filterGovernorateList
       ? invoices.filter(inv => {
           const cust = customers.find(c => c.id === inv.customerId);
-          return cust?.governorate === filterGovernorateList;
+          return normalizeArabic(cust?.governorate || '') === filterGovernorateList;
         })
       : invoices;
     const areas = filteredInvs.map(inv => {
       const cust = customers.find(c => c.id === inv.customerId);
-      return cust?.area || inv.customerArea;
+      return normalizeArabic(cust?.area || inv.customerArea || '');
     }).filter(Boolean);
     return Array.from(new Set(areas)).sort();
   }, [invoices, customers, filterGovernorateList]);
@@ -1228,14 +1233,14 @@ export default function InvoiceTab({
 
     const cust = customers.find(c => c.id === inv.customerId);
     
-    // Filter by Governorate in the list
+    // Filter by Governorate in the list (مطبّع)
     if (filterGovernorateList) {
-      if (!cust || cust.governorate !== filterGovernorateList) return false;
+      if (!cust || normalizeArabic(cust.governorate || '') !== filterGovernorateList) return false;
     }
     
-    // Filter by Area in the list
+    // Filter by Area in the list (مطبّع)
     if (filterAreaList) {
-      if (!cust || cust.area !== filterAreaList) return false;
+      if (!cust || normalizeArabic(cust.area || '') !== filterAreaList) return false;
     }
 
     const q = searchInvoice.toLowerCase();
@@ -1255,8 +1260,19 @@ export default function InvoiceTab({
       return invDate.toDateString() === now.toDateString();
     }
     if (dateFilter === 'week') {
-      const msInWeek = 7 * 24 * 60 * 60 * 1000;
-      return (now.getTime() - invDate.getTime()) < msInWeek;
+      const jsDay = invDate.getDay();
+      const weekIdx = jsDay === 6 ? 0 : jsDay + 1;
+      const msInDay = 86400000;
+      const daysSinceSaturday = (weekIdx + 7) % 7;
+      const weekStart = new Date(now);
+      weekStart.setDate(now.getDate() - daysSinceSaturday);
+      weekStart.setHours(0, 0, 0, 0);
+      if (invDate.getTime() < weekStart.getTime()) return false;
+      if (weekDayFilter.length > 0) {
+        const englishDay = new Intl.DateTimeFormat('en-US', { weekday: 'long' }).format(invDate);
+        if (!weekDayFilter.includes(englishDay)) return false;
+      }
+      return true;
     }
     if (dateFilter === 'month') {
       return invDate.getMonth() === now.getMonth() && invDate.getFullYear() === now.getFullYear();
@@ -1275,14 +1291,21 @@ export default function InvoiceTab({
     }
   }, [permittedSubTabs, activeSubTab]);
 
-  const filteredArchiveList = filteredInvoices;
+  const filteredArchiveList = [...filteredInvoices].sort((a, b) => {
+    const dateA = new Date(a.date).getTime();
+    const dateB = new Date(b.date).getTime();
+    return dateB - dateA;
+  });
   const filteredDebtorsList = filteredInvoices.filter(inv => ((inv.totalAfterDiscount || 0) - (inv.paidAmount ?? (inv.totalAfterDiscount || 0))) > 0.05);
 
 
   return (
     <div className="bg-[#F7FAFC] min-h-screen pb-12 text-right" dir="rtl" id="invoice-tab-container">
       {/* Header */}
-      <div className="bg-[#1A365D] text-white border-transparent text-white px-4 py-4 sticky top-0 z-[60] shadow-md flex items-center justify-between">
+      <div 
+        className="bg-[#1A365D] text-white border-transparent text-white px-4 py-4 sticky z-[40] shadow-md flex items-center justify-between"
+        style={{ top: 'var(--header-offset, 56px)' }}
+      >
         <div className="flex items-center gap-2">
           <Receipt className="h-6 w-6 text-indigo-200" />
           <h1 className="text-xl font-bold">الفواتير والأرشيف</h1>
@@ -1870,7 +1893,7 @@ export default function InvoiceTab({
                     const previewInv = {
                       invoiceNumber: manualInvoiceNumber.trim() ? manualInvoiceNumber.trim() : `مبدئية`,
                       customerId: selectedCustomerId,
-                      date: (invoiceDate ? new Date(invoiceDate) : new Date()).toISOString(),
+        date: invoiceDate ? new Date(invoiceDate).toISOString() : nowEgyptISO(),
                       items: billItems,
                       totalBeforeDiscount: Number(totals.before.toFixed(2)),
                       totalAfterDiscount: Number(totals.after.toFixed(2)),
@@ -2037,7 +2060,7 @@ export default function InvoiceTab({
                 </div>
                 <select
                   value={dateFilter}
-                  onChange={(e) => setDateFilter(e.target.value as any)}
+                  onChange={(e) => { setDateFilter(e.target.value as any); setWeekDayFilter([]); }}
                   className="bg-[#F7FAFC] border border-slate-200 rounded-lg px-2 text-xs font-bold text-[#1A365D] outline-none focus:ring-1 focus:ring-indigo-500"
                 >
                   <option value="all">كل الفترات</option>
@@ -2046,6 +2069,18 @@ export default function InvoiceTab({
                   <option value="month">هذا الشهر</option>
                 </select>
               </div>
+
+              {dateFilter === 'week' && (
+                <div className="flex bg-[#F7FAFC] border border-slate-200 rounded-lg overflow-hidden flex-wrap gap-px p-0.5 animate-fade-in" dir="rtl">
+                  <button onClick={() => setWeekDayFilter([])} className={`flex-1 text-[10px] py-1.5 rounded font-bold transition-colors ${weekDayFilter.length === 0 ? 'bg-[#1A365D] text-white shadow-xs' : 'text-slate-600 hover:bg-slate-100 bg-white'}`}>الكل</button>
+                  {['Saturday', 'Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'].map(day => {
+                    const arabicDays: Record<string, string> = { 'Saturday':'السبت', 'Sunday':'الأحد', 'Monday':'الإثنين', 'Tuesday':'الثلاثاء', 'Wednesday':'الأربعاء', 'Thursday':'الخميس', 'Friday':'الجمعة' };
+                    return (
+                      <button key={day} onClick={() => setWeekDayFilter(prev => prev.includes(day) ? prev.filter(d => d !== day) : [...prev, day])} className={`flex-1 text-[10px] py-1.5 rounded font-bold transition-colors ${weekDayFilter.includes(day) ? 'bg-[#1A365D] text-white shadow-xs' : 'text-slate-600 hover:bg-slate-100 bg-white'}`}>{arabicDays[day]}</button>
+                    )
+                  })}
+                </div>
+              )}
 
               {/* Governorate and Area Filters for listing */}
               <div className="grid grid-cols-2 gap-2 mt-1">
@@ -2085,7 +2120,7 @@ export default function InvoiceTab({
                 {(activeSubTab === 'archive' ? filteredArchiveList : filteredDebtorsList).length === 0 ? (
                   <p className="text-center text-gray-400 py-10 text-xs">لا توجد مبيعات مطابقة أو مسجلة بعد.</p>
                 ) : (
-                  [...(activeSubTab === 'archive' ? filteredArchiveList : filteredDebtorsList)].reverse().map((inv, idx) => {
+                  (activeSubTab === 'archive' ? filteredArchiveList : [...filteredDebtorsList].sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime())).map((inv, idx) => {
                     const cust = customers.find(c => c.id === inv.customerId);
                     const remaining = inv.totalAfterDiscount - (inv.paidAmount ?? inv.totalAfterDiscount);
                     return (

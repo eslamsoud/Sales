@@ -5,7 +5,11 @@ import { confirmDialog } from '../utils/confirm';
  * SPDX-License-Identifier: Apache-2.0
  */
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { Product, AppSettings, Customer, Invoice, Expense, Trip, getProductWeightsFallback, UserAuth, formatNum, SyncLog, FactoryLoad, getItemFactoryCost } from '../types';
+import { Product, AppSettings, Customer, Invoice, Expense, Trip, getProductWeightsFallback, UserAuth, formatNum, SyncLog, FactoryLoad } from '../types';
+
+// تطبيع الحروف العربية: ة → ه لتوحيد مقارنة أسماء المناطق
+const normalizeArabic = (s: string) => (s || '').replace(/ة/g, 'ه').replace(/ى/g, 'ي');
+import { nowEgyptISO, todayEgyptISO } from '../utils/storage';
 import { 
   Settings as SettingsIcon, 
   Save, 
@@ -33,8 +37,7 @@ import {
   Printer,
   Download,
   Cloud,
-  FileText,
-  Link
+  FileText
 } from 'lucide-react';
 import { showToast } from '../utils/toast';
 import html2canvas from 'html2canvas';
@@ -78,17 +81,14 @@ class MapErrorBoundary extends React.Component<{children: React.ReactNode}, { ha
   }
 }
 
-const APP_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyGO8Af8bOs75_F-ttOFqR8WjVj4l9IW1IJGgDqLEu1rGdbky3balgRpZUdo03r6Kla/exec";
+const APP_SCRIPT_URL = import.meta.env.VITE_GOOGLE_SHEETS_URL || "https://script.google.com/macros/s/AKfycbyGO8Af8bOs75_F-ttOFqR8WjVj4l9IW1IJGgDqLEu1rGdbky3balgRpZUdo03r6Kla/exec";
 
-const getSafeScriptUrl = (overrideUrl?: string) => {
-  try {
-    if (overrideUrl && overrideUrl.trim().startsWith('http')) return overrideUrl.trim();
-  } catch(e) {}
-  try {
-    const envUrl = import.meta.env.VITE_GOOGLE_SHEETS_URL?.trim();
-    if (envUrl && envUrl.startsWith('http')) return envUrl;
-  } catch(e) {}
-  return APP_SCRIPT_URL;
+const getSafeScriptUrl = (savedUrl?: string) => {
+  const url = savedUrl?.trim();
+  if (!url || url === "ضع_رابط_الاسكريبت_الخاص_بك_هنا" || url.includes("AKfycbw64AiaMZkBBb2eJxUdCkRboejwIvWGxZoGo1Ub0LrqGtL8BeFim0qN_k02eaeasurU")) {
+    return APP_SCRIPT_URL;
+  }
+  return url;
 };
 
 const MAPS_LIBRARIES = ['places', 'geometry', 'marker'];
@@ -149,12 +149,10 @@ function getSafePhone(val) {
   return p;
 }
 
-// 1. استقبال طلب الجلب والتحديث الميداني ثنائي الاتجاه مع نظام التخزين المؤقت (Cache)
+// 1. استقبال طلب الجلب والتحديث الميداني ثنائي الاتجاه
 function doGet(e) {
   try {
-    // 🚨 مهم جداً: هذا السكربت يجب أن يكون مرفقاً (مثبّتاً) في ملف Google Sheets نفسه
-    // إذا أردت استخدام ملف شيت مختلف، ضع رابط الملف بين علامتي التنصيص بالأسفل بدلاً من "":
-    // مثال: var SHEET_URL = "https://docs.google.com/spreadsheets/d/1ABCxyz...";
+    // 🔗 إذا لم تظهر الشيتات، ضع رابط ملف الإكسيل (جوجل شيت) الخاص بك بين علامتي التنصيص بالأسفل:
     var SHEET_URL = ""; 
     var ss;
     try {
@@ -162,16 +160,6 @@ function doGet(e) {
     } catch(err) {
       ss = SpreadsheetApp.getActiveSpreadsheet();
     }
-
-    // ☁️ نظام التخزين المؤقت (Cache) لتقليل استهلاك quota وتسريع القراءة
-    var cache = CacheService.getScriptCache();
-    var cacheKey = "doGet_result_" + ss.getId();
-    var cached = cache.get(cacheKey);
-    if (cached) {
-      return ContentService.createTextOutput(cached)
-        .setMimeType(ContentService.MimeType.JSON);
-    }
-
     var result = {};
     
     // دالة مساعدة وأكثر أماناً لجلب البيانات وتخطي الأخطاء
@@ -197,7 +185,7 @@ function doGet(e) {
       return { 
         id: invId, date: getSafeString(row[1]), invoiceNumber: getSafeString(row[2]), // توافق مع invoiceNumber 
         customerName: getSafeString(row[3]), area: getSafeString(row[4]), total: getSafeNumber(row[5]), 
-        paidAmount: row[6] !== '' ? getSafeNumber(row[6]) : 0, 
+        paidAmount: row[6] !== '' ? getSafeNumber(row[6]) : getSafeNumber(row[5]), 
         delegateName: getSafeString(row[7]).replace(/\\s*\\(.*?\\)/g, '').trim(), notes: getSafeString(row[8]),
         items: items, delegatePhone: getSafePhone(row[10]),
         customerId: getSafeString(row[11]),
@@ -335,16 +323,10 @@ function doGet(e) {
       };
     });
 
-    // تخزين مؤقت في الذاكرة لمدة 15 ثانية (ما عدا لو أرسل المستخدم t=cache-bust)
-    var tParam = e && e.parameter && e.parameter.t ? String(e.parameter.t) : '';
-    var shouldCache = !tParam;
-    if (shouldCache) {
-      try { cache.put(cacheKey, JSON.stringify(result), 15); } catch(ce) {}
-    }
-
     return ContentService.createTextOutput(JSON.stringify(result))
       .setMimeType(ContentService.MimeType.JSON);
   } catch(error) {
+    // 🚨 نظام تسجيل الأخطاء: عند حدوث أي خطأ، سيتم تسجيله هنا. يمكنك مراجعته من داخل محرر السكربت عبر قائمة "Executions".
     Logger.log('FATAL doGet ERROR: ' + error.toString() + ' Stack: ' + error.stack);
     return ContentService.createTextOutput(JSON.stringify({"error": error.toString(), "stack": error.stack}))
       .setMimeType(ContentService.MimeType.JSON);
@@ -353,15 +335,11 @@ function doGet(e) {
 
 // 2. استقبال طلب الصب والترحيل والنسخ الاحتياطي مع نظام الحماية (LockService)
 function doPost(e) {
-  try {
-    Logger.log("Incoming doPost request. Payload size: " + (e && e.postData && e.postData.contents ? e.postData.contents.length : 0) + " characters.");
-  } catch(logErr) {}
   var lock = LockService.getScriptLock();
   try {
-    lock.waitLock(45000);
+    lock.waitLock(15000);
     
-    // 🚨 مهم جداً: هذا السكربت يجب أن يكون مرفقاً بملف Google Sheets نفسه
-    // مثال: var SHEET_URL = "https://docs.google.com/spreadsheets/d/1ABCxyz...";
+    // 🔗 إذا لم تظهر الشيتات، ضع رابط ملف الإكسيل (جوجل شيت) الخاص بك بين علامتي التنصيص بالأسفل:
     var SHEET_URL = ""; 
     var ss;
     try {
@@ -474,7 +452,6 @@ function doPost(e) {
 
       sheet.clearContents();
       sheet.getRange(1, 1, finalData.length, headers.length).setValues(finalData);
-      SpreadsheetApp.flush(); // 🚨 ضمان كتابة البيانات فوراً قبل أي عملية تالية
       sheet.getRange(1, 1, 1, headers.length).setFontWeight("bold").setBackground(headerColor || "#cfe2f3");
       
       if (sheet.getFilter() === null) {
@@ -613,9 +590,6 @@ function doPost(e) {
       ]);
       summarySheet.getRange(1, 1, 1, 4).setFontWeight("bold").setBackground("#d9ead3");
       
-      // مسح الذاكرة المؤقتة (Cache) لضمان قراءة أحدث البيانات في المرة القادمة
-      try { CacheService.getScriptCache().remove("doGet_result_" + ss.getId()); } catch(ce) {}
-      
       return ContentService.createTextOutput(JSON.stringify({"status": "success"}))
         .setMimeType(ContentService.MimeType.JSON);
     }
@@ -624,6 +598,7 @@ function doPost(e) {
       .setMimeType(ContentService.MimeType.JSON);
       
   } catch(error) {
+    // 🚨 نظام تسجيل الأخطاء: عند حدوث أي خطأ، سيتم تسجيله هنا. يمكنك مراجعته من داخل محرر السكربت عبر قائمة "Executions".
     Logger.log('FATAL doPost ERROR: ' + error.toString() + ' Stack: ' + error.stack);
     return ContentService.createTextOutput(JSON.stringify({"error": error.toString(), "stack": error.stack}))
       .setMimeType(ContentService.MimeType.JSON);
@@ -1008,7 +983,6 @@ interface ManageTabProps {
   onEditMultipleProducts?: (products: Product[]) => void;
   onUpdateSettings: (settings: AppSettings) => void;
   onResetDatabase: (demoMode: boolean) => void;
-  onFullReset?: () => void;
   onGoBack: () => void;
   onTriggerSync?: (desc: string) => void;
   onRefreshData?: () => void;
@@ -1030,7 +1004,6 @@ export default function ManageTab({
   onEditMultipleProducts,
   onUpdateSettings,
   onResetDatabase,
-  onFullReset,
   onGoBack,
   onTriggerSync,
   onRefreshData,
@@ -1129,7 +1102,7 @@ export default function ManageTab({
   const [aiName, setAiName] = useState(settings.aiName || 'المستشار الميداني');
   const [aiVoiceURI, setAiVoiceURI] = useState(settings.aiVoiceURI || '');
   const [googleMapsApiKey, setGoogleMapsApiKey] = useState(() => settings.googleMapsApiKey || localStorage.getItem('GMP_API_KEY_FALLBACK') || '');
-  const [googleSheetsUrl, setGoogleSheetsUrl] = useState(() => settings.googleSheetsUrl || '');
+  const [googleSheetsUrl, setGoogleSheetsUrl] = useState(() => getSafeScriptUrl(settings.googleSheetsUrl));
   const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
 
   // Sync settings when they are loaded from IndexedDB asynchronously
@@ -1144,7 +1117,7 @@ export default function ManageTab({
       if (settings.aiName) setAiName(settings.aiName);
       if (settings.aiVoiceURI) setAiVoiceURI(settings.aiVoiceURI);
       if (settings.googleMapsApiKey) setGoogleMapsApiKey(settings.googleMapsApiKey);
-      if (settings.googleSheetsUrl) setGoogleSheetsUrl(settings.googleSheetsUrl);
+      if (settings.googleSheetsUrl) setGoogleSheetsUrl(getSafeScriptUrl(settings.googleSheetsUrl));
     }
   }, [settings]);
 
@@ -1415,10 +1388,10 @@ export default function ManageTab({
         if (w.id !== weightId) return w;
         
         const updatedWeight = { ...w, profitMarginPercent: 0 };
-        const numValue: any = val === '' ? '' : (parseFloat(val) || 0);
-        if (field === 'cartonPriceFromFactory') updatedWeight.cartonPriceFromFactory = numValue === '' ? 0 : numValue;
-        if (field === 'unitsPerCarton') updatedWeight.unitsPerCarton = Math.max(1, parseInt(val) || 1);
-        if (field === 'addedValue') (updatedWeight as any).addedValue = val === '' ? '' : (val.endsWith('.') ? val : parseFloat(val));
+        const numValue = val === '' ? 0 : (parseFloat(val) || 0);
+        if (field === 'cartonPriceFromFactory') updatedWeight.cartonPriceFromFactory = numValue;
+        if (field === 'unitsPerCarton') updatedWeight.unitsPerCarton = val === '' ? 0 : (parseInt(val) || 0);
+        if (field === 'addedValue') (updatedWeight as any).addedValue = val === '' ? 0 : numValue;
         
         // Calculate dynamically per user's directive:
         // السعر الاساسي للكرتونة = سعر الكرتونة بالمصنع + القيمة المضافة
@@ -1426,7 +1399,8 @@ export default function ManageTab({
         const activeAddedValue = Number(updatedWeight.addedValue) || 0;
         const activeCartonPrice = Number(updatedWeight.cartonPriceFromFactory) || 0;
         const retailCarton = activeCartonPrice + activeAddedValue;
-        const computedRetail = retailCarton / updatedWeight.unitsPerCarton;
+        const activeUnits = Number(updatedWeight.unitsPerCarton) || 12;
+        const computedRetail = retailCarton / activeUnits;
         
         updatedWeight.retailPricePerUnit = computedRetail; // حفظ السعر بدقة كاملة لضمان دقة حسابات الجملة والكرتونة
         return updatedWeight;
@@ -1459,7 +1433,7 @@ export default function ManageTab({
     const isKeyChanged = googleMapsApiKey.trim() !== (settings.googleMapsApiKey || '').trim();
     onUpdateSettings({
       ...settings,
-      // googleSheetsUrl: fixed to APP_SCRIPT_URL globally
+      googleSheetsUrl: googleSheetsUrl.trim(),
       currency: currency.trim(),
       aiPitchGuidelines: pitchGuidelines.trim(),
       aiRetentionGuidelines: retentionGuidelines.trim(),
@@ -1498,16 +1472,6 @@ export default function ManageTab({
       }, 1500);
     }, 500);
   };
-  const handleSaveSheetsUrl = () => {
-    onUpdateSettings({
-      ...settings,
-      googleSheetsUrl: googleSheetsUrl.trim()
-    });
-    showToast('✓ تم حفظ رابط Google Sheets!');
-    setTimeout(() => {
-      onTriggerSync?.('تحديث رابط الشيت');
-    }, 500);
-  };
   const salesStats = React.useMemo(() => {
     const totalSales = invoices.reduce((sum, inv) => sum + inv.totalAfterDiscount, 0);
     const totalSpent = (expenses || []).filter(e => e.type !== 'revenue').reduce((sum, exp) => sum + exp.amount, 0);
@@ -1522,12 +1486,11 @@ export default function ManageTab({
     };
   }, [invoices, expenses]);
   const handleBulkSyncToGoogleSheets = async () => {
-    if (false) {
+    if (!googleSheetsUrl || googleSheetsUrl === "ضع_رابط_الاسكريبت_الخاص_بك_هنا") {
       setSyncStatus('fail');
       showToast('⚠️ خطأ: لم يتم دمج رابط مزامنة جوجل في ملفات النظام.');
       return;
     }
-    const startTime = performance.now();
     setSyncStatus('syncing');
     showToast('☁️ جاري الرفع والمزامنة السحابية...');
     try {
@@ -1554,12 +1517,9 @@ export default function ManageTab({
       } catch(e) {}
       
       let deletedIds = [];
-      const isUserAdmin = currentUser?.role === 'owner' || currentUser?.phone === '01228466613' || (currentUser?.customRoleName && (currentUser.customRoleName.includes('نائب المدير') || currentUser.customRoleName.includes('مشرف عام')));
-      if (isUserAdmin) {
-        try {
-          deletedIds = JSON.parse(localStorage.getItem('deleted_records_sys') || '[]');
-        } catch(e) {}
-      }
+      try {
+        deletedIds = JSON.parse(localStorage.getItem('deleted_records_sys') || '[]');
+      } catch(e) {}
 
       const payload = {
         type: 'تقرير_كامل',
@@ -1607,7 +1567,7 @@ export default function ManageTab({
           description: t.description,
           price: t.price,
           status: t.collected ? 'محصلة' : 'غير محصلة',
-          date: t.date || new Date().toISOString(),
+          date: t.date || nowEgyptISO(),
           delegateName: t.delegateName || 'مجهول',
           delegatePhone: t.delegatePhone || '',
           odometerStart: t.odometerStart || '',
@@ -1640,7 +1600,10 @@ export default function ManageTab({
           phone: u.phone,
           role: u.role,
           status: u.status,
-          password: u.password || '',
+          password: (() => {
+            try { return decodeURIComponent(atob(u.password || '')); }
+            catch(e) { return u.password || '1234'; }
+          })(),
           customRoleName: u.customRoleName || '',
           permittedTabs: (u.permittedTabs || []).join(','),
           permittedSubTabs: (u.permittedSubTabs || []).join(','),
@@ -1670,8 +1633,8 @@ export default function ManageTab({
             warehouseKeeper: fl.warehouseKeeper || '',
             delegateName: fl.delegateName || 'مجهول',
             delegatePhone: fl.delegatePhone || '',
-            cartonPrice: fl.cartonPrice || wt?.cartonPriceFromFactory || (prod ? prod.price : 0),
-            unitPrice: fl.unitPrice || (wt?.factoryPricePerUnit || (prod ? prod.price : 0))
+            cartonPrice: fl.cartonPrice || wt?.cartonPriceFromFactory || (prod ? prod.price * (wt?.unitsPerCarton || 12) : 0),
+            unitPrice: fl.unitPrice || wt?.factoryPricePerUnit || (prod ? prod.price : 0)
           };
         }),
         discoveredLeads: discoveredLeads.map((l: any) => ({
@@ -1686,40 +1649,17 @@ export default function ManageTab({
           dateAdded: l.dateAdded || ''
         }))
       };
-      const resp = await fetch(getSafeScriptUrl(googleSheetsUrl), {
+      const resp = await fetch(googleSheetsUrl.trim(), {
         method: 'POST',
-        mode: 'cors',
+        mode: 'no-cors',
         headers: {
           'Content-Type': 'text/plain;charset=utf-8',
         },
         body: JSON.stringify(payload)
       });
-      if (!resp.ok) {
-        throw new Error("Server returned non-ok status: " + resp.status);
-      }
-      const respText = await resp.text();
-      let respData;
-      try {
-        respData = JSON.parse(respText);
-      } catch (e) {
-        throw new Error("Failed to parse server response as JSON.");
-      }
-      if (respData.error) {
-        throw new Error(respData.error);
-      }
-      if (respData.status !== 'success') {
-        throw new Error(respData.message || "Sync failed");
-      }
-      const elapsed = Math.round(performance.now() - startTime);
-
       setSyncStatus('done');
       showToast('✓ تم الحفظ والمزامنة السحابية بنجاح!');
       
-      try {
-        localStorage.setItem('last_sync_timestamp_sys', new Date().toISOString());
-        localStorage.setItem('last_sync_duration_ms_sys', String(elapsed));
-      } catch(e) {}
-
       try {
         const currentDeleted = JSON.parse(localStorage.getItem('deleted_records_sys') || '[]');
         const remainingDeleted = currentDeleted.filter((id: string) => !deletedIds.includes(id));
@@ -1733,11 +1673,9 @@ export default function ManageTab({
       onAddSyncLog({
         delegateName: currentUser?.name || 'مجهول',
         status: 'success',
-        actionDesc: 'مزامنة شاملة من مدير النظام',
-        durationMs: elapsed
+        actionDesc: 'مزامنة شاملة من مدير النظام'
       });
     } catch (err: any) {
-      const elapsed = Math.round(performance.now() - startTime);
       setSyncStatus('fail');
       showToast("⚠️ فشل الحفظ: تأكد من الاتصال بالإنترنت.");
       
@@ -1745,8 +1683,7 @@ export default function ManageTab({
         delegateName: currentUser?.name || 'مجهول',
         status: 'fail',
         actionDesc: 'فشل مزامنة شاملة من المدير',
-        details: err.message || 'خطأ غير معروف',
-        durationMs: elapsed
+        details: err.message || 'خطأ غير معروف'
       });
     }
   };
@@ -1785,12 +1722,12 @@ export default function ManageTab({
   const [custAreaFilter, setCustAreaFilter] = useState('');
   const [custStatusTab, setCustStatusTab] = useState<'all' | 'active' | 'inactive'>('active');
   const areas = useMemo(() => {
-    return Array.from(new Set(customers.map(c => c.area).filter(Boolean)));
+    return Array.from(new Set(customers.map(c => normalizeArabic(c.area)).filter(Boolean)));
   }, [customers]);
   const filteredCustomerAnalytics = useMemo(() => {
     return customerAnalytics.filter(c => {
       const matchesSearch = c.name.includes(custSearch) || c.phone.includes(custSearch);
-      const matchesArea = !custAreaFilter || c.area === custAreaFilter;
+      const matchesArea = !custAreaFilter || normalizeArabic(c.area) === custAreaFilter;
       const matchesStatus = 
         custStatusTab === 'all' || 
         (custStatusTab === 'active' && c.isActive) || 
@@ -1846,7 +1783,7 @@ export default function ManageTab({
           ? ['prices_list'] 
           : ['loads', 'factory_account', 'customers_list', 'customers_maps_finder', 'invoice_create', 'invoice_balance', 'expenses_list', 'admin_ai', 'prices_list', 'prices_calc', 'prices_bot'],
       password: btoa(encodeURIComponent(newUserPassword.trim() || '0000')),
-      createdAt: new Date().toISOString()
+      createdAt: nowEgyptISO()
     };
     const updated = [...usersList, newUser];
     onUpdateUsersList(updated);
@@ -1936,7 +1873,10 @@ export default function ManageTab({
   return (
     <div className="bg-[#F7FAFC] min-h-screen pb-12 text-right animate-fade-in" id="manage-tab-container" dir="rtl">
       {/* Header */}
-      <div className="bg-[#1A365D] text-white border-transparent text-white px-4 py-4 sticky top-0 z-[60] shadow-md flex items-center justify-between">
+      <div 
+        className="bg-[#1A365D] text-white border-transparent text-white px-4 py-4 sticky z-[40] shadow-md flex items-center justify-between"
+        style={{ top: 'var(--header-offset, 56px)' }}
+      >
         <div className="flex items-center gap-2">
           <SettingsIcon className="h-6 w-6 text-amber-300" />
           <h1 className="font-bold" style={{ marginTop: '-2px', paddingBottom: '-3px', paddingRight: '-3px', paddingLeft: '-3px', paddingTop: '-3px', marginLeft: '-2px', marginRight: '-4px', marginBottom: '-4px', fontSize: '15px', lineHeight: '24px' }}>لوحة تحكم الإدارة (عقل النظام)</h1>
@@ -3462,28 +3402,6 @@ export default function ManageTab({
                                 const totalRevenues = uExpenses.filter(e => e.type === 'revenue').reduce((sum, exp) => sum + (exp.amount || 0), 0);
                                 const totalExpenses = uExpenses.filter(e => e.type !== 'revenue').reduce((sum, exp) => sum + (exp.amount || 0), 0);
                                 const expectedWallet = totalCashCollected + totalRevenues - totalExpenses;
-                                const totalProfit = uInvoices.reduce((sum, inv) => {
-                                  const itemsProfit = Array.isArray(inv.items) ? inv.items.reduce((isum: number, it: any) => {
-                                    if (!it) return isum;
-                                    const prod = products.find(p => String(p.id).trim() === String(it.productId).trim());
-                                    const ws = prod ? getProductWeightsFallback(prod) : [];
-                                    const wt = ws.find(w => String(w.id).trim() === String(it.weightId).trim()) || ws[0];
-                                    const fpPerUnit = getItemFactoryCost(it, wt, prod);
-                                    return isum + (((it.finalPrice || 0) - fpPerUnit) * (it.quantity || 0));
-                                  }, 0) : 0;
-                                  return sum + itemsProfit;
-                                }, 0);
-                                const totalFactoryCost = uInvoices.reduce((sum, inv) => {
-                                  const itemsCost = Array.isArray(inv.items) ? inv.items.reduce((isum: number, it: any) => {
-                                    if (!it) return isum;
-                                    const prod = products.find(p => String(p.id).trim() === String(it.productId).trim());
-                                    const ws = prod ? getProductWeightsFallback(prod) : [];
-                                    const wt = ws.find(w => String(w.id).trim() === String(it.weightId).trim()) || ws[0];
-                                    const fpPerUnit = getItemFactoryCost(it, wt, prod);
-                                    return isum + (fpPerUnit * (it.quantity || 0));
-                                  }, 0) : 0;
-                                  return sum + itemsCost;
-                                }, 0);
                                 const activeTraceTab = delegateLogTabs[user.phone] || 'all';
                                 return (
                                   <div className="mt-6 border-t border-slate-200/80 pt-5 text-right w-full">
@@ -3510,17 +3428,6 @@ export default function ManageTab({
                                       <div className="p-2.5 bg-blue-50 border border-blue-100 rounded-xl text-right">
                                         <span className="block text-[8px] sm:text-[9px] text-blue-900 font-black">إيرادات / تحصيلات إضافية</span>
                                         <span className="text-xs font-black text-blue-700">{totalRevenues.toLocaleString()} {currency}</span>
-                                      </div>
-                                      <div className={`p-2.5 border rounded-xl text-right ${totalProfit >= 0 ? 'bg-emerald-50 border-emerald-150' : 'bg-red-50 border-red-100'}`}>
-                                        <span className={`block text-[8px] sm:text-[9px] font-black ${totalProfit >= 0 ? 'text-emerald-800' : 'text-red-800'}`}>هامش الربح الصافي (المبيع - حساب المصنع)</span>
-                                        <span className={`text-xs font-black ${totalProfit >= 0 ? 'text-emerald-700' : 'text-red-700'}`}>{totalProfit.toLocaleString()} {currency}</span>
-                                        <span className={`block text-[8px] font-bold ${totalProfit >= 0 ? 'text-emerald-600/80' : 'text-red-600/80'}`}>
-                                          {totalSales > 0 ? `نسبة: ${((totalProfit / totalSales) * 100).toFixed(1)}%` : 'لا توجد مبيعات'}
-                                        </span>
-                                      </div>
-                                      <div className={`p-2.5 border rounded-xl text-right ${totalFactoryCost >= 0 ? 'bg-slate-50 border-slate-150' : 'bg-red-50 border-red-100'}`}>
-                                        <span className="block text-[8px] sm:text-[9px] text-slate-700 font-black">حساب المصنع (تكلفة البضاعة المباعة)</span>
-                                        <span className="text-xs font-black text-slate-600">{totalFactoryCost.toLocaleString()} {currency}</span>
                                       </div>
                                       
                                       <div className="col-span-2 p-3 bg-gradient-to-r from-amber-50 to-orange-50 border border-orange-200 rounded-2xl text-center shadow-xs">
@@ -3739,70 +3646,21 @@ export default function ManageTab({
                     </button>
                   </div>
                 ) : (
-                    <div className="flex flex-col gap-3.5 text-right animate-fade-in">
-                    <div className="border border-amber-100 rounded-xl p-3 bg-amber-50/20 flex flex-col gap-2">
-                      <div>
-                        <label className="block text-xs font-black text-amber-950 mb-1.5 flex items-center gap-1.5">
-                          <Link className="h-4 w-4 text-[#DD6B20]" />
-                          رابط Google Sheets (اختياري - اتركه فارغاً لاستخدام الرابط الافتراضي):
-                        </label>
-                        <input
-                          type="text"
-                          placeholder="https://script.google.com/macros/s/.../exec"
-                          value={googleSheetsUrl}
-                          onChange={(e) => setGoogleSheetsUrl(e.target.value)}
-                          className="w-full bg-[#FFFFFF] border border-slate-200 rounded-lg p-2.5 text-xs font-semibold focus:ring-2 focus:ring-amber-500 ltr text-left"
-                          dir="ltr"
-                        />
-                        <p className="text-[10px] text-slate-400 mt-1 leading-normal">
-                          * إذا تركته فارغاً، سيعمل التطبيق بالرابط المسجل في متغيّرات البيئة (Vercel) أو الرابط الثابت تلقائياً.
-                        </p>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={handleSaveSheetsUrl}
-                        className="bg-amber-100 hover:bg-amber-200 text-amber-900 border border-amber-200 rounded-lg py-1.5 px-3 text-xs font-black transition-all cursor-pointer self-start"
-                      >
-                        حفظ رابط Google Sheets 💾
-                      </button>
+                  <div className="flex flex-col gap-3.5 text-right animate-fade-in">
+                    <div>
+                      <label className="block text-xs font-bold text-[#2B6CB0] mb-1">رابط تطبيق الويب لجوجل (Google Web App URL):</label>
+                      <input
+                        type="url"
+                        value={googleSheetsUrl}
+                        onChange={(e) => setGoogleSheetsUrl(e.target.value)}
+                        placeholder="أدخل رابط تطبيق الويب الخاص بك هنا..."
+                        className="w-full bg-[#FFFFFF] border border-slate-200 rounded-lg p-2.5 text-xs text-left font-mono text-slate-700 focus:ring-2 focus:ring-amber-500"
+                        style={{ direction: 'ltr' }}
+                      />
+                      <p className="text-[10px] text-slate-400 mt-1 leading-normal">
+                        * يرجى إدخال رابط الـ Web App الخاص بك بعد نشره من إسكريبت جوجل لتتمكن من ترحيل وحفظ البيانات سحابياً في الشيت الخاص بك.
+                      </p>
                     </div>
-                    <button
-                      type="button"
-                      onClick={async () => {
-                        showToast('🔍 جاري اختبار الاتصال...');
-                        const testUrl = getSafeScriptUrl(googleSheetsUrl);
-                        const startTest = performance.now();
-                        try {
-                          const resp = await fetch(testUrl + '?t=' + Date.now(), {
-                            method: 'GET',
-                            cache: 'no-store',
-                            mode: 'cors',
-                            redirect: 'follow'
-                          });
-                          const elapsed = Math.round(performance.now() - startTest);
-                          if (!resp.ok) {
-                            showToast(`❌ فشل الاتصال: ${resp.status} (${elapsed}ms)`);
-                            return;
-                          }
-                          const text = await resp.text();
-                          let data;
-                          try { data = JSON.parse(text); } catch(e) { data = null; }
-                          if (data && data.error) {
-                            showToast(`❌ خطأ من السيرفر: ${data.error} (${elapsed}ms)`);
-                          } else if (data && (data.users || data.products || data.customers)) {
-                            showToast(`✅ اتصال ناجح! تم استلام البيانات (${elapsed}ms)`);
-                          } else {
-                            showToast(`⚠️ تم الاتصال لكن استجابة غير متوقعة (${elapsed}ms)`);
-                          }
-                        } catch(err: any) {
-                          const elapsed = Math.round(performance.now() - startTest);
-                          showToast(`❌ فشل الاتصال: ${err.message?.substring(0, 80) || 'خطأ غير معروف'} (${elapsed}ms)`);
-                        }
-                      }}
-                      className="bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 rounded-lg py-1.5 px-3 text-xs font-black transition-all cursor-pointer self-start"
-                    >
-                      اختبار الاتصال 🔍
-                    </button>
 
                     <div className="border border-amber-100 rounded-xl p-3 bg-amber-50/20 mt-2 flex flex-col gap-2">
                       <div>
@@ -3899,7 +3757,7 @@ export default function ManageTab({
                         <button
                           type="button"
                           onClick={handleBulkSyncToGoogleSheets}
-                          disabled={syncStatus === 'syncing'}
+                          disabled={syncStatus === 'syncing' || !googleSheetsUrl || googleSheetsUrl === "ضع_رابط_الاسكريبت_الخاص_بك_هنا"}
                           className="w-full bg-[#1A365D] text-white border-transparent border border-indigo-700 rounded-lg py-2.5 text-xs font-bold hover:bg-[#1A365D] active:scale-95 transition-all cursor-pointer disabled:opacity-50 flex items-center justify-center gap-2"
                         >
                           <Send className="h-4 w-4" />
@@ -3936,7 +3794,7 @@ export default function ManageTab({
                   </p>
                   <button
                     onClick={handleBulkSyncToGoogleSheets}
-                    disabled={syncStatus === 'syncing'}
+                    disabled={syncStatus === 'syncing' || !googleSheetsUrl || googleSheetsUrl === "ضع_رابط_الاسكريبت_الخاص_بك_هنا"}
                     className="whitespace-nowrap bg-[#1A365D] text-white border-transparent border border-indigo-700 rounded-lg py-2 px-4 text-xs font-bold hover:bg-indigo-900 active:scale-95 transition-all cursor-pointer disabled:opacity-50 flex items-center justify-center gap-1.5"
                   >
                     <Send className="h-4 w-4" />
@@ -4081,19 +3939,6 @@ export default function ManageTab({
                     <Database className="h-5 w-5 text-rose-500" />
                     <span>تهيئة ومسح شامل للبيانات</span>
                   </button>
-                  {onFullReset && (
-                    <button
-                      onClick={async () => { if (await confirmDialog('⚠️ تحذير: تهيئة كاملة للنظام!\n\nسيتم مسح جميع البيانات من التطبيق والشيت بالكامل.\nجميع المستخدمين سيبدأون من الصفر بعد السحب.\n\nهل أنت متأكد؟')) {
-                          onFullReset();
-                          showToast('✓ جاري تطبيق التهيئة الكاملة ونشر التغيير للجميع...');
-                        }
-                      }}
-                      className="bg-red-600 hover:bg-red-700 active:scale-95 border border-red-700 text-white p-3.5 rounded-xl text-center text-xs font-bold transition-all cursor-pointer flex flex-col items-center justify-center gap-1.5"
-                    >
-                      <AlertTriangle className="h-5 w-5 text-white" />
-                      <span>تهيئة كاملة للكل (مسح + شيت)</span>
-                    </button>
-                  )}
                 </div>
               </div>
             )}
@@ -4130,7 +3975,7 @@ export default function ManageTab({
                         {/* Weights list of this product with inline edits */}
                         <div className="flex flex-col gap-3">
                           {activeWeights.map((weight) => {
-                            const singleFactoryCost = weight.cartonPriceFromFactory;
+                            const singleFactoryCost = weight.cartonPriceFromFactory / (weight.unitsPerCarton || 1);
                             const finalWithAddedValue = singleFactoryCost + (weight.addedValue || 0);
                             return (
                               <div key={weight.id} className="border border-slate-150 p-3 rounded-xl bg-[#F7FAFC]/30 flex flex-col gap-2">
@@ -4146,9 +3991,10 @@ export default function ManageTab({
                                       min="0"
                                       step="0.01"
                                       disabled={!canEditPrices}
-                                      value={weight.cartonPriceFromFactory}
+                                      value={!weight.cartonPriceFromFactory || Number(weight.cartonPriceFromFactory) === 0 ? '' : weight.cartonPriceFromFactory}
+                                      onFocus={(e) => e.target.select()}
                                       onChange={(e) => handleWeightFieldChange(p.id, weight.id, 'cartonPriceFromFactory', e.target.value)}
-                                      className="w-full bg-[#FFFFFF] border border-slate-200 rounded-lg py-1 px-1.5 text-xs text-center font-bold text-[#1A365D] focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                                      className="w-full bg-[#FFFFFF] border border-slate-200 rounded-lg py-1 px-2 text-xs text-right font-bold text-[#1A365D] focus:outline-none focus:ring-1 focus:ring-indigo-400"
                                     />
                                   </div>
                                   <div>
@@ -4157,9 +4003,10 @@ export default function ManageTab({
                                       type="number"
                                       min="1"
                                       disabled={!canEditPrices}
-                                      value={weight.unitsPerCarton}
+                                      value={!weight.unitsPerCarton || Number(weight.unitsPerCarton) === 0 ? '' : weight.unitsPerCarton}
+                                      onFocus={(e) => e.target.select()}
                                       onChange={(e) => handleWeightFieldChange(p.id, weight.id, 'unitsPerCarton', e.target.value)}
-                                      className="w-full bg-[#FFFFFF] border border-slate-200 rounded-lg py-1 px-1.5 text-xs text-center font-bold text-[#1A365D] focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                                      className="w-full bg-[#FFFFFF] border border-slate-200 rounded-lg py-1 px-2 text-xs text-right font-bold text-[#1A365D] focus:outline-none focus:ring-1 focus:ring-indigo-400"
                                     />
                                   </div>
                                   <div>
@@ -4169,9 +4016,10 @@ export default function ManageTab({
                                       min="0"
                                       step="0.01"
                                       disabled={!canEditPrices}
-                                      value={weight.addedValue === undefined || weight.addedValue === 0 ? '' : weight.addedValue}
+                                      value={!weight.addedValue || Number(weight.addedValue) === 0 ? '' : weight.addedValue}
+                                      onFocus={(e) => e.target.select()}
                                       onChange={(e) => handleWeightFieldChange(p.id, weight.id, 'addedValue', e.target.value)}
-                                      className="w-full bg-[#FFFFFF] border border-slate-200 rounded-lg py-1 px-1.5 text-xs text-center font-bold text-[#1A365D] focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                                      className="w-full bg-[#FFFFFF] border border-slate-200 rounded-lg py-1 px-2 text-xs text-right font-bold text-[#1A365D] focus:outline-none focus:ring-1 focus:ring-indigo-400"
                                     />
                                   </div>
                                 </div>

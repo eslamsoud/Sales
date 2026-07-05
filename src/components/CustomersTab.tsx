@@ -13,6 +13,9 @@ import { showToast } from '../utils/toast';
 import { Users, Plus, MapPin, Search, Phone, PhoneOff, ExternalLink, Trash2, ArrowRight, Compass, Check, Loader2, Star, MessageSquare, Send, Copy, Sparkles, Printer, FileText, Download, ArrowUpDown, Edit } from 'lucide-react';
 import SecurePhoneDisplay from './SecurePhoneDisplay';
 
+// تطبيع الحروف العربية: ة → ه لتوحيد مقارنة أسماء المناطق
+const normalizeArabic = (s: string) => (s || '').replace(/ة/g, 'ه').replace(/ى/g, 'ي');
+
 const EGYPT_GOVERNORATES = [
   'القاهرة', 'الجيزة', 'الإسكندرية', 'الشرقية', 'الدقهلية', 'البحيرة', 'القليوبية', 
   'الغربية', 'المنوفية', 'دمياط', 'بورسعيد', 'السويس', 'الإسماعيلية', 'الفيوم', 
@@ -108,7 +111,7 @@ const formatWhatsAppLink = (phone: string, encodedText: string = '') => {
 
 const hasNoPhone = (phone?: string) => !phone || phone === 'غير مسجل' || phone.trim() === '' || phone.includes('انتظار');
 
-const normalizeAr = (s: string) => (s || '').trim().replace(/\s+/g, ' ');
+const normalizeAr = (s: string) => (s || '').trim().replace(/\s+/g, ' ').replace(/ة/g, 'ه').replace(/ى/g, 'ي');
 
 const isLeadInWorkArea = (leadGov: string, leadArea: string, workArea?: string) => {
   if (!workArea || workArea === 'الكل') return true;
@@ -1070,7 +1073,10 @@ export default function CustomersTab({
   return (
     <div className="bg-[#F7FAFC] min-h-screen pb-12 text-right animate-fade-in" dir="rtl" id="customers-tab-container">
       {/* Header */}
-      <div className="bg-[#1A365D] text-white border-transparent text-white px-4 py-4 sticky top-0 z-[60] shadow-md flex items-center justify-between">
+      <div 
+        className="bg-[#1A365D] text-white border-transparent text-white px-4 py-4 sticky z-[40] shadow-md flex items-center justify-between"
+        style={{ top: 'var(--header-offset, 56px)' }}
+      >
         <div className="flex items-center gap-2">
           <Users className="h-6 w-6 text-indigo-200" />
           <h1 className="text-xl font-bold">قاعدة بيانات العملاء</h1>

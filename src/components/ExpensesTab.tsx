@@ -68,7 +68,7 @@ export default function ExpensesTab({ expenses, onAddExpense, onDeleteExpense, o
   const [amount, setAmount] = useState('');
   const [description, setDescription] = useState('');
   const [periodFilter, setPeriodFilter] = useState<'all' | 'today' | 'week' | 'month'>('all');
-  const [selectedWeekDays, setSelectedWeekDays] = useState<number[]>([0, 1, 2, 3, 4, 5, 6]);
+  const [selectedWeekDays, setSelectedWeekDays] = useState<number[]>([]);
 
   React.useEffect(() => {
     window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
@@ -621,7 +621,10 @@ export default function ExpensesTab({ expenses, onAddExpense, onDeleteExpense, o
   return (
     <div className="bg-[#F7FAFC] min-h-screen pb-12 text-right animate-fade-in" dir="rtl" id="expenses-tab-container">
       {/* Header */}
-      <div className={`text-white px-4 py-4 sticky top-0 z-10 flex items-center justify-between ${isExpense ? 'bg-[#1A365D]' : 'bg-[#DD6B20]'}`}>
+      <div 
+        className={`text-white px-4 py-4 sticky z-[40] flex items-center justify-between shadow-md ${isExpense ? 'bg-[#1A365D]' : 'bg-[#DD6B20]'}`}
+        style={{ top: 'var(--header-offset, 56px)' }}
+      >
         <div className="flex items-center gap-2">
           <Wallet className="h-6 w-6 text-white/80" />
           <h1 className="text-xl font-bold">الماليات</h1>

@@ -774,7 +774,10 @@ export default function PricesTab({ products: rawProducts, onGoBack, permittedSu
   return (
     <div className="bg-[#F7FAFC] min-h-screen pb-12 text-right animate-fade-in" dir="rtl" id="prices-tab-container">
       {/* Header */}
-      <div className="bg-[#1A365D] text-white border-transparent text-white px-4 py-4 sticky top-0 z-10 shadow-md flex items-center justify-between">
+      <div 
+        className="bg-[#1A365D] text-white border-transparent text-white px-4 py-4 sticky z-[40] shadow-md flex items-center justify-between"
+        style={{ top: 'var(--header-offset, 56px)' }}
+      >
         <div className="flex items-center gap-2">
           <Tags className="h-6 w-6 text-indigo-200" />
           <h1 className="text-xl font-bold">قائمة الأسعار والشرائح</h1>

@@ -39,12 +39,17 @@ function doGet(e) {
       ss = SpreadsheetApp.getActiveSpreadsheet();
     }
 
+    var tParam = e && e.parameter && e.parameter.t ? String(e.parameter.t) : '';
+    var shouldCache = !tParam;
+
     var cache = CacheService.getScriptCache();
     var cacheKey = "doGet_result_" + ss.getId();
-    var cached = cache.get(cacheKey);
-    if (cached) {
-      return ContentService.createTextOutput(cached)
-        .setMimeType(ContentService.MimeType.JSON);
+    if (shouldCache) {
+      var cached = cache.get(cacheKey);
+      if (cached) {
+        return ContentService.createTextOutput(cached)
+          .setMimeType(ContentService.MimeType.JSON);
+      }
     }
 
     var result = {};
@@ -227,8 +232,8 @@ function doGet(e) {
     var dbVersion = PropertiesService.getScriptProperties().getProperty('dbVersion');
     if (dbVersion) result.dbVersion = Number(dbVersion);
 
-    var tParam = e && e.parameter && e.parameter.t ? String(e.parameter.t) : '';
-    var shouldCache = !tParam;
+    tParam = e && e.parameter && e.parameter.t ? String(e.parameter.t) : '';
+    shouldCache = !tParam;
     if (shouldCache) {
       try { cache.put(cacheKey, JSON.stringify(result), 15); } catch(ce) {}
     }
@@ -537,7 +542,7 @@ function doPost(e) {
         ];
       });
       try {
-        upsertData('أرشيف_دورات_المصنع', ['معرف الدورة', 'تاريخ الترحيل', 'تم التسديد بالكامل', 'قيمة المحمل الخام', 'إجمالي المحمل', 'إجمالي المسدد', 'الرصيد الدائن', 'دين من دورة سابقة', 'مبلغ متنازل عنه', 'الحمولات (JSON)', 'الدفعات (JSON)', 'هاتف المندوب', 'اسم المندوب'], archiveRows, "#b4a7d6", []);
+        upsertData('أرشيف_دورات_المصنع', ['معرف الدورة', 'تاريخ الترحيل', 'تم التسديد بالكامل', 'قيمة المحمل الخام', 'إجمالي المحمل', 'إجمالي المسدد', 'الرصيد الدائن', 'دين من دورة سابقة', 'مبلغ متنازل عنه', 'الحمولات (JSON)', 'الدفعات (JSON)', 'هاتف المندوب', 'اسم المندوب'], archiveRows, "#b4a7d6", deletedIds);
       } catch(err) { Logger.log('Error upserting أرشيف_دورات_المصنع: ' + err); }
 
       var summarySheet = ss.getSheetByName('الملخص');

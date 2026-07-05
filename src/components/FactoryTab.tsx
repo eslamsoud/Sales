@@ -11,6 +11,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { Product, FactoryLoad, CarBalance, ProductWeight, getProductWeightsFallback, Invoice, Trip, formatNum, Expense, UserAuth, getItemFactoryCost } from '../types';
 import { Truck, Plus, PackagePlus, Package, ArrowRight, History, Trash2, AlertCircle, Edit, Save, HelpCircle, FileText, Image, Scale, CirclePercent, DollarSign, Box, Clock, CheckCircle2, ShieldMinus, Wallet, Printer, Calendar, MapPin, Download, ScanLine, Archive, Landmark, RefreshCw } from 'lucide-react';
 import { showToast } from '../utils/toast';
+import { nowEgyptISO, todayEgyptISO } from '../utils/storage';
 
 interface FactoryTabProps {
   products: Product[];
@@ -195,7 +196,7 @@ export default function FactoryTab({
   // States for Trips
   const [tripDescription, setTripDescription] = useState('');
   const [tripPrice, setTripPrice] = useState('');
-  const [tripDate, setTripDate] = useState(() => new Date().toISOString().substring(0, 10));
+  const [tripDate, setTripDate] = useState(() => todayEgyptISO());
   const [tripFilter, setTripFilter] = useState<'all' | 'collected' | 'pending'>('all');
   const [tripDelegatePhone, setTripDelegatePhone] = useState('');
 
@@ -1009,7 +1010,7 @@ export default function FactoryTab({
             notes: loadNotes.trim() || `شحنة محملة [${group.product.name} - وزن ${item.weight.size}]`,
             warehouseKeeper: warehouseKeeper.trim() || undefined,
             advanceAmount: showAdvanceInput ? (parseFloat(advanceAmount) || undefined) : undefined,
-            date: new Date(loadDate).toISOString(),
+            date: nowEgyptISO(),
             delegateName: selectedDelegate?.name || currentUser?.name || '',
             delegatePhone: selectedDelegate?.phone || currentUser?.phone || ''
           });
@@ -4718,7 +4719,10 @@ export default function FactoryTab({
   return (
     <div className="bg-[#F7FAFC] min-h-screen pb-12 text-right animate-fade-in" dir="rtl" id="factory-tab-container">
       {/* Header */}
-      <div className="bg-[#1A365D] text-white border-transparent text-white px-4 py-4 sticky top-0 z-[60] shadow-md flex items-center justify-between">
+      <div 
+        className="bg-[#1A365D] text-white border-transparent text-white px-4 py-4 sticky z-[40] shadow-md flex items-center justify-between"
+        style={{ top: 'var(--header-offset, 56px)' }}
+      >
         <div className="flex items-center gap-2">
           <Truck className="h-6 w-6 text-emerald-300" />
           <h1 className="text-xl font-bold">حمولة السيارة</h1>
@@ -5484,6 +5488,11 @@ export default function FactoryTab({
                             onClick={async () => {
                               const confirmed = await confirmDialog(`هل تريد رجوع الدورة رقم ${archiveCycles.length - cycleIdx} للدورة الحالية؟\n⚠️ سيتم حذف هذه الدورة من الأرشيف. الحمولات والدفعات ستظهر مجدداً في الحساب.`);
                               if (confirmed) {
+                                try {
+                                  const deletedIds = JSON.parse(localStorage.getItem('deleted_records_sys') || '[]');
+                                  deletedIds.push(cycle.id);
+                                  localStorage.setItem('deleted_records_sys', JSON.stringify(deletedIds));
+                                } catch {}
                                 setArchiveCycles(prev => {
                                   const next = prev.filter(c => c.id !== cycle.id);
                                   
@@ -6878,7 +6887,7 @@ export default function FactoryTab({
                         amount,
                         category: 'سداد للمصنع',
                         type: 'factory_payment',
-                        date: new Date().toISOString(),
+                        date: nowEgyptISO(),
                         description: JSON.stringify({
                           notes: noteText || 'تسديد مباشر',
                           appliedToCarriedDebt,
@@ -6936,7 +6945,7 @@ export default function FactoryTab({
                                   amount: remainingAmount,
                                   category: 'سداد للمصنع',
                                   type: 'factory_payment',
-                                  date: new Date().toISOString(),
+                                  date: nowEgyptISO(),
                                   description: JSON.stringify({ notes: 'سداد كامل المبلغ المتبقي وتصفية الحساب', appliedToCarriedDebt: 0 }),
                                   delegateName: selectedDelegatePhone ? (archiveDelegates.find(d => d.phone === selectedDelegatePhone)?.name || 'مجهول') : currentUser?.name || 'مجهول',
                                   delegatePhone: selectedDelegatePhone || currentUser?.phone || ''
@@ -8056,6 +8065,11 @@ export default function FactoryTab({
                       type="button"
                       onClick={async () => {
                         if (await confirmDialog(`هل أنت متأكد من حذف هذه الدورة المؤرشفة بالكامل؟ (${editData.loads?.length || 0} حمولة، ${editData.payments?.length || 0} دفعة)`)) {
+                          try {
+                            const deletedIds = JSON.parse(localStorage.getItem('deleted_records_sys') || '[]');
+                            deletedIds.push(editData.id);
+                            localStorage.setItem('deleted_records_sys', JSON.stringify(deletedIds));
+                          } catch {}
                           setArchiveCycles((prev: any) => {
                             const next = prev.filter((c: any) => c.id !== editData.id);
                             

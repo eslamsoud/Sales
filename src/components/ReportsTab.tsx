@@ -12,6 +12,10 @@ import { confirmDialog } from '../utils/confirm';
 import { COMPACT_PRO_CSS, printHTMLInNewWindow } from '../utils/reportStyles';
 import { ACTIVE_CUSTOMER_MSG, INACTIVE_CUSTOMER_MSG } from '../utils/messages';
 import SecurePhoneDisplay from './SecurePhoneDisplay';
+import { nowEgyptISO } from '../utils/storage';
+
+// تطبيع الحروف العربية: ة → ه لتوحيد مقارنة أسماء المناطق
+const normalizeArabic = (s: string) => (s || '').replace(/ة/g, 'ه').replace(/ى/g, 'ي');
 
 interface ReportsTabProps {
   invoices: Invoice[];
@@ -24,9 +28,11 @@ interface ReportsTabProps {
   usersList?: UserAuth[];
   onUpdateInvoice?: (updated: Invoice) => void;
   onAddExpense?: (newExpense: Omit<Expense, 'id'>) => void;
+  onDeleteExpense?: (expenseId: string) => void;
   onGoBack: () => void;
   permittedSubTabs?: string[];
   currentUser?: UserAuth | null;
+  archiveCycles?: any[];
 }
 
 const formatCartonsAndPieces = (rawQty: number, unitsPerCarton: number): string => {
@@ -101,9 +107,11 @@ function ReportsTabComponent({
   usersList = [],
   onUpdateInvoice,
   onAddExpense,
+  onDeleteExpense,
   onGoBack,
   permittedSubTabs,
-  currentUser
+  currentUser,
+  archiveCycles = []
 }: ReportsTabProps) {
   // 🛡️ تنظيف وتأمين جميع قواعد البيانات من أي نصوص أو عناصر فارغة تالفة لمنع الشاشة البيضاء نهائياً
   const invoices = React.useMemo(() => (rawInvoices || []).filter(i => i && typeof i === 'object'), [rawInvoices]);
@@ -138,7 +146,7 @@ function ReportsTabComponent({
   const [periodFilter, setPeriodFilter] = useState<'all' | 'today' | 'week' | 'month' | 'custom'>('all');
   const [customStartDate, setCustomStartDate] = useState('');
   const [customEndDate, setCustomEndDate] = useState('');
-  const [selectedWeekDays, setSelectedWeekDays] = useState<number[]>([0, 1, 2, 3, 4, 5, 6]);
+  const [selectedWeekDays, setSelectedWeekDays] = useState<number[]>([]);
   const [inventoryMatchFilter, setInventoryMatchFilter] = useState<'daily' | 'weekly' | 'monthly'>('daily');
   const [expandedGroups, setExpandedGroups] = React.useState<Set<string>>(new Set());
   const [expandedDetails, setExpandedDetails] = React.useState<Set<string>>(new Set());
@@ -161,6 +169,7 @@ function ReportsTabComponent({
 
   // Factory report filter states
   const [factoryReportFilter, setFactoryReportFilter] = useState<'all' | 'daily' | 'weekly' | 'monthly'>('all');
+  const [factoryReportWeekDays, setFactoryReportWeekDays] = useState<number[]>([]);
   const [expandedFactoryCard, setExpandedFactoryCard] = useState<string | null>(null);
 
   // Activity filter states
@@ -169,6 +178,7 @@ function ReportsTabComponent({
   const [custEndDate, setCustEndDate] = useState('');
   const [custAreaFilter, setCustAreaFilter] = useState('');
   const [custStatusFilter, setCustStatusFilter] = useState<'all' | 'active' | 'inactive'>('all'); // محمي
+  const [custDayFilter, setCustDayFilter] = useState<string[]>([]);
   const [expandedCustomerId, setExpandedCustomerId] = useState<string | null>(null);
   const [waLoadingId, setWaLoadingId] = useState<string | null>(null);
   
@@ -358,9 +368,26 @@ function ReportsTabComponent({
     const totalOverallPaidToFactory = currentAdvancesTotal + manualPaymentsSumTotal;
     const remainingDebtToFactory = Math.max(0, totalWithdrawnValue - totalOverallPaidToFactory + currentFilteredData.carriedOverDebt);
 
-    // صافي الربح = المحصل + إيرادات + مشاوير - تكلفة البضاعة المباعة (COGS) - المصروفات
+    // صافي الربح = صافي ربح الفواتير + إيرادات + مشاوير - المصروفات التشغيلية
     const operatingNetProfit = trueTotalSales + extraRevenues + totalTripsCollectedProfit - factorySoldCost - totalSpent;
-    const netProfit = totalCollected + extraRevenues + totalTripsCollectedProfit - factorySoldCost - totalSpent;
+    const netProfit = totalProfit + extraRevenues + totalTripsCollectedProfit - totalSpent;
+
+    // صافي الربح التراكمي = صافي ربح الفواتير + المشاوير + الإيرادات - المصروفات التشغيلية (جميع الدورات)
+    const cumulativeProfit = delFilteredInvoices.reduce((sum, inv) => {
+      const itemsProfit = Array.isArray(inv.items) ? inv.items.reduce((isum, it) => {
+        if (!it) return isum;
+        const prod = products.find(p => String(p.id).trim() === String(it.productId).trim());
+        const weights = prod ? getProductWeightsFallback(prod) : [];
+        const weight = weights.find(w => String(w.id).trim() === String(it.weightId).trim()) || weights[0];
+        const fpPerUnit = getItemFactoryCost(it, weight, prod);
+        return isum + (((it.finalPrice || 0) - fpPerUnit) * (it.quantity || 0));
+      }, 0) : 0;
+      return sum + itemsProfit;
+    }, 0);
+    const cumulativeExtraRev = delFilteredExpenses.filter(e => e.type === 'revenue').reduce((sum, e) => sum + (e.amount || 0), 0);
+    const cumulativeTripProfit = delFilteredTrips.filter(t => t.collected).reduce((sum, t) => sum + (t.price || 0), 0);
+    const cumulativeSpent = delFilteredExpenses.filter(e => e.type !== 'revenue' && e.category !== 'سداد للمصنع' && e.type !== 'factory_payment').reduce((sum, e) => sum + (e.amount || 0), 0);
+    const cumulativeNetProfit = cumulativeProfit + cumulativeTripProfit + cumulativeExtraRev - cumulativeSpent;
 
     return {
       totalSales: trueTotalSales,
@@ -374,11 +401,12 @@ function ReportsTabComponent({
       factorySoldCost,
       periodLoadedValue,
       netProfit,
+      cumulativeNetProfit,
       operatingNetProfit,
       totalPaidToFactoryInPeriod,
       remainingDebtToFactory
     };
-  }, [currentFilteredData, products, factoryLoads]);
+  }, [currentFilteredData, products, factoryLoads, delFilteredInvoices, delFilteredExpenses, delFilteredTrips]);
 
   // Period quick summary stats (follows selected time period, not just today)
   const periodStats = React.useMemo(() => {
@@ -401,6 +429,19 @@ function ReportsTabComponent({
       return s + (cartons * cp) + (loose * up);
     }, 0);
 
+    // صافي ربح الفواتير للفترة الحالية
+    const periodProfit = periodInvoices.reduce((sum, inv) => {
+      const itemsProfit = Array.isArray(inv.items) ? inv.items.reduce((isum, it) => {
+        if (!it) return isum;
+        const prod = products.find(p => String(p.id).trim() === String(it.productId).trim());
+        const weights = prod ? getProductWeightsFallback(prod) : [];
+        const weight = weights.find(w => String(w.id).trim() === String(it.weightId).trim()) || weights[0];
+        const fpPerUnit = getItemFactoryCost(it, weight, prod);
+        return isum + (((it.finalPrice || 0) - fpPerUnit) * (it.quantity || 0));
+      }, 0) : 0;
+      return sum + itemsProfit;
+    }, 0);
+
     return {
       invoiceCount: periodInvoices.length,
       totalCollected: periodInvoices.reduce((s, inv) => s + (inv.paidAmount !== undefined ? inv.paidAmount : (inv.totalAfterDiscount || 0)), 0),
@@ -411,6 +452,7 @@ function ReportsTabComponent({
       tripsCollected: periodTrips.filter(t => t.collected).reduce((s, t) => s + (t.price || 0), 0),
       extraRevenues: periodExtraRevenues,
       expensesTotal: periodExpenses.reduce((s, e) => s + (e.amount || 0), 0),
+      periodProfit,
     };
   }, [currentFilteredData, products]);
 
@@ -858,7 +900,7 @@ function ReportsTabComponent({
 
   // Group invoices by month
   const monthlyBreakdown = React.useMemo(() => {
-    const months: Record<string, { sales: number; collected: number; cogs: number; expenses: number; revs: number; count: number }> = {};
+    const months: Record<string, { sales: number; collected: number; cogs: number; expenses: number; revs: number; trips: number; count: number }> = {};
 
     currentFilteredData.invoices.forEach(inv => {
       if (!inv || !inv.date) return;
@@ -866,7 +908,7 @@ function ReportsTabComponent({
       if (parts.length < 2) return;
       const monthYear = parts[0] + '-' + parts[1];
       if (!months[monthYear]) {
-        months[monthYear] = { sales: 0, collected: 0, cogs: 0, expenses: 0, revs: 0, count: 0 };
+        months[monthYear] = { sales: 0, collected: 0, cogs: 0, expenses: 0, revs: 0, trips: 0, count: 0 };
       }
       months[monthYear].sales += (inv.totalAfterDiscount || 0);
       months[monthYear].collected += (inv.paidAmount !== undefined ? inv.paidAmount : (inv.totalAfterDiscount || 0));
@@ -885,13 +927,24 @@ function ReportsTabComponent({
       }
     });
 
+    currentFilteredData.trips.filter(t => t.collected).forEach(trip => {
+      if (!trip || !trip.date) return;
+      const parts = String(trip.date).split('-');
+      if (parts.length < 2) return;
+      const monthYear = parts[0] + '-' + parts[1];
+      if (!months[monthYear]) {
+        months[monthYear] = { sales: 0, collected: 0, cogs: 0, expenses: 0, revs: 0, trips: 0, count: 0 };
+      }
+      months[monthYear].trips += (trip.price || 0);
+    });
+
     currentFilteredData.expenses.forEach(exp => {
       if (!exp || !exp.date) return;
       const parts = String(exp.date).split('-');
       if (parts.length < 2) return;
       const monthYear = parts[0] + '-' + parts[1];
       if (!months[monthYear]) {
-        months[monthYear] = { sales: 0, collected: 0, cogs: 0, expenses: 0, revs: 0, count: 0 };
+        months[monthYear] = { sales: 0, collected: 0, cogs: 0, expenses: 0, revs: 0, trips: 0, count: 0 };
       }
       if (exp.type === 'revenue') {
         months[monthYear].revs += (exp.amount || 0);
@@ -909,9 +962,9 @@ function ReportsTabComponent({
         }
       } catch (e) {}
 
-      // True operating profit = (Sales - COGS) + Extra Revenues - Expenses
+      // صافي الربح = صافي ربح الفواتير + المشاوير + الإيرادات الاضافية - المصروفات التشغيلية
       const grossMargin = d.sales - d.cogs;
-      const trueProfit = grossMargin + d.revs - d.expenses;
+      const trueProfit = grossMargin + d.trips + d.revs - d.expenses;
 
       return {
         dateStr,
@@ -921,6 +974,7 @@ function ReportsTabComponent({
         cogs: d.cogs,
         revs: d.revs,
         expenses: d.expenses,
+        trips: d.trips,
         profit: trueProfit,
         count: d.count
       };
@@ -1613,9 +1667,9 @@ function ReportsTabComponent({
   const filteredCustomerActivity = React.useMemo(() => {
     let list = [...(customers || [])];
     
-    // Filter by Area
+    // Filter by Area (مطبّع)
     if (custAreaFilter) {
-      list = list.filter(c => c.area === custAreaFilter);
+      list = list.filter(c => normalizeArabic(c.area) === custAreaFilter);
     }
     
     const invoicesByCustomer = new Map<string, Invoice[]>();
@@ -1628,6 +1682,10 @@ function ReportsTabComponent({
       let include = true;
       if (custDateFilter === 'week') {
         include = (now - invDate) < 7 * 24 * 60 * 60 * 1000;
+        if (custDayFilter.length > 0) {
+          const englishDay = new Intl.DateTimeFormat('en-US', { weekday: 'long' }).format(new Date(inv.date));
+          if (!custDayFilter.includes(englishDay)) include = false;
+        }
       } else if (custDateFilter === 'month') {
         const mDate = new Date(inv.date);
         const cDate = new Date();
@@ -1675,7 +1733,7 @@ function ReportsTabComponent({
       if (custStatusFilter === 'inactive') return !c.isActive;
       return true;
     }).sort((a, b) => b.totalPurchases - a.totalPurchases);
-  }, [customers, delFilteredInvoices, custAreaFilter, custDateFilter, custStartDate, custEndDate, custStatusFilter]);
+  }, [customers, delFilteredInvoices, custAreaFilter, custDateFilter, custStartDate, custEndDate, custStatusFilter, custDayFilter]);
 
   // Unique areas
   const areas = Array.from(new Set(customers.map(c => c.area).filter(Boolean)));
@@ -1683,7 +1741,10 @@ function ReportsTabComponent({
   return (
     <div className="bg-[#F7FAFC] min-h-screen pb-12 font-sans text-right animate-fade-in" dir="rtl" id="reports-tab-container">
       {/* Header */}
-      <div className="bg-[#1A365D] text-white border-transparent text-white px-4 py-4 sticky top-0 z-10 shadow-md flex items-center justify-between">
+      <div 
+        className="bg-[#1A365D] text-white border-transparent text-white px-4 py-4 sticky z-[40] shadow-md flex items-center justify-between"
+        style={{ top: 'var(--header-offset, 56px)' }}
+      >
         <div className="flex items-center gap-2">
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6 text-indigo-200">
             <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 5.07c2.81.42 5.01 2.62 5.43 5.43H13V7.07zM11 7.07v6.43H4.57c.42-2.81 2.62-5.01 5.43-5.43zM4.57 15H11v6.43c-2.81-.42-5.01-2.62-5.43-5.43zm8.43 6.43V15h6.43c-.42 2.81-2.62 5.01-5.43 5.43z" />
@@ -1889,7 +1950,7 @@ function ReportsTabComponent({
               <div className="grid grid-cols-3 gap-2">
                 <div className="bg-white/10 rounded-xl p-2 text-center">
                   <span className="text-[9px] text-blue-200 font-bold block">صافي الربح</span>
-                  <span className="text-xs font-black">{formatNum(periodStats.totalCollected + periodStats.extraRevenues + periodStats.tripsCollected - periodStats.totalLoadedValue - periodStats.expensesTotal)}</span>
+                  <span className="text-xs font-black">{formatNum(periodStats.periodProfit + periodStats.tripsCollected + periodStats.extraRevenues - periodStats.expensesTotal)}</span>
                 </div>
                 <div className="bg-white/10 rounded-xl p-2 text-center">
                   <span className="text-[9px] text-blue-200 font-bold block">المشاوير</span>
@@ -2124,8 +2185,8 @@ function ReportsTabComponent({
                       📊 الصافي
                       <span className="text-[9px] bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded font-black">معادلة الأرباح والتكلفة 🔍</span>
                     </span>
-                    <span className="text-xl font-black text-emerald-800" dir="rtl">{salesStats.netProfit.toLocaleString('ar-EG')} ج.م</span>
-                    <span className="text-[10px] text-gray-400 font-bold">ناتج عملية البيع والمشاوير بعد خصم المصنع والمصروفات</span>
+                    <span className="text-xl font-black text-emerald-800" dir="rtl">{salesStats.cumulativeNetProfit.toLocaleString('ar-EG')} ج.م</span>
+                    <span className="text-[10px] text-gray-400 font-bold">المحصل + المشاوير + الإيرادات الاضافية - المصروفات التشغيلية</span>
                   </div>
                   <div className="bg-emerald-100 p-2.5 rounded-2xl text-emerald-800">
                     <TrendingUp className="h-5 w-5" />
@@ -2215,11 +2276,11 @@ function ReportsTabComponent({
                     </div>
                     <div className="flex justify-between text-xs sm:text-sm font-black border-t border-emerald-300 pt-2 text-[#1A365D]">
                       <span>الصافي الفعلي النهائي للربح</span>
-                      <span className="text-emerald-800" dir="rtl">{(salesStats.netProfit).toLocaleString('ar-EG')} ج.م</span>
+                      <span className="text-emerald-800" dir="rtl">{(salesStats.cumulativeNetProfit).toLocaleString('ar-EG')} ج.م</span>
                     </div>
                   </div>
                   <p className="text-[10px] text-emerald-600 leading-relaxed font-semibold">
-                    * يتم احتساب "الصافي" بناءً على المحصل من العملاء + الإيرادات + أرباح المشاوير مخصوماً منها تكلفة البضاعة المباعة (COGS) والمصروفات التشغيلية.
+                    * يتم احتساب "الصافي" التراكمي (جميع الدورات) = المحصل من العملاء + أرباح المشاوير + الإيرادات الاضافية - المصروفات التشغيلية.
                   </p>
                 </div>
               )}
@@ -2279,6 +2340,36 @@ function ReportsTabComponent({
                     ))}
                   </div>
                 </div>
+
+                {/* 📅 Days of the Week Selector for Weekly Filter */}
+                {factoryReportFilter === 'weekly' && (
+                  <div className="flex flex-col gap-1.5 border-t border-slate-100 pt-2 text-right animate-fade-in" dir="rtl">
+                    <span className="text-[9px] font-black text-slate-400">اختر أيام الأسبوع للفلترة:</span>
+                    <div className="flex flex-wrap gap-1 justify-start">
+                      {['السبت', 'الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة'].map((dayName, idx) => {
+                        const isSelected = factoryReportWeekDays.includes(idx);
+                        return (
+                          <button
+                            key={idx}
+                            type="button"
+                            onClick={() => {
+                              setFactoryReportWeekDays(prev => 
+                                isSelected ? prev.filter(d => d !== idx) : [...prev, idx]
+                              );
+                            }}
+                            className={`py-1 px-2.5 rounded-lg text-[10px] font-black transition-all cursor-pointer border ${
+                              isSelected 
+                                ? 'bg-[#1A365D] text-white border-[#1A365D] shadow-xs' 
+                                : 'bg-white text-gray-400 border-gray-200 hover:bg-slate-50'
+                            }`}
+                          >
+                            {dayName}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
               </div>
 
               {(() => {
@@ -2287,7 +2378,13 @@ function ReportsTabComponent({
                   if (isNaN(d.getTime())) return true;
                   const now = new Date();
                   if (factoryReportFilter === 'daily') return d.toDateString() === now.toDateString();
-                  if (factoryReportFilter === 'weekly') { const diff = Math.abs(now.getTime() - d.getTime()); return Math.ceil(diff / 86400000) <= 7; }
+                  if (factoryReportFilter === 'weekly') {
+                    const diff = Math.abs(now.getTime() - d.getTime());
+                    const withinLastWeek = Math.ceil(diff / 86400000) <= 7;
+                    const jsDay = d.getDay();
+                    const weekIdx = jsDay === 6 ? 0 : jsDay + 1;
+                    return withinLastWeek && factoryReportWeekDays.includes(weekIdx);
+                  }
                   if (factoryReportFilter === 'monthly') return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
                   return true;
                 });
@@ -2296,10 +2393,61 @@ function ReportsTabComponent({
                   if (isNaN(d.getTime())) return true;
                   const now = new Date();
                   if (factoryReportFilter === 'daily') return d.toDateString() === now.toDateString();
-                  if (factoryReportFilter === 'weekly') { const diff = Math.abs(now.getTime() - d.getTime()); return Math.ceil(diff / 86400000) <= 7; }
+                  if (factoryReportFilter === 'weekly') {
+                    const diff = Math.abs(now.getTime() - d.getTime());
+                    const withinLastWeek = Math.ceil(diff / 86400000) <= 7;
+                    const jsDay = d.getDay();
+                    const weekIdx = jsDay === 6 ? 0 : jsDay + 1;
+                    return withinLastWeek && factoryReportWeekDays.includes(weekIdx);
+                  }
                   if (factoryReportFilter === 'monthly') return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
                   return true;
                 });
+                const oldestLoadDate = filteredLoads.length > 0 
+                  ? new Date(Math.min(...filteredLoads.map(l => new Date(l.date).getTime())))
+                  : null;
+
+                const getStartOfDay = (dateObj: Date) => {
+                  const res = new Date(dateObj);
+                  res.setHours(0, 0, 0, 0);
+                  return res.getTime();
+                };
+
+                const oldestLoadTime = oldestLoadDate ? getStartOfDay(oldestLoadDate) : null;
+
+                const lastArchiveTimestamp = archiveCycles.length > 0
+                  ? Math.max(...archiveCycles.map(c => Number(c.id)))
+                  : 0;
+
+                const filteredInvoicesForFactory = oldestLoadTime === null
+                  ? []
+                  : currentFilteredData.invoices.filter(inv => {
+                      const invTime = getStartOfDay(new Date(inv.date));
+                      if (invTime < oldestLoadTime) return false;
+                      
+                      const d = new Date(inv.date);
+                      if (isNaN(d.getTime())) return true;
+                      const now = new Date();
+                      if (factoryReportFilter === 'daily') return d.toDateString() === now.toDateString();
+                      if (factoryReportFilter === 'weekly') {
+                        const diff = Math.abs(now.getTime() - d.getTime());
+                        const withinLastWeek = Math.ceil(diff / 86400000) <= 7;
+                        const jsDay = d.getDay();
+                        const weekIdx = jsDay === 6 ? 0 : jsDay + 1;
+                        return withinLastWeek && factoryReportWeekDays.includes(weekIdx);
+                      }
+                      if (factoryReportFilter === 'monthly') return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+                      return true;
+                    });
+
+                const allLoadsCumulative = currentFilteredData.factoryLoads;
+
+                const allInvoicesSinceCycle = lastArchiveTimestamp === 0
+                  ? currentFilteredData.invoices
+                  : currentFilteredData.invoices.filter(inv => {
+                      const invTime = getStartOfDay(new Date(inv.date));
+                      return invTime >= lastArchiveTimestamp;
+                    });
 
                 const totalLoadedCartons = filteredLoads.reduce((s, l) => {
                   const prod = products.find(p => String(p.id).trim() === String(l.productId).trim());
@@ -2320,62 +2468,387 @@ function ReportsTabComponent({
                   return s + (cartons * cp) + (loose * up);
                 }, 0);
                 const totalPaid = filteredPayments.reduce((s, p) => s + (p.amount || 0) - (p.appliedToCarriedDebt || 0), 0);
+                const totalPaidAllTime = currentFilteredData.allExtraPayments.reduce((s, p) => s + (p.amount || 0) - (p.appliedToCarriedDebt || 0), 0);
+
+                const factorySoldCostForPeriod = filteredInvoicesForFactory.reduce((sum, inv) => {
+                  const itemsCost = Array.isArray(inv.items) ? inv.items.reduce((isum, it) => {
+                    if (!it) return isum;
+                    const prod = products.find(p => String(p.id).trim() === String(it.productId).trim());
+                    const weights = prod ? getProductWeightsFallback(prod) : [];
+                    const weight = weights.find(w => String(w.id).trim() === String(it.weightId).trim()) || weights[0];
+                    const fpPerUnit = getItemFactoryCost(it, weight, prod);
+                    return isum + (fpPerUnit * (it.quantity || 0));
+                  }, 0) : 0;
+                  return sum + itemsCost;
+                }, 0);
+
+                const factorySoldCartonsForPeriod = filteredInvoicesForFactory.reduce((sum, inv) => {
+                  if (!inv.items) return sum;
+                  return sum + inv.items.reduce((isum, it) => {
+                    if (!it) return isum;
+                    const prod = products.find(p => String(p.id).trim() === String(it.productId).trim());
+                    const weights = prod ? getProductWeightsFallback(prod) : [];
+                    const weight = weights.find(w => String(w.id).trim() === String(it.weightId).trim()) || weights[0];
+                    const upc = weight?.unitsPerCarton || 12;
+                    return isum + (it.quantity / upc);
+                  }, 0);
+                }, 0);
+
+                const factorySoldCostCurrentCycle = allInvoicesSinceCycle.reduce((sum, inv) => {
+                  const itemsCost = Array.isArray(inv.items) ? inv.items.reduce((isum, it) => {
+                    if (!it) return isum;
+                    const prod = products.find(p => String(p.id).trim() === String(it.productId).trim());
+                    const weights = prod ? getProductWeightsFallback(prod) : [];
+                    const weight = weights.find(w => String(w.id).trim() === String(it.weightId).trim()) || weights[0];
+                    const fpPerUnit = getItemFactoryCost(it, weight, prod);
+                    return isum + (fpPerUnit * (it.quantity || 0));
+                  }, 0) : 0;
+                  return sum + itemsCost;
+                }, 0);
+
+                const factorySoldCartonsCurrentCycle = allInvoicesSinceCycle.reduce((sum, inv) => {
+                  if (!inv.items) return sum;
+                  return sum + inv.items.reduce((isum, it) => {
+                    if (!it) return isum;
+                    const prod = products.find(p => String(p.id).trim() === String(it.productId).trim());
+                    const weights = prod ? getProductWeightsFallback(prod) : [];
+                    const weight = weights.find(w => String(w.id).trim() === String(it.weightId).trim()) || weights[0];
+                    const upc = weight?.unitsPerCarton || 12;
+                    return isum + (it.quantity / upc);
+                  }, 0);
+                }, 0);
 
                 return (
                   <>
-                    {/* Loaded from Factory Card */}
-                    <details open={expandedFactoryCard === 'loaded'} onToggle={(e) => setExpandedFactoryCard((e.target as HTMLDetailsElement).open ? 'loaded' : null)} className="bg-gradient-to-r from-violet-600 to-purple-500 rounded-2xl shadow-md overflow-hidden">
-                      <summary className="p-5 text-white cursor-pointer flex items-center justify-between select-none list-none">
-                        <div className="flex flex-col gap-0.5 text-right">
-                          <span className="text-[10px] text-white/90 font-black">ما تم تحميله من المصنع</span>
-                          <span className="text-3xl font-black font-mono">{totalLoadedCartons}<span className="text-xs font-bold mr-1">كرتونة</span></span>
-                          <span className="text-sm font-bold text-white/80">{formatNum(totalLoadedValue)} ج.م</span>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mt-2">
+                      {/* Card 1: إجمالي المحمل */}
+                      <div 
+                        onClick={() => setExpandedFactoryCard(expandedFactoryCard === 'loaded' ? null : 'loaded')}
+                        className={`bg-[#FFFFFF] border p-4 rounded-2xl shadow-xs transition-all duration-200 cursor-pointer select-none text-right flex flex-col justify-between gap-3 group relative overflow-hidden ${expandedFactoryCard === 'loaded' ? 'ring-2 ring-indigo-500 border-transparent bg-indigo-50/20' : 'border-slate-200 hover:border-indigo-300 hover:shadow-md'}`}
+                      >
+                        <div className="absolute -right-6 -bottom-6 w-20 h-20 bg-indigo-50 rounded-full group-hover:scale-125 transition-transform duration-300 opacity-50 z-0"></div>
+                        <div className="flex justify-between items-start z-10">
+                          <div className="bg-indigo-100 p-2.5 rounded-xl text-indigo-700 group-hover:bg-indigo-600 group-hover:text-white transition-colors duration-200">
+                            <Package className="h-6 w-6" />
+                          </div>
+                          <div className="text-left font-mono">
+                            <span className="text-[10px] bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-full font-bold border border-indigo-100">المحمل</span>
+                          </div>
                         </div>
-                        <div className="bg-white/15 p-2.5 rounded-2xl"><Package className="h-8 w-8 text-white" /></div>
-                      </summary>
-                      <div className="px-5 pb-4 flex flex-col gap-1.5">
-                        {filteredLoads.map((l, i) => {
-                          const prod = products.find(p => String(p.id).trim() === String(l.productId).trim());
-                          const weights = prod ? getProductWeightsFallback(prod) : [];
-                          const weight = weights.find(w => String(w.id).trim() === String(l.weightId || '').trim());
-                          const upc = weight?.unitsPerCarton || 12;
-                          const cartons = l.cartonsCount !== undefined ? l.cartonsCount : Math.floor((l.quantity || 0) / upc);
-                          const cp = l.cartonPrice !== undefined ? Number(l.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) : 0) || 0);
-                          return (
-                            <div key={i} className="flex justify-between items-center text-[10px] text-white/90 bg-white/10 rounded-lg px-3 py-2">
-                              <span>{prod?.name || l.productName || 'غير معروف'} ({weight?.size || ''})</span>
-                              <span className="font-black">{cartons} كرتونة — {formatNum(cartons * cp)} ج.م</span>
-                            </div>
-                          );
-                        })}
-                        {filteredLoads.length === 0 && <p className="text-white/60 text-center text-[10px] py-2">لا توجد حمولات في هذه الفترة</p>}
+                        <div className="flex flex-col gap-1 z-10">
+                          <span className="text-[11px] text-slate-500 font-bold">إجمالي المحمل</span>
+                          <h3 className="text-xl font-black text-slate-800 font-mono tracking-tight" dir="rtl">
+                            {allLoadsCumulative.reduce((s, l) => {
+                              const prod = products.find(p => String(p.id).trim() === String(l.productId).trim());
+                              const weights = prod ? getProductWeightsFallback(prod) : [];
+                              const weight = weights.find(w => String(w.id).trim() === String(l.weightId || '').trim());
+                              const upc = weight?.unitsPerCarton || 12;
+                              return s + (l.cartonsCount !== undefined ? l.cartonsCount : Math.floor((l.quantity || 0) / upc));
+                            }, 0).toLocaleString('ar-EG')} <span className="text-xs font-black text-slate-500 mr-0.5">كرتونة</span>
+                          </h3>
+                        </div>
                       </div>
-                    </details>
 
-                    {/* Paid to Factory Card */}
-                    <details open={expandedFactoryCard === 'paid'} onToggle={(e) => setExpandedFactoryCard((e.target as HTMLDetailsElement).open ? 'paid' : null)} className="bg-gradient-to-r from-emerald-600 to-teal-500 rounded-2xl shadow-md overflow-hidden">
-                      <summary className="p-5 text-white cursor-pointer flex items-center justify-between select-none list-none">
-                        <div className="flex flex-col gap-0.5 text-right">
-                          <span className="text-[10px] text-white/90 font-black">ما تم سداده للمصنع</span>
-                          <span className="text-3xl font-black font-mono">{formatNum(totalPaid)}<span className="text-xs font-bold mr-1">ج.م</span></span>
-                          {totalLoadedValue > 0 && (
-                            <span className="text-[10px] text-white/90 font-black bg-white/20 rounded-full px-2 py-0.5 inline-block w-fit">
+                      {/* Card 2: ما تم سداده للمصنع */}
+                      <div 
+                        onClick={() => setExpandedFactoryCard(expandedFactoryCard === 'paid' ? null : 'paid')}
+                        className={`bg-[#FFFFFF] border p-4 rounded-2xl shadow-xs transition-all duration-200 cursor-pointer select-none text-right flex flex-col justify-between gap-3 group relative overflow-hidden ${expandedFactoryCard === 'paid' ? 'ring-2 ring-emerald-500 border-transparent bg-emerald-50/20' : 'border-slate-200 hover:border-emerald-300 hover:shadow-md'}`}
+                      >
+                        <div className="absolute -right-6 -bottom-6 w-20 h-20 bg-emerald-50 rounded-full group-hover:scale-125 transition-transform duration-300 opacity-50 z-0"></div>
+                        <div className="flex justify-between items-start z-10">
+                          <div className="bg-emerald-100 p-2.5 rounded-xl text-emerald-700 group-hover:bg-emerald-600 group-hover:text-white transition-colors duration-200">
+                            <Wallet className="h-6 w-6" />
+                          </div>
+                          <div className="text-left">
+                            <span className="text-[10px] bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full font-bold border border-emerald-100">المسدد</span>
+                          </div>
+                        </div>
+                        <div className="flex flex-col gap-1 z-10">
+                          <span className="text-[11px] text-slate-500 font-bold">إجمالي المسدد لكل الدورات</span>
+                          <h3 className="text-xl font-black text-slate-800 font-mono tracking-tight" dir="rtl">
+                            {totalPaidAllTime.toLocaleString('ar-EG')} <span className="text-xs font-black text-slate-500 mr-0.5">ج.م</span>
+                          </h3>
+                          {totalLoadedValue > 0 ? (
+                            <span className="text-[10px] text-emerald-600 font-extrabold">
                               نسبة السداد: {((totalPaid / totalLoadedValue) * 100).toFixed(1)}%
                             </span>
+                          ) : (
+                            <span className="text-[10px] text-slate-400 font-bold">لا يوجد تحميلات للفترة</span>
                           )}
                         </div>
-                        <div className="bg-white/15 p-2.5 rounded-2xl"><Wallet className="h-8 w-8 text-white" /></div>
-                      </summary>
-                      <div className="px-5 pb-4 flex flex-col gap-1.5">
-                        {filteredPayments.map((p, i) => (
-                          <div key={i} className="flex justify-between items-center text-[10px] text-white/90 bg-white/10 rounded-lg px-3 py-2">
-                            <span>{p.notes || 'تسديد مباشر'}{p.delegateName ? ` — ${p.delegateName}` : ''}</span>
-                            <span className="font-black">{formatNum(p.amount)} ج.م</span>
-                          </div>
-                        ))}
-                        {filteredPayments.length === 0 && <p className="text-white/60 text-center text-[10px] py-2">لا توجد دفعات في هذه الفترة</p>}
                       </div>
-                    </details>
+
+                      {/* Card 3: إجمالي دين المصنع */}
+                      <div 
+                        onClick={() => setExpandedFactoryCard(expandedFactoryCard === 'debt' ? null : 'debt')}
+                        className={`bg-[#FFFFFF] border p-4 rounded-2xl shadow-xs transition-all duration-200 cursor-pointer select-none text-right flex flex-col justify-between gap-3 group relative overflow-hidden ${expandedFactoryCard === 'debt' ? 'ring-2 ring-rose-500 border-transparent bg-rose-50/20' : 'border-slate-200 hover:border-rose-300 hover:shadow-md'}`}
+                      >
+                        <div className="absolute -right-6 -bottom-6 w-20 h-20 bg-rose-50 rounded-full group-hover:scale-125 transition-transform duration-300 opacity-50 z-0"></div>
+                        <div className="flex justify-between items-start z-10">
+                          <div className="bg-rose-100 p-2.5 rounded-xl text-rose-700 group-hover:bg-rose-600 group-hover:text-white transition-colors duration-200">
+                            <CircleDollarSign className="h-6 w-6" />
+                          </div>
+                          <div className="text-left">
+                            <span className="text-[10px] bg-rose-50 text-rose-700 px-2 py-0.5 rounded-full font-bold border border-rose-100">الدين</span>
+                          </div>
+                        </div>
+                        <div className="flex flex-col gap-1 z-10">
+                          <span className="text-[11px] text-slate-500 font-bold">المتبقي للمصنع من هذه الفترة</span>
+                          <h3 className="text-xl font-black text-slate-800 font-mono tracking-tight" dir="rtl">
+                            {(totalLoadedValue - totalPaid).toLocaleString('ar-EG')} <span className="text-xs font-black text-slate-500 mr-0.5">ج.م</span>
+                          </h3>
+                        </div>
+                      </div>
+
+                      {/* Card 4: إجمالي دين المصنع في السيارة */}
+                      <div 
+                        onClick={() => setExpandedFactoryCard(expandedFactoryCard === 'sold' ? null : 'sold')}
+                        className={`bg-[#FFFFFF] border p-4 rounded-2xl shadow-xs transition-all duration-200 cursor-pointer select-none text-right flex flex-col justify-between gap-3 group relative overflow-hidden ${expandedFactoryCard === 'sold' ? 'ring-2 ring-amber-500 border-transparent bg-amber-50/20' : 'border-slate-200 hover:border-amber-300 hover:shadow-md'}`}
+                      >
+                        <div className="absolute -right-6 -bottom-6 w-20 h-20 bg-amber-50 rounded-full group-hover:scale-125 transition-transform duration-300 opacity-50 z-0"></div>
+                        <div className="flex justify-between items-start z-10">
+                          <div className="bg-amber-100 p-2.5 rounded-xl text-amber-700 group-hover:bg-amber-600 group-hover:text-white transition-colors duration-200">
+                            <Activity className="h-6 w-6" />
+                          </div>
+                          <div className="text-left">
+                            <span className="text-[10px] bg-amber-50 text-amber-700 px-2 py-0.5 rounded-full font-bold border border-amber-100">المباع</span>
+                          </div>
+                        </div>
+                        <div className="flex flex-col gap-1 z-10">
+                          <span className="text-[11px] text-slate-500 font-bold">دين المصنع في السيارة</span>
+                          <h3 className="text-xl font-black text-slate-800 font-mono tracking-tight" dir="rtl">
+                            {factorySoldCostCurrentCycle.toLocaleString('ar-EG')} <span className="text-xs font-black text-slate-500 mr-0.5">ج.م</span>
+                          </h3>
+                          <span className="text-[10px] text-amber-600 font-extrabold" dir="rtl">
+                            مباع: {factorySoldCartonsCurrentCycle % 1 === 0 ? Math.round(factorySoldCartonsCurrentCycle) : factorySoldCartonsCurrentCycle.toFixed(1)} كرتونة
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Details Drawer */}
+                    {expandedFactoryCard && (
+                      <div className="bg-[#FFFFFF] p-5 rounded-2xl border border-slate-200 shadow-sm animate-fade-in text-right mt-3 flex flex-col gap-3">
+                        {expandedFactoryCard === 'loaded' && (
+                          <>
+                            <h4 className="font-bold text-indigo-900 border-b border-slate-100 pb-2 text-sm flex items-center justify-between">
+                              <span>إجمالي التحميلات من المصنع (كل الأوقات)</span>
+                              <span className="text-xs bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-full font-black">
+                                {allLoadsCumulative.reduce((s, l) => {
+                                  const prod = products.find(p => String(p.id).trim() === String(l.productId).trim());
+                                  const weights = prod ? getProductWeightsFallback(prod) : [];
+                                  const weight = weights.find(w => String(w.id).trim() === String(l.weightId || '').trim());
+                                  const upc = weight?.unitsPerCarton || 12;
+                                  return s + (l.cartonsCount !== undefined ? l.cartonsCount : Math.floor((l.quantity || 0) / upc));
+                                }, 0).toLocaleString('ar-EG')} كرتونة
+                              </span>
+                            </h4>
+                            <div className="flex flex-col gap-2 max-h-[250px] overflow-y-auto custom-scroll pr-1">
+                              {(() => {
+                                const groups: { [key: string]: { name: string; size: string; cartons: number; upc: number } } = {};
+                                allLoadsCumulative.forEach(l => {
+                                  const prod = products.find(p => String(p.id).trim() === String(l.productId).trim());
+                                  const weights = prod ? getProductWeightsFallback(prod) : [];
+                                  const weight = weights.find(w => String(w.id).trim() === String(l.weightId || '').trim());
+                                  const upc = weight?.unitsPerCarton || 12;
+                                  const cartons = l.cartonsCount !== undefined ? l.cartonsCount : Math.floor((l.quantity || 0) / upc);
+                                  const key = `${l.productId}-${l.weightId}`;
+                                  if (!groups[key]) {
+                                    groups[key] = {
+                                      name: prod?.name || l.productName || 'غير معروف',
+                                      size: weight?.size || '',
+                                      cartons: 0,
+                                      upc: upc
+                                    };
+                                  }
+                                  groups[key].cartons += cartons;
+                                });
+                                const loadList = Object.values(groups);
+                                return loadList.map((item, i) => {
+                                  const isWhole = item.cartons % 1 === 0;
+                                  return (
+                                    <div key={i} className="flex justify-between items-center text-xs text-slate-700 bg-slate-50 border border-slate-100 rounded-xl px-4 py-3 hover:bg-slate-100/50 transition-colors">
+                                      <span className="font-bold">{item.name} ({item.size})</span>
+                                      <span className="font-black text-indigo-700">
+                                        {isWhole ? Math.round(item.cartons) : item.cartons.toFixed(1)} كرتونة
+                                      </span>
+                                    </div>
+                                  );
+                                });
+                              })()}
+                              {allLoadsCumulative.length === 0 && <p className="text-slate-400 text-center text-xs py-4 font-bold">لا توجد حمولات مسجلة</p>}
+                            </div>
+                          </>
+                        )}
+
+                        {expandedFactoryCard === 'paid' && (
+                          <>
+                            <h4 className="font-bold text-emerald-950 border-b border-slate-100 pb-2 text-sm flex items-center justify-between">
+                              <span>سجل الدفعات والمسدد لكل الدورات</span>
+                              <span className="text-xs bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full font-black">
+                                الإجمالي: {totalPaidAllTime.toLocaleString('ar-EG')} ج.م
+                              </span>
+                            </h4>
+                            <div className="flex flex-col gap-2 max-h-[300px] overflow-y-auto custom-scroll pr-1">
+                              {(() => {
+                                const sortedCycles = [...archiveCycles].sort((a, b) => Number(a.id) - Number(b.id));
+                                const allPaymentsSorted = [...currentFilteredData.allExtraPayments].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+                                
+                                const cycleGroups: { cycleId: number; cycleIndex: number; payments: typeof allPaymentsSorted; total: number }[] = [];
+                                
+                                sortedCycles.forEach((cycle, idx) => {
+                                  const cycleTime = Number(cycle.id);
+                                  const nextCycleTime = idx < sortedCycles.length - 1 ? Number(sortedCycles[idx + 1].id) : Infinity;
+                                  const cyclePayments = allPaymentsSorted.filter(p => {
+                                    const pTime = new Date(p.date).getTime();
+                                    return pTime >= cycleTime && pTime < nextCycleTime;
+                                  });
+                                  if (cyclePayments.length > 0) {
+                                    cycleGroups.push({
+                                      cycleId: cycleTime,
+                                      cycleIndex: idx + 1,
+                                      payments: cyclePayments,
+                                      total: cyclePayments.reduce((s, p) => s + (p.amount || 0) - (p.appliedToCarriedDebt || 0), 0)
+                                    });
+                                  }
+                                });
+                                
+                                const currentPayments = allPaymentsSorted.filter(p => {
+                                  const pTime = new Date(p.date).getTime();
+                                  const lastCycleTime = sortedCycles.length > 0 ? Number(sortedCycles[sortedCycles.length - 1].id) : 0;
+                                  return pTime >= lastCycleTime;
+                                });
+                                if (currentPayments.length > 0) {
+                                  cycleGroups.push({
+                                    cycleId: 0,
+                                    cycleIndex: sortedCycles.length + 1,
+                                    payments: currentPayments,
+                                    total: currentPayments.reduce((s, p) => s + (p.amount || 0) - (p.appliedToCarriedDebt || 0), 0)
+                                  });
+                                }
+                                
+                                return cycleGroups.length > 0 ? cycleGroups.map(group => (
+                                  <div key={group.cycleId} className="flex flex-col gap-1">
+                                    <div className="flex items-center justify-between bg-emerald-50 border border-emerald-100 rounded-xl px-3 py-1.5">
+                                      <span className="text-[10px] font-black text-emerald-800">دورة {group.cycleIndex}</span>
+                                      <span className="text-[10px] font-black text-emerald-700">الإجمالي: {formatNum(group.total)} ج.م</span>
+                                    </div>
+                                    {group.payments.map((p, i) => {
+                                      const notesParsed = (() => {
+                                        if (p.notes && p.notes.startsWith('{')) {
+                                          try { return JSON.parse(p.notes); } catch { return { notes: p.notes }; }
+                                        }
+                                        return { notes: p.notes };
+                                      })();
+                                      return (
+                                        <div key={`${group.cycleId}_${i}`} className="flex justify-between items-center text-xs text-slate-700 bg-slate-50 border border-slate-100 rounded-xl px-4 py-2.5 hover:bg-slate-100/50 transition-colors">
+                                          <div className="flex flex-col gap-0.5 flex-1">
+                                            <span className="font-bold">{notesParsed.notes || 'تسديد نقدي للمصنع'}</span>
+                                            <span className="text-[10px] text-slate-400">{p.date ? new Date(p.date).toLocaleDateString('ar-EG') : ''} {p.delegateName ? `— ${p.delegateName}` : ''}</span>
+                                          </div>
+                                          <div className="flex items-center gap-2">
+                                            <span className="font-black text-emerald-700">{formatNum(p.amount)} ج.م</span>
+                                            {onDeleteExpense && (
+                                              <button onClick={(e) => { e.stopPropagation(); if (confirm('هل أنت متأكد من حذف هذا التسديد؟')) onDeleteExpense(String(p.id)); }} className="text-rose-400 hover:text-rose-600 transition-colors p-0.5" title="حذف">
+                                                <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                                              </button>
+                                            )}
+                                          </div>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                )) : <p className="text-slate-400 text-center text-xs py-4 font-bold">لا توجد دفعات مسجلة</p>;
+                              })()}
+                            </div>
+                          </>
+                        )}
+
+                        {expandedFactoryCard === 'debt' && (
+                          <>
+                            <h4 className="font-bold text-rose-950 border-b border-slate-100 pb-2 text-sm flex items-center justify-between">
+                              <span>تحليل ديون المصنع والمديونية</span>
+                              <span className="text-xs bg-rose-50 text-rose-700 px-2 py-0.5 rounded-full font-black">
+                                الدين الإجمالي
+                              </span>
+                            </h4>
+                            <div className="flex flex-col gap-3 p-3 bg-rose-50/20 border border-rose-100 rounded-2xl text-xs font-bold text-slate-700">
+                              <div className="flex justify-between items-center pb-2 border-b border-rose-100/40">
+                                <span>قيمة البضائع المحملة من المصنع (الدين الأساسي):</span>
+                                <span className="font-mono text-slate-800">{totalLoadedValue.toLocaleString('ar-EG')} ج.م</span>
+                              </div>
+                              <div className="flex justify-between items-center pb-2 border-b border-rose-100/40">
+                                <span>إجمالي المبالغ المسددة للمصنع في هذه الفترة:</span>
+                                <span className="font-mono text-emerald-600">- {totalPaid.toLocaleString('ar-EG')} ج.م</span>
+                              </div>
+                              <div className="flex justify-between items-center text-sm font-black text-rose-700 pt-1">
+                                <span>صافي دين المصنع المتبقي لهذه الفترة:</span>
+                                <span className="font-mono">{(totalLoadedValue - totalPaid).toLocaleString('ar-EG')} ج.م</span>
+                              </div>
+                            </div>
+                          </>
+                        )}
+
+                        {expandedFactoryCard === 'sold' && (
+                          <>
+                            <h4 className="font-bold text-amber-950 border-b border-slate-100 pb-2 text-sm flex items-center justify-between">
+                              <span>إجمالي مبيعات هذه الدورة (بسعر المصنع)</span>
+                              <span className="text-xs bg-amber-50 text-amber-700 px-2 py-0.5 rounded-full font-black">
+                                القيمة: {factorySoldCostCurrentCycle.toLocaleString('ar-EG')} ج.م
+                              </span>
+                            </h4>
+                            <div className="flex flex-col gap-2 max-h-[250px] overflow-y-auto custom-scroll pr-1">
+                              {(() => {
+                                const groups: { [key: string]: { name: string; size: string; quantity: number; cost: number; upc: number } } = {};
+                                allInvoicesSinceCycle.forEach(inv => {
+                                  if (!inv.items) return;
+                                  inv.items.forEach(it => {
+                                    if (!it) return;
+                                    const prod = products.find(p => String(p.id).trim() === String(it.productId).trim());
+                                    const weights = prod ? getProductWeightsFallback(prod) : [];
+                                    const weight = weights.find(w => String(w.id).trim() === String(it.weightId).trim()) || weights[0];
+                                    const key = `${it.productId}-${it.weightId}`;
+                                    const fpPerUnit = getItemFactoryCost(it, weight, prod);
+                                    const itemCost = fpPerUnit * (it.quantity || 0);
+                                    const upc = weight?.unitsPerCarton || 12;
+                                    
+                                    if (!groups[key]) {
+                                      groups[key] = {
+                                        name: prod?.name || it.productName || 'غير معروف',
+                                        size: weight?.size || '',
+                                        quantity: 0,
+                                        cost: 0,
+                                        upc: upc
+                                      };
+                                    }
+                                    groups[key].quantity += it.quantity || 0;
+                                    groups[key].cost += itemCost;
+                                  });
+                                });
+                                const soldList = Object.values(groups);
+                                return (
+                                  <>
+                                    {soldList.map((item, i) => {
+                                      const cartons = item.quantity / item.upc;
+                                      const isWhole = cartons % 1 === 0;
+                                      return (
+                                        <div key={i} className="flex justify-between items-center text-xs text-slate-700 bg-slate-50 border border-slate-100 rounded-xl px-4 py-3 hover:bg-slate-100/50 transition-colors">
+                                          <span className="font-bold">{item.name} ({item.size})</span>
+                                          <span className="font-black text-amber-700">
+                                            {isWhole ? Math.round(cartons) : cartons.toFixed(1)} كرتونة — {item.cost.toLocaleString('ar-EG')} ج.م
+                                          </span>
+                                        </div>
+                                      );
+                                    })}
+                                    {soldList.length === 0 && <p className="text-slate-400 text-center text-xs py-4 font-bold">لا توجد مبيعات مسجلة في هذه الفترة</p>}
+                                  </>
+                                );
+                              })()}
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    )}
                   </>
                 );
               })()}
@@ -2689,7 +3162,19 @@ function ReportsTabComponent({
                     <option value="custom">تحديد فترة مخصصة من وإلى</option>
                   </select>
                 </div>
-                
+
+                {custDateFilter === 'week' && (
+                  <div className="flex bg-[#F7FAFC] border border-slate-200 rounded-lg overflow-hidden flex-wrap gap-px p-0.5 animate-fade-in" dir="rtl">
+                    <button onClick={() => setCustDayFilter([])} className={`flex-1 text-[10px] py-1.5 rounded font-bold transition-colors ${custDayFilter.length === 0 ? 'bg-[#1A365D] text-white shadow-xs' : 'text-slate-600 hover:bg-slate-100 bg-white'}`}>الكل</button>
+                    {['Saturday', 'Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'].map(day => {
+                      const arabicDays: Record<string, string> = { 'Saturday':'السبت', 'Sunday':'الأحد', 'Monday':'الإثنين', 'Tuesday':'الثلاثاء', 'Wednesday':'الأربعاء', 'Thursday':'الخميس', 'Friday':'الجمعة' };
+                      return (
+                        <button key={day} onClick={() => setCustDayFilter(prev => prev.includes(day) ? prev.filter(d => d !== day) : [...prev, day])} className={`flex-1 text-[10px] py-1.5 rounded font-bold transition-colors ${custDayFilter.includes(day) ? 'bg-[#1A365D] text-white shadow-xs' : 'text-slate-600 hover:bg-slate-100 bg-white'}`}>{arabicDays[day]}</button>
+                      )
+                    })}
+                  </div>
+                )}
+
                 <div className="flex flex-col gap-1.5">
                   <label className="text-[10px] font-bold text-[#2B6CB0]">المنطقة الجغرافية</label>
                   <select
@@ -3092,7 +3577,7 @@ function ReportsTabComponent({
                           amount: Number(amount),
                           category: 'تحصيل من عميل',
                           type: 'revenue',
-                          date: new Date().toISOString(),
+                          date: nowEgyptISO(),
                           description: JSON.stringify({ notes: `تحصيل عام: ${name}`, customerName: name, isGeneralSettlement: true }),
                           delegateName: name,
                           delegatePhone: ''
@@ -3115,7 +3600,7 @@ function ReportsTabComponent({
                           amount: Number(amount),
                           category: 'تنازل عن ديون',
                           type: 'expense',
-                          date: new Date().toISOString(),
+                          date: nowEgyptISO(),
                           description: JSON.stringify({ notes: `تنازل عام: ${name}`, customerName: name, isWriteOff: true, isGeneralSettlement: true }),
                           delegateName: name,
                           delegatePhone: ''
@@ -3248,7 +3733,7 @@ function ReportsTabComponent({
                                           amount: remaining,
                                           category: 'تحصيل من عميل',
                                           type: 'revenue',
-                                          date: new Date().toISOString(),
+                                          date: nowEgyptISO(),
                                           description: JSON.stringify({ notes: `تحصيل كامل المتبقي من العميل: ${customer.name} — فاتورة #${inv.invoiceNumber}`, invoiceId: inv.id, customerName: customer.name }),
                                           delegateName: customer.name,
                                           delegatePhone: customer.phone || ''
@@ -3271,7 +3756,7 @@ function ReportsTabComponent({
                                           amount: remaining,
                                           category: 'تنازل عن ديون',
                                           type: 'expense',
-                                          date: new Date().toISOString(),
+                                          date: nowEgyptISO(),
                                           description: JSON.stringify({ notes: `تنازل/تسوية عن المتبقي: ${customer.name} — فاتورة #${inv.invoiceNumber}`, invoiceId: inv.id, customerName: customer.name, isWriteOff: true }),
                                           delegateName: customer.name,
                                           delegatePhone: customer.phone || ''
