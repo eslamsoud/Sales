@@ -111,6 +111,8 @@ export default function App() {
   const [isFetchingData, setIsFetchingData] = useState(false);
   const [lastSyncInfo, setLastSyncInfo] = useState<string>('');
   const [lastSyncFailed, setLastSyncFailed] = useState(false);
+  const [hasPendingChanges, setHasPendingChanges] = useState(false);
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
 
   const handleUnlockWithPassword = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
@@ -309,19 +311,13 @@ export default function App() {
             localStorage.setItem('users_permissions_sys', JSON.stringify(updated));
             return updated;
           });
-          // Silent background sync of GPS coordinates and last seen to Google Sheets
-          setTimeout(() => {
-            syncAllDataToGoogle(true);
-          }, 800);
+          // GPS و lastActive يتم تحديثهم محلياً فقط — الرفع يتم عند الحفظ اليدوي أو الخروج
         }, () => {
           setUsersList(prev => {
             const updated = prev.map(u => u.phone === currentUser.phone ? { ...u, lastActive: new Date().toISOString() } : u);
             localStorage.setItem('users_permissions_sys', JSON.stringify(updated));
             return updated;
           });
-          setTimeout(() => {
-            syncAllDataToGoogle(true);
-          }, 800);
         }, { enableHighAccuracy: false, maximumAge: 60000, timeout: 5000 });
       } else {
         setUsersList(prev => {
@@ -329,10 +325,6 @@ export default function App() {
           localStorage.setItem('users_permissions_sys', JSON.stringify(updated));
           return updated;
         });
-        // Owner active bump triggers silent sync to keep lastActive updated in Google Sheets
-        setTimeout(() => {
-          syncAllDataToGoogle(true);
-        }, 800);
       }
     };
     bumpActive();
@@ -432,7 +424,7 @@ export default function App() {
     latestDataRef.current = { products, factoryLoads, customers, invoices, expenses, trips, usersList, googleLeads, potentialLeads, settings, dbVersion, currentUser, archiveCycles };
   }, [products, factoryLoads, customers, invoices, expenses, trips, usersList, googleLeads, potentialLeads, settings, dbVersion, currentUser, archiveCycles]);
 
-  // ☁️ مزامنة تلقائية صامتة عند بدء تشغيل التطبيق لضمان سحب أحدث بيانات المناديب والأسعار من السحاب
+  // ☁️ سحب تلقائي صامت عند بدء تشغيل التطبيق + رفع التغييرات المعلقة من الجلسة السابقة
   useEffect(() => {
     if (isDbLoaded && currentUser) {
       const timer = setTimeout(async () => {
@@ -441,6 +433,21 @@ export default function App() {
           showToast("✅ تم تحديث البيانات والأسعار من السحابة بنجاح");
         } catch {
           showToast("⚠️ تعمل الآن بالبيانات المحلية — تحقق من اتصال الإنترنت");
+        }
+        // ⬆️ رفع التغييرات المعلقة من جلسة سابقة (خروج إجباري أو فقد الاتصال)
+        try {
+          const pending = await idbGet('pending_sync_flag');
+          if (pending) {
+            showToast("🔄 يوجد تغييرات معلقة من الجلسة السابقة — جاري رفعها...");
+            const success = await syncAllDataToGoogle(true);
+            if (success) {
+              await idbSet('pending_sync_flag', false);
+              setHasPendingChanges(false);
+              showToast("✅ تم رفع جميع التغييرات المعلقة بنجاح!");
+            }
+          }
+        } catch (e) {
+          console.error('Failed to sync pending changes from previous session:', e);
         }
       }, 1500);
       return () => clearTimeout(timer);
@@ -640,7 +647,7 @@ export default function App() {
     loadData();
   }, []);
 
-  // Auto daily backup (Background System)
+  // Auto daily backup (Background System) — حفظ محلي فقط في IndexedDB بدون إرسال إلى Google Drive
   const hasAutoBackedUpToday = useRef(false);
   useEffect(() => {
     if (!isDbLoaded || !currentUser || currentUser.role !== 'owner') return;
@@ -655,47 +662,28 @@ export default function App() {
         try {
           const exportData = { products, customers, invoices, expenses, trips, factoryLoads, settings, usersList, syncLogs, exportDate: new Date().toISOString() };
           idbSet('last_auto_backup_sys', exportData);
-          
-          // إرسال النسخة الاحتياطية إلى Google Drive مباشرة بدلاً من تحميلها على الهاتف فقط
-          const scriptUrl = getSafeScriptUrl(settings.googleSheetsUrl);
-          fetchWithTimeout(scriptUrl.trim(), {
-            method: 'POST',
-            mode: 'cors',
-            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: JSON.stringify({
-              type: 'auto_backup',
-              syncPhone: currentUser.phone,
-              data: exportData
-            })
-          }, 15000).catch(e => console.error("Drive backup failed", e));
-          
           localStorage.setItem('last_auto_backup_date_sys', today);
-          showToast('☁️ تم إرسال النسخة الاحتياطية التلقائية إلى مجلد Google Drive الخاص بك بنجاح.');
+          showToast('💾 تم حفظ النسخة الاحتياطية المحلية بنجاح.');
         } catch (e) {
           console.error("Auto backup failed", e);
         }
-      }, 8000); // يعمل بهدوء بعد 8 ثواني من فتح التطبيق
+      }, 8000);
       return () => clearTimeout(timer);
     }
   }, [isDbLoaded, currentUser, products, customers, invoices, expenses, trips, factoryLoads, settings, usersList, syncLogs]);
 
-  // 🚨 تم إزالة السحب المكرر هنا — يتم السحب الصامت مرة واحدة فقط من useEffect أعلاه (بعد isDbLoaded && currentUser)
+  // 🚨 تم إزالة السحب الدوري كل 5 دقائق — السحب يتم عند فتح التطبيق وعند العودة من تبويب آخر فقط
 
-  // ⏱️ سحب دوري صامت كل 5 دقائق للتأكد من حصول المناديب على آخر التحديثات من الشيت
-  useEffect(() => {
-    if (!isDbLoaded || !currentUser) return;
-    const interval = setInterval(() => {
-      handleUpdateData(true);
-    }, 5 * 60 * 1000);
-    return () => clearInterval(interval);
-  }, [isDbLoaded, currentUser?.phone]);
-
-  // 💾 حفظ تلقائي عند محاولة إغلاق التبويب أو المتصفح
+  // 💾 حفظ تلقائي عند محاولة إغلاق التبويب أو المتصفح + وضع علامة معلقة في IndexedDB
   useEffect(() => {
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
       // محاولة حفظ سريع للبيانات قبل إغلاق المتصفح
       try {
         syncAllDataToGoogle(true);
+      } catch (err) {}
+      // وضع علامة معلقة لضمان رفع البيانات عند الفتح التالي في حال فشل الحفظ السريع
+      try {
+        idbSet('pending_sync_flag', true);
       } catch (err) {}
       e.preventDefault();
       e.returnValue = '';
@@ -703,6 +691,41 @@ export default function App() {
     window.addEventListener('beforeunload', handleBeforeUnload);
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
   }, [syncAllDataToGoogle]);
+
+  // 📡 نظام Offline Queue — رفع البيانات المعلقة تلقائياً عند عودة الاتصال بالإنترنت
+  useEffect(() => {
+    const handleOnline = async () => {
+      setIsOnline(true);
+      try {
+        const pending = await idbGet('pending_sync_flag');
+        if (pending && currentUser) {
+          showToast("📡 عاد الاتصال! جاري رفع البيانات المعلقة...");
+          const success = await syncAllDataToGoogle(true);
+          if (success) {
+            await idbSet('pending_sync_flag', false);
+            setHasPendingChanges(false);
+            showToast("✅ تم رفع جميع البيانات المعلقة بنجاح!");
+          }
+        } else {
+          showToast("📡 تم استعادة الاتصال بالإنترنت");
+        }
+      } catch (e) {
+        console.error('Failed to sync on reconnect:', e);
+      }
+    };
+
+    const handleOffline = () => {
+      setIsOnline(false);
+      showToast("📴 لا يوجد اتصال — البيانات محفوظة محلياً وسيتم رفعها عند عودة الإنترنت");
+    };
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, [currentUser]);
 
   // 🔄 سحب تلقائي عند العودة للتطبيق (التبديل من تبويب آخر)
   useEffect(() => {
@@ -867,13 +890,25 @@ export default function App() {
   const promptForSync = (actionDesc: string) => {
     const scriptUrl = getSafeScriptUrl(settings.googleSheetsUrl);
     if (!scriptUrl) return;
+
+    // وضع علامة تغييرات معلقة فوراً لضمان عدم فقدان البيانات
+    idbSet('pending_sync_flag', true);
+    setHasPendingChanges(true);
+
     setTimeout(async () => {
+      // التحقق من الاتصال قبل محاولة الرفع
+      if (!navigator.onLine) {
+        showToast(`📴 ${actionDesc} — محفوظ محلياً، سيتم الرفع عند عودة الإنترنت`);
+        return;
+      }
       showToast(`☁️ جاري الحفظ السحابي...`);
       const success = await syncAllDataToGoogle(true);
       if (success) {
+        await idbSet('pending_sync_flag', false);
+        setHasPendingChanges(false);
         showToast(`✓ تم الحفظ السحابي بنجاح!`);
       } else {
-        showToast(`⚠️ فشل الحفظ السحابي، تأكد من اتصالك بالإنترنت.`);
+        showToast(`⚠️ فشل الحفظ السحابي — محفوظ محلياً، سيتم إعادة المحاولة`);
       }
     }, 800);
   };
@@ -1789,6 +1824,8 @@ export default function App() {
     setIsHeaderSyncing(false);
 
     if (success) {
+      await idbSet('pending_sync_flag', false);
+      setHasPendingChanges(false);
       showToast("✅ تم حفظ جميع البيانات بنجاح في السحابة!");
       await new Promise(r => setTimeout(r, 1200));
       // تأكيد نهائي قبل الخروج الفعلي بعد الحفظ الناجح
@@ -1810,8 +1847,13 @@ export default function App() {
     setIsHeaderSyncing(true);
     const success = await syncAllDataToGoogle(false);
     if (success) {
+      await idbSet('pending_sync_flag', false);
+      setHasPendingChanges(false);
       showToast("✓ تم الحفظ السحابي بنجاح");
     } else {
+      // وضع علامة معلقة لإعادة المحاولة
+      await idbSet('pending_sync_flag', true);
+      setHasPendingChanges(true);
       showToast("❌ تعذر الحفظ السحابي، تحقق من الاتصال.");
     }
     setIsHeaderSyncing(false);
@@ -2471,6 +2513,16 @@ export default function App() {
                     ⚠️ فشل
                   </span>
                 )}
+                {!isOnline && (
+                  <span className="text-[10px] text-red-400 mr-2 font-bold animate-pulse" title="لا يوجد اتصال بالإنترنت">
+                    🔴 غير متصل
+                  </span>
+                )}
+                {hasPendingChanges && isOnline && !isHeaderSyncing && !lastSyncFailed && (
+                  <span className="text-[10px] text-yellow-300 mr-2 font-bold" title="يوجد تغييرات لم ترفع للسحابة بعد">
+                    🟡 تغييرات معلقة
+                  </span>
+                )}
                 {simulatedDelegate && (
                   <span className="bg-amber-500/15 text-amber-300 text-[10.5px] font-black px-2 py-1 rounded-xl border border-amber-500/30">
                     مراقبة حية: {simulatedDelegate.name} 👀
@@ -2492,6 +2544,16 @@ export default function App() {
                 {lastSyncFailed && !isHeaderSyncing && (
                   <span className="text-[10px] text-red-400 mr-2 font-bold" title="فشلت المزامنة - سيتم إعادة المحاولة تلقائياً">
                     ⚠️ فشل
+                  </span>
+                )}
+                {!isOnline && (
+                  <span className="text-[10px] text-red-400 mr-2 font-bold animate-pulse" title="لا يوجد اتصال بالإنترنت">
+                    🔴 غير متصل
+                  </span>
+                )}
+                {hasPendingChanges && isOnline && !isHeaderSyncing && !lastSyncFailed && (
+                  <span className="text-[10px] text-yellow-300 mr-2 font-bold" title="يوجد تغييرات لم ترفع للسحابة بعد">
+                    🟡 تغييرات معلقة
                   </span>
                 )}
               </span>
