@@ -28,6 +28,7 @@ interface InvoiceTabProps {
   currentUser?: any;
   usersList?: any[];
   initialSubTab?: 'create' | 'archive' | 'debtors';
+  lastArchiveTimestamp?: number;
 }
 
 const formatCartonsAndPieces = (rawQty: number, unitsPerCarton: number): string => {
@@ -56,7 +57,8 @@ export default function InvoiceTab({
   permittedSubTabs,
   currentUser,
   usersList,
-  initialSubTab
+  initialSubTab,
+  lastArchiveTimestamp = 0
 }: InvoiceTabProps) {
   const [activeSubTab, setActiveSubTab] = useState<'create' | 'archive' | 'debtors'>(() => {
     if (initialSubTab) return initialSubTab;
@@ -66,6 +68,23 @@ export default function InvoiceTab({
     }
     return 'create';
   });
+
+  const getEgyptTodayDate = () => {
+    const now = new Date();
+    const formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'Africa/Cairo',
+      year: 'numeric', month: '2-digit', day: '2-digit'
+    });
+    const parts = formatter.formatToParts(now);
+    const getPart = (type: string) => parts.find(p => p.type === type)?.value || '';
+    return `${getPart('year')}-${getPart('month')}-${getPart('day')}`;
+  };
+
+  const [invoiceFilterDate, setInvoiceFilterDate] = useState(() => getEgyptTodayDate());
+  const [selectedInvoiceGov, setSelectedInvoiceGov] = useState('all');
+  const [selectedInvoiceArea, setSelectedInvoiceArea] = useState('all');
+  const [selectedInvoiceCustomer, setSelectedInvoiceCustomer] = useState('all');
+  const [selectedInvoiceDelegate, setSelectedInvoiceDelegate] = useState('all');
   
   const [paymentModal, setPaymentModal] = useState<{
     isOpen: boolean;
@@ -119,10 +138,7 @@ export default function InvoiceTab({
       const d = new Date(cached);
       if (!isNaN(d.getTime())) return cached;
     }
-    const now = new Date();
-    // Egyptian local datetime format alignment
-    now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
-    return now.toISOString().substring(0, 16);
+    return `${getEgyptTodayDate()}T12:00`;
   });
 
   const [filterGovernorate, setFilterGovernorate] = useState(() => localStorage.getItem('invoice_draft_filterGovernorate') || '');
@@ -226,26 +242,31 @@ export default function InvoiceTab({
 
   // Form states are persisted cleanly to client localStorage
 
+  const parseCairoTime = (dateStr: string): number => new Date(dateStr.replace('Z', '')).getTime();
+
   // Calculate real-time car stock per product weight size combination
   const weightStocks = useMemo(() => {
     const stocks: Record<string, { loaded: number; sold: number; remaining: number }> = {};
     
+    const activeLoads = factoryLoads.filter(l => parseCairoTime(l.date) > lastArchiveTimestamp);
+    const activeInvoices = invoices.filter(inv => parseCairoTime(inv.date) > lastArchiveTimestamp);
+
     products.forEach(p => {
       const weights = getProductWeightsFallback(p);
       weights.forEach(w => {
         const key = `${p.id}_${w.id}`;
 
         // 1. Sum loaded from factory loads of this product and weight size
-        const loaded = factoryLoads
-          .filter(l => String(l.productId).trim() === String(p.id).trim() && String(l.weightId).trim() === String(w.id).trim())
+        const loaded = activeLoads
+          .filter(l => String(l.productId).trim() === String(p.id).trim() && String(l.weightId || '').trim() === String(w.id).trim())
           .reduce((sum, l) => sum + l.quantity, 0);
 
         // 2. Sum sold in all previous saved invoices
         let sold = 0;
-        invoices.forEach(inv => {
+        activeInvoices.forEach(inv => {
           if (editingInvoiceId && inv.id === editingInvoiceId) return; // Skip the invoice being edited to prevent double-subtraction from stock
           inv.items.forEach(item => {
-            if (String(item.productId).trim() === String(p.id).trim() && String(item.weightId).trim() === String(w.id).trim()) {
+            if (String(item.productId).trim() === String(p.id).trim() && String(item.weightId || '').trim() === String(w.id).trim()) {
               sold += item.quantity;
             }
           });
@@ -253,7 +274,7 @@ export default function InvoiceTab({
 
         // 3. Draft items currently on screen
         const drafted = billItems
-          .filter(it => String(it.productId).trim() === String(p.id).trim() && String(it.weightId).trim() === String(w.id).trim())
+          .filter(it => String(it.productId).trim() === String(p.id).trim() && String(it.weightId || '').trim() === String(w.id).trim())
           .reduce((sum, it) => sum + it.quantity, 0);
 
         stocks[key] = {
@@ -265,7 +286,7 @@ export default function InvoiceTab({
     });
 
     return stocks;
-  }, [products, factoryLoads, invoices, billItems, editingInvoiceId]);
+  }, [products, factoryLoads, invoices, billItems, editingInvoiceId, lastArchiveTimestamp]);
 
   // Selected customer information
   const selectedCustomer = useMemo(() => {
@@ -1325,34 +1346,43 @@ export default function InvoiceTab({
           const showCreate = !permittedSubTabs || permittedSubTabs.length === 0 || permittedSubTabs.includes('invoice_create');
           const showBalance = !permittedSubTabs || permittedSubTabs.length === 0 || permittedSubTabs.includes('invoice_balance');
           return (
-            <div className="flex flex-wrap bg-[#FFFFFF] p-2 rounded-2xl border border-slate-200 gap-1 sm:gap-2 shadow-sm text-center">
+            <div className="flex bg-slate-100/80 p-1.5 rounded-2xl border border-slate-200 gap-2 shadow-xs text-center select-none">
               {showCreate && (
                 <button
+                  type="button"
                   onClick={() => setActiveSubTab('create')}
-                  className={`flex-1 min-w-[70px] py-2.5 px-1 rounded-xl font-black text-[11px] sm:text-[12px] transition-all cursor-pointer select-none relative z-10 ${
-                    activeSubTab === 'create' ? 'bg-[#FFFFFF] text-[#1A365D] border-b-2 border-[#DD6B20] shadow-sm' : 'text-[#9CA3AF] hover:bg-[#1A365D] hover:text-white hover:text-[#1A365D] border border-transparent'
+                  className={`flex-1 py-2.5 px-2 rounded-xl text-xs font-black transition-all duration-150 cursor-pointer ${
+                    activeSubTab === 'create'
+                      ? 'bg-white text-indigo-900 border border-slate-200/60 shadow-xs scale-[1.01]'
+                      : 'text-slate-500 hover:text-slate-800 hover:bg-white/50'
                   }`}
                 >
-                  إصدار الفواتير
+                  <span className="ml-1 text-sm">📝</span> إصدار الفواتير
                 </button>
               )}
               {showBalance && (
                 <>
                   <button
+                    type="button"
                     onClick={() => setActiveSubTab('archive')}
-                    className={`flex-1 min-w-[70px] py-2.5 px-1 rounded-xl font-black text-[11px] sm:text-[12px] transition-all cursor-pointer select-none relative z-10 ${
-                      activeSubTab === 'archive' ? 'bg-[#FFFFFF] text-[#1A365D] border-b-2 border-[#DD6B20] shadow-sm' : 'text-[#9CA3AF] hover:bg-emerald-50 hover:text-[#DD6B20] border border-transparent'
+                    className={`flex-1 py-2.5 px-2 rounded-xl text-xs font-black transition-all duration-150 cursor-pointer ${
+                      activeSubTab === 'archive'
+                        ? 'bg-indigo-700 text-white shadow-md scale-[1.01] border-transparent'
+                        : 'text-slate-500 hover:text-slate-800 hover:bg-white/50'
                     }`}
                   >
-                    أرشيف الفواتير
+                    <span className="ml-1 text-sm">🗄️</span> أرشيف الفواتير
                   </button>
                   <button
+                    type="button"
                     onClick={() => setActiveSubTab('debtors')}
-                    className={`flex-1 min-w-[70px] py-2.5 px-1 rounded-xl font-black text-[11px] sm:text-[12px] transition-all cursor-pointer select-none relative z-10 ${
-                      activeSubTab === 'debtors' ? 'bg-rose-600 text-white shadow-md' : 'text-[#9CA3AF] hover:bg-rose-50 hover:text-rose-700 border border-transparent'
+                    className={`flex-1 py-2.5 px-2 rounded-xl text-xs font-black transition-all duration-150 cursor-pointer ${
+                      activeSubTab === 'debtors'
+                        ? 'bg-rose-600 text-white shadow-md scale-[1.01] border-transparent'
+                        : 'text-slate-500 hover:text-slate-800 hover:bg-white/50'
                     }`}
                   >
-                    عميل مديون
+                    <span className="ml-1 text-sm">⚠️</span> عميل مديون
                   </button>
                 </>
               )}
@@ -1498,6 +1528,11 @@ export default function InvoiceTab({
                   const weights = getProductWeightsFallback(prod);
                   const availableWeights = weights.filter(w => (weightStocks[`${prod.id}_${w.id}`]?.remaining ?? 0) > 0);
                   const sizesStr = availableWeights.map(w => w.size).join(' - ');
+                  const totalRemaining = availableWeights.reduce((sum, w) => sum + (weightStocks[`${prod.id}_${w.id}`]?.remaining ?? 0), 0);
+                  const firstW = availableWeights[0] || weights[0];
+                  const unitsPerC = firstW?.unitsPerCarton || 12;
+                  const remCartons = Math.floor(totalRemaining / unitsPerC);
+                  const remUnits = totalRemaining % unitsPerC;
                   
                   return (
                     <button
@@ -1505,9 +1540,8 @@ export default function InvoiceTab({
                       type="button"
                       onClick={() => {
                         setCurrentProductId(prod.id);
-                        const firstAvail = availableWeights[0] || weights[0];
-                        if (firstAvail) {
-                          setCurrentWeightId(firstAvail.id);
+                        if (firstW) {
+                          setCurrentWeightId(firstW.id);
                         }
                         setTimeout(() => {
                            document.getElementById('qty-input')?.focus();
@@ -1520,7 +1554,8 @@ export default function InvoiceTab({
                       }`}
                     >
                       <span className="font-extrabold truncate text-center w-full">{prod.name}</span>
-                      {sizesStr && <span className="text-[9px] text-[#DD6B20] font-black mt-0.5 truncate w-full">{sizesStr}</span>}
+                      <span className="text-[9px] text-indigo-600 font-black mt-0.5 truncate w-full">المتبقي: {remCartons} ك {remUnits > 0 ? `و ${remUnits} ع` : ''}</span>
+                      {sizesStr && <span className="text-[8px] text-[#DD6B20] font-bold mt-0.5 truncate w-full">{sizesStr}</span>}
                     </button>
                   );
                 })}
@@ -1567,10 +1602,18 @@ export default function InvoiceTab({
                   className="w-full bg-[#F7FAFC] border border-slate-200 rounded-lg p-2.5 text-sm font-semibold focus:ring-2 focus:ring-indigo-500 focus:outline-none text-[#1A365D]"
                 >
                   <option value="">-- اختر السلعة --</option>
-                  {products.map(p => {
+                  {products.filter(p => {
+                    const weights = getProductWeightsFallback(p);
+                    return weights.some(w => (weightStocks[`${p.id}_${w.id}`]?.remaining ?? 0) > 0);
+                  }).map(p => {
+                    const weights = getProductWeightsFallback(p);
+                    const totalRemaining = weights.reduce((sum, w) => sum + (weightStocks[`${p.id}_${w.id}`]?.remaining ?? 0), 0);
+                    const unitsPerC = weights[0]?.unitsPerCarton || 12;
+                    const remCartons = Math.floor(totalRemaining / unitsPerC);
+                    const remUnits = totalRemaining % unitsPerC;
                     return (
                       <option key={p.id} value={p.id}>
-                        {p.name}
+                        {p.name} — المتبقي: {remCartons} ك {remUnits > 0 ? `و ${remUnits} ع` : ''}
                       </option>
                     );
                   })}
@@ -2045,78 +2088,120 @@ export default function InvoiceTab({
         {(activeSubTab === 'archive' || activeSubTab === 'debtors') && (
           <div className="flex flex-col gap-4">
             
-            {/* Search Input */}
-            <div className="bg-[#FFFFFF] p-4.5 rounded-2xl border border-slate-200 shadow-sm flex flex-col gap-3">
-              <div className="flex gap-2">
-                <div className="relative leading-none flex-1">
-                  <Search className="absolute right-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-                  <input
-                    type="text"
-                    placeholder="بحث باسم العميل أو رقم الفاتورة..."
-                    value={searchInvoice}
-                    onChange={(e) => setSearchInvoice(e.target.value)}
-                    className="w-full bg-[#F7FAFC] pr-10 pl-3 py-2.5 border border-slate-200 rounded-lg text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-indigo-500"
+            {/* Filter Panel */}
+            <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-sm flex flex-col gap-5">
+              
+              <div className="flex items-center justify-between border-b border-slate-200 pb-3">
+                <div className="flex items-center gap-2">
+                  <div className="bg-indigo-50 p-2 rounded-xl text-indigo-600 border border-indigo-100">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-4 h-4">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 3c2.755 0 5.455.232 8.083.678.533.09.917.556.917 1.096v1.044a2.25 2.25 0 0 1-.659 1.591l-5.432 5.432a2.25 2.25 0 0 0-.659 1.591v2.927a2.25 2.25 0 0 1-1.244 2.013L9.75 21v-6.568a2.25 2.25 0 0 0-.659-1.591L3.659 7.409A2.25 2.25 0 0 1 3 5.818V4.774c0-.54.384-1.006.917-1.096A48.32 48.32 0 0 1 12 3Z" />
+                    </svg>
+                  </div>
+                  <div className="flex flex-col items-start">
+                    <span className="text-xs font-black text-slate-800">البحث المتقدم وتصفية الحركات</span>
+                    <span className="text-[10px] font-bold text-slate-400 mt-0.5">اختر المحددات لتصفية جدول الفواتير أدناه</span>
+                  </div>
+                </div>
+                
+                <button 
+                  type="button" 
+                  onClick={() => {
+                    setSelectedInvoiceGov('all');
+                    setSelectedInvoiceArea('all');
+                    setSelectedInvoiceCustomer('all');
+                    setSelectedInvoiceDelegate('all');
+                    setInvoiceFilterDate(getEgyptTodayDate());
+                    setSearchInvoice('');
+                  }}
+                  className="text-[10px] font-black text-indigo-600 hover:text-indigo-800 bg-indigo-50 px-2.5 py-1.5 rounded-lg border border-indigo-100/70 transition-all active:scale-95 cursor-pointer"
+                >
+                  إعادة تعيين
+                </button>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-2 gap-4 items-end">
+                
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-[11px] font-black text-slate-700 flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 bg-indigo-500 rounded-full shadow-xs"></span>
+                    المحافظة <span className="text-[9px] text-slate-400 font-bold">(لتسهيل البحث)</span>
+                  </label>
+                  <select 
+                    value={selectedInvoiceGov}
+                    onChange={(e) => setSelectedInvoiceGov(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs font-bold text-slate-700 outline-none focus:ring-2 focus:ring-indigo-500/10 focus:border-indigo-500 focus:bg-white transition-all appearance-none cursor-pointer"
+                  >
+                    <option value="all">كل المحافظات</option>
+                    {listGovernorates.map(gov => <option key={gov} value={gov}>{gov}</option>)}
+                  </select>
+                </div>
+
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-[11px] font-black text-slate-700 flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 bg-sky-500 rounded-full shadow-xs"></span>
+                    المنطقة
+                  </label>
+                  <select 
+                    value={selectedInvoiceArea}
+                    onChange={(e) => setSelectedInvoiceArea(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs font-bold text-slate-700 outline-none focus:ring-2 focus:ring-sky-500/10 focus:border-sky-500 focus:bg-white transition-all appearance-none cursor-pointer"
+                  >
+                    <option value="all">كل المناطق</option>
+                    {listAreas.map(area => <option key={area} value={area}>{area}</option>)}
+                  </select>
+                </div>
+
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-[11px] font-black text-slate-700 flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full shadow-xs"></span>
+                    العميل
+                  </label>
+                  <select 
+                    value={selectedInvoiceCustomer}
+                    onChange={(e) => setSelectedInvoiceCustomer(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs font-bold text-slate-700 outline-none focus:ring-2 focus:ring-emerald-500/10 focus:border-emerald-500 focus:bg-white transition-all appearance-none cursor-pointer"
+                  >
+                    <option value="all">كل العملاء</option>
+                    {customers.map(cust => <option key={cust.id} value={cust.id}>{cust.name}</option>)}
+                  </select>
+                </div>
+
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-[11px] font-black text-slate-700 flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 bg-violet-500 rounded-full shadow-xs"></span>
+                    المندوب
+                  </label>
+                  <select 
+                    value={selectedInvoiceDelegate}
+                    onChange={(e) => setSelectedInvoiceDelegate(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs font-bold text-slate-700 outline-none focus:ring-2 focus:ring-violet-500/10 focus:border-violet-500 focus:bg-white transition-all appearance-none cursor-pointer"
+                  >
+                    <option value="all">كل المناديب</option>
+                    {usersList && usersList.filter(u => u.role !== 'owner').map(u => (
+                      <option key={u.phone} value={u.phone}>{u.name}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="flex flex-col gap-1.5 col-span-2">
+                  <label className="text-[11px] font-black text-slate-700 flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 bg-amber-500 rounded-full shadow-xs"></span>
+                    تاريخ الفواتير المستهدفة بالبحث
+                  </label>
+                  <input 
+                    type="date" 
+                    value={invoiceFilterDate}
+                    onChange={(e) => setInvoiceFilterDate(e.target.value)}
+                    className="w-full bg-amber-50/40 border border-amber-200 rounded-xl p-3 text-xs font-black text-center text-slate-800 outline-none focus:ring-2 focus:ring-amber-500/10 focus:border-amber-500 focus:bg-white transition-all font-mono cursor-pointer"
                   />
                 </div>
-                <select
-                  value={dateFilter}
-                  onChange={(e) => { setDateFilter(e.target.value as any); setWeekDayFilter([]); }}
-                  className="bg-[#F7FAFC] border border-slate-200 rounded-lg px-2 text-xs font-bold text-[#1A365D] outline-none focus:ring-1 focus:ring-indigo-500"
-                >
-                  <option value="all">كل الفترات</option>
-                  <option value="today">اليوم</option>
-                  <option value="week">هذا الأسبوع</option>
-                  <option value="month">هذا الشهر</option>
-                </select>
+
               </div>
+            </div>
 
-              {dateFilter === 'week' && (
-                <div className="flex bg-[#F7FAFC] border border-slate-200 rounded-lg overflow-hidden flex-wrap gap-px p-0.5 animate-fade-in" dir="rtl">
-                  <button onClick={() => setWeekDayFilter([])} className={`flex-1 text-[10px] py-1.5 rounded font-bold transition-colors ${weekDayFilter.length === 0 ? 'bg-[#1A365D] text-white shadow-xs' : 'text-slate-600 hover:bg-slate-100 bg-white'}`}>الكل</button>
-                  {['Saturday', 'Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'].map(day => {
-                    const arabicDays: Record<string, string> = { 'Saturday':'السبت', 'Sunday':'الأحد', 'Monday':'الإثنين', 'Tuesday':'الثلاثاء', 'Wednesday':'الأربعاء', 'Thursday':'الخميس', 'Friday':'الجمعة' };
-                    return (
-                      <button key={day} onClick={() => setWeekDayFilter(prev => prev.includes(day) ? prev.filter(d => d !== day) : [...prev, day])} className={`flex-1 text-[10px] py-1.5 rounded font-bold transition-colors ${weekDayFilter.includes(day) ? 'bg-[#1A365D] text-white shadow-xs' : 'text-slate-600 hover:bg-slate-100 bg-white'}`}>{arabicDays[day]}</button>
-                    )
-                  })}
-                </div>
-              )}
-
-              {/* Governorate and Area Filters for listing */}
-              <div className="grid grid-cols-2 gap-2 mt-1">
-                <div>
-                  <label className="block text-[10px] font-bold text-[#2B6CB0] mb-0.5">المحافظة (لتصفية الأرشيف)</label>
-                  <select
-                    value={filterGovernorateList}
-                    onChange={(e) => {
-                      setFilterGovernorateList(e.target.value);
-                      setFilterAreaList('');
-                    }}
-                    className="w-full bg-[#F7FAFC] border border-slate-200 rounded-lg p-2 text-xs font-semibold focus:outline-none text-[#1A365D]"
-                  >
-                    <option value="">كل المحافظات</option>
-                    {listGovernorates.map(gov => (
-                      <option key={gov} value={gov}>{gov}</option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-[10px] font-bold text-[#2B6CB0] mb-0.5">المنطقة (لتصفية الأرشيف)</label>
-                  <select
-                    value={filterAreaList}
-                    onChange={(e) => setFilterAreaList(e.target.value)}
-                    className="w-full bg-[#F7FAFC] border border-slate-200 rounded-lg p-2 text-xs font-semibold focus:outline-none text-[#1A365D]"
-                  >
-                    <option value="">كل المناطق</option>
-                    {listAreas.map(area => (
-                      <option key={area} value={area}>{area}</option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              {/* Invoices List item */}
-              <div className="max-h-96 overflow-y-auto custom-scroll flex flex-col gap-2.5 mt-1">
+            {/* Invoices List item */}
+            <div className="max-h-96 overflow-y-auto custom-scroll flex flex-col gap-2.5 mt-1">
                 {(activeSubTab === 'archive' ? filteredArchiveList : filteredDebtorsList).length === 0 ? (
                   <p className="text-center text-gray-400 py-10 text-xs">لا توجد مبيعات مطابقة أو مسجلة بعد.</p>
                 ) : (
@@ -2246,7 +2331,6 @@ export default function InvoiceTab({
                 )}
               </div>
             </div>
-          </div>
         )}
 
       </div>

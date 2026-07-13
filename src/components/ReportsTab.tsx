@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { Invoice, Expense, Product, Customer, Trip, AppSettings, formatNum, FactoryLoad, getProductWeightsFallback, UserAuth, InvoiceItem, getItemFactoryCost, getFactoryCartonPrice } from '../types';
 import { ArrowRight, FileSpreadsheet, Send, TrendingUp, TrendingDown, Clock, Search, Eye, Filter, Check, ShieldAlert, MapPin, Printer, ChevronDown, AlertCircle, Activity, Package, Wallet, UserCheck, HandCoins, CircleDollarSign } from 'lucide-react';
 import { showToast } from '../utils/toast';
@@ -204,6 +204,26 @@ function ReportsTabComponent({
     amount: string;
     paymentMethod: string;
   }>({ isOpen: false, invoice: null, type: 'full', amount: '', paymentMethod: 'نقدي (كاش)' });
+
+  const [selectedGov, setSelectedGov] = useState('all');
+  const [selectedArea, setSelectedArea] = useState('all');
+  const [selectedCustomer, setSelectedCustomer] = useState('all');
+  const [filterDate, setFilterDate] = useState(() => {
+    const now = new Date();
+    const formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'Africa/Cairo',
+      year: 'numeric', month: '2-digit', day: '2-digit'
+    });
+    const parts = formatter.formatToParts(now);
+    const getPart = (type: string) => parts.find(p => p.type === type)?.value || '';
+    return `${getPart('year')}-${getPart('month')}-${getPart('day')}`;
+  });
+
+  const uniqueGovs = useMemo(() => Array.from(new Set(customers.map(c => c.governorate).filter(Boolean))), [customers]);
+  const uniqueAreas = useMemo(() => Array.from(new Set(customers.map(c => c.area).filter(Boolean))), [customers]);
+  const filteredCustomersList = useMemo(() => {
+    return customers.filter(c => (selectedArea === 'all' || c.area === selectedArea));
+  }, [customers, selectedArea]);
 
   const delegate = isManager && delegateFilter !== 'all' ? (usersList || []).find(u => u.phone === delegateFilter) : null;
   const cleanDelegateName = delegate ? delegate.name.replace(/\s*\(.*?\)/g, '').trim() : '';
@@ -1844,78 +1864,120 @@ function ReportsTabComponent({
         
         {/* Date period filters for finance and stats */}
         {(activeSubTab === 'stats' || activeSubTab === 'finance' || activeSubTab === 'invoices') && (
-          <div className="bg-[#FFFFFF] p-3 rounded-2xl border border-slate-200 shadow-sm flex flex-col gap-3">
-            <div className="flex flex-row flex-wrap items-center gap-2">
-              <span className="text-xs font-black text-[#2B6CB0] ml-1 shrink-0">تحديد فترة:</span>
-              <div className="flex flex-wrap items-center gap-1.5 flex-1 select-none">
-                <button 
-                  onClick={() => setPeriodFilter('all')}
-                  className={`py-1 px-3.5 rounded-lg text-[11px] font-black transition-colors cursor-pointer shrink-0 ${periodFilter === 'all' ? 'bg-indigo-100 text-[#1A365D] border border-indigo-200 shadow-sm' : 'bg-[#F7FAFC] text-[#2B6CB0] border border-slate-200 hover:bg-[#F7FAFC]'}`}
-                >
-                  الكل
-                </button>
-                <button 
-                  onClick={() => setPeriodFilter('today')}
-                  className={`py-1 px-3.5 rounded-lg text-[11px] font-black transition-colors cursor-pointer shrink-0 ${periodFilter === 'today' ? 'bg-indigo-100 text-[#1A365D] border border-indigo-200 shadow-sm' : 'bg-[#F7FAFC] text-[#2B6CB0] border border-slate-200 hover:bg-[#F7FAFC]'}`}
-                >
-                  يومي
-                </button>
-                <button 
-                  onClick={() => setPeriodFilter('week')}
-                  className={`py-1 px-3.5 rounded-lg text-[11px] font-black transition-colors cursor-pointer shrink-0 ${periodFilter === 'week' ? 'bg-indigo-100 text-[#1A365D] border border-indigo-200 shadow-sm' : 'bg-[#F7FAFC] text-[#2B6CB0] border border-slate-200 hover:bg-[#F7FAFC]'}`}
-                >
-                  أسبوعي
-                </button>
-                <button 
-                  onClick={() => setPeriodFilter('month')}
-                  className={`py-1 px-3.5 rounded-lg text-[11px] font-black transition-colors cursor-pointer shrink-0 ${periodFilter === 'month' ? 'bg-indigo-100 text-[#1A365D] border border-indigo-200 shadow-sm' : 'bg-[#F7FAFC] text-[#2B6CB0] border border-slate-200 hover:bg-[#F7FAFC]'}`}
-                >
-                  شهري
-                </button>
-                <button 
-                  onClick={() => setPeriodFilter('custom')}
-                  className={`py-1 px-3.5 rounded-lg text-[11px] font-black transition-colors cursor-pointer shrink-0 ${periodFilter === 'custom' ? 'bg-indigo-100 text-[#1A365D] border border-indigo-200 shadow-sm' : 'bg-[#F7FAFC] text-[#2B6CB0] border border-slate-200 hover:bg-[#F7FAFC]'}`}
-                >
-                  مخصص
-                </button>
+          <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col gap-5 mb-1 text-right animate-fade-in" dir="rtl">
+            
+            {/* Header */}
+            <div className="flex items-center justify-between border-b border-slate-200 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="bg-indigo-50 p-2 rounded-xl text-indigo-600 border border-indigo-100">
+                  <Filter className="w-4 h-4" />
+                </div>
+                <span className="text-xs font-black text-slate-800 tracking-wide">لوحة الفلترة والبحث المتقدم للفواتير والحسابات</span>
               </div>
+              
+              <button 
+                type="button" 
+                onClick={() => {
+                  setSelectedGov('all');
+                  setSelectedArea('all');
+                  setSelectedCustomer('all');
+                  setPeriodFilter('all');
+                }}
+                className="text-[10px] font-black text-indigo-600 hover:text-indigo-800 bg-indigo-50/60 p-1.5 px-3 rounded-lg border border-indigo-100 transition-all active:scale-95 cursor-pointer"
+              >
+                إعادة تعيين الفلاتر
+              </button>
             </div>
-            {periodFilter === 'custom' && (
-              <div className="grid grid-cols-2 gap-2 mt-1 animate-fade-in">
-                <div>
-                  <label className="block text-[10px] text-gray-400 font-bold mb-0.5">من تاريخ</label>
-                  <input type="date" value={customStartDate} onChange={(e) => setCustomStartDate(e.target.value)} className="w-full bg-[#F7FAFC] border border-slate-200 rounded-lg py-1.5 px-2 text-[11px] font-bold text-[#1A365D]" />
-                </div>
-                <div>
-                  <label className="block text-[10px] text-gray-400 font-bold mb-0.5">إلى تاريخ</label>
-                  <input type="date" value={customEndDate} onChange={(e) => setCustomEndDate(e.target.value)} className="w-full bg-[#F7FAFC] border border-slate-200 rounded-lg py-1.5 px-2 text-[11px] font-bold text-[#1A365D]" />
-                </div>
+
+            {/* Filter Grid */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3.5 items-end">
+              
+              {/* 1. Governorate */}
+              <div className="flex flex-col gap-1.5">
+                <label className="text-[11px] font-black text-slate-700 flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 bg-indigo-500 rounded-full shadow-xs"></span>
+                  المحافظة
+                </label>
+                <select 
+                  value={selectedGov}
+                  onChange={(e) => setSelectedGov(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs font-bold text-slate-700 outline-none focus:ring-2 focus:ring-indigo-500/10 focus:border-indigo-500 focus:bg-white transition-all cursor-pointer"
+                >
+                  <option value="all">كل المحافظات</option>
+                  {uniqueGovs.map(gov => <option key={gov} value={gov}>{gov}</option>)}
+                </select>
               </div>
-            )}
-            {periodFilter === 'week' && (
-              <div className="flex flex-wrap gap-1.5 mt-2 animate-fade-in">
-                {(['السبت', 'الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة'] as const).map((dayName, idx) => {
-                  const isSelected = selectedWeekDays.includes(idx);
-                  return (
-                    <button
-                      key={idx}
-                      onClick={() => {
-                        setSelectedWeekDays(prev =>
-                          isSelected ? prev.filter(d => d !== idx) : [...prev, idx]
-                        );
-                      }}
-                      className={`py-1 px-2.5 rounded-lg text-[10px] font-black transition-all cursor-pointer border ${
-                        isSelected
-                          ? 'bg-indigo-500 text-white border-indigo-600 shadow-sm'
-                          : 'bg-white text-gray-400 border-gray-200 hover:bg-gray-50'
-                      }`}
-                    >
-                      {dayName}
-                    </button>
-                  );
-                })}
+
+              {/* 2. Area */}
+              <div className="flex flex-col gap-1.5">
+                <label className="text-[11px] font-black text-slate-700 flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 bg-sky-500 rounded-full shadow-xs"></span>
+                  المنطقة
+                </label>
+                <select 
+                  value={selectedArea}
+                  onChange={(e) => { setSelectedArea(e.target.value); setSelectedCustomer('all'); }}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs font-bold text-slate-700 outline-none focus:ring-2 focus:ring-sky-500/10 focus:border-sky-500 focus:bg-white transition-all cursor-pointer"
+                >
+                  <option value="all">كل المناطق</option>
+                  {uniqueAreas.map(area => <option key={area} value={area}>{area}</option>)}
+                </select>
               </div>
-            )}
+
+              {/* 3. Customer */}
+              <div className="flex flex-col gap-1.5">
+                <label className="text-[11px] font-black text-slate-700 flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full shadow-xs"></span>
+                  العميل
+                </label>
+                <select 
+                  value={selectedCustomer}
+                  onChange={(e) => setSelectedCustomer(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs font-bold text-slate-700 outline-none focus:ring-2 focus:ring-emerald-500/10 focus:border-emerald-500 focus:bg-white transition-all cursor-pointer"
+                >
+                  <option value="all">كل العملاء</option>
+                  {filteredCustomersList.map(cust => <option key={cust.id} value={cust.id}>{cust.name}</option>)}
+                </select>
+              </div>
+
+              {/* 4. Delegate */}
+              <div className="flex flex-col gap-1.5">
+                <label className="text-[11px] font-black text-slate-700 flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 bg-violet-500 rounded-full shadow-xs"></span>
+                  المندوب
+                </label>
+                <select 
+                  value={delegateFilter}
+                  onChange={(e) => setDelegateFilter(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs font-bold text-slate-700 outline-none focus:ring-2 focus:ring-violet-500/10 focus:border-violet-500 focus:bg-white transition-all cursor-pointer"
+                >
+                  <option value="all">كل المناديب</option>
+                  {usersList.filter(u => u.role !== 'owner').map(u => (
+                    <option key={u.phone} value={u.phone}>{u.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* 5. Date */}
+              <div className="flex flex-col gap-1.5">
+                <label className="text-[11px] font-black text-slate-700 flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 bg-amber-500 rounded-full shadow-xs"></span>
+                  التاريخ
+                </label>
+                <input 
+                  type="date" 
+                  value={filterDate}
+                  onChange={(e) => {
+                    setFilterDate(e.target.value);
+                    setPeriodFilter('custom');
+                    setCustomStartDate(e.target.value);
+                    setCustomEndDate(e.target.value);
+                  }}
+                  className="w-full bg-amber-50/40 border border-amber-200 rounded-xl p-2.5 text-xs font-bold text-center text-slate-800 outline-none focus:ring-2 focus:ring-amber-500/10 focus:border-amber-500 focus:bg-white transition-all font-mono cursor-pointer"
+                />
+              </div>
+
+            </div>
           </div>
         )}
         

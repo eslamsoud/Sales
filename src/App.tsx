@@ -4,10 +4,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { APIProvider } from '@vis.gl/react-google-maps';
 import PersonalSettingsTab from './components/PersonalSettingsTab';
-import { Product, Customer, Invoice, Expense, FactoryLoad, AppSettings, Trip, UserAuth, SyncLog, getProductWeightsFallback, getItemFactoryCost } from './types';
+import { Product, Customer, Invoice, Expense, FactoryLoad, AppSettings, Trip, UserAuth, SyncLog, SoftDeletedItem, DeletedItemType, getProductWeightsFallback, getItemFactoryCost } from './types';
 import { AnimatePresence, motion } from 'motion/react';
 import { showToast, toastEvent } from './utils/toast';
 import {
@@ -174,7 +174,7 @@ export default function App() {
     if (u.phone === '01228466613' || u.role === 'owner') {
       u.permittedTabs = ['dashboard', 'factory', 'customers', 'invoice', 'prices', 'expenses', 'administrative', 'reports'];
       u.permittedSubTabs = [
-        'loads', 'products', 'previous_loads', 'factory_account', 'trips',
+        'loads', 'products', 'previous_loads', 'factory_account', 'trips', 'deleted_archive',
         'customers_list', 'customers_maps_finder', 'invoice_create', 'invoice_balance',
         'expenses_list', 'reports_finance', 'reports_stats', 'reports_areas', 'reports_invoices', 'reports_inventory',
         'admin_products', 'admin_ai', 'admin_areas', 'prices_list', 'prices_calc', 'prices_bot'
@@ -197,7 +197,7 @@ export default function App() {
       status: 'active',
       permittedTabs: ['dashboard', 'factory', 'customers', 'invoice', 'prices', 'expenses', 'administrative', 'reports'],
       permittedSubTabs: [
-        'loads', 'products', 'previous_loads', 'factory_account', 'trips',
+        'loads', 'products', 'previous_loads', 'factory_account', 'trips', 'deleted_archive',
         'customers_list', 'customers_maps_finder', 'invoice_create', 'invoice_balance',
         'expenses_list', 'reports_finance', 'reports_stats', 'reports_areas', 'reports_invoices', 'reports_inventory',
         'prices_list', 'prices_calc', 'prices_bot'
@@ -345,6 +345,11 @@ export default function App() {
   const [googleLeads, setGoogleLeads] = useState<any[]>([]);
   const [potentialLeads, setPotentialLeads] = useState<any[]>([]);
   const [archiveCycles, setArchiveCycles] = useState<any[]>([]);
+  const [softDeleted, setSoftDeleted] = useState<SoftDeletedItem[]>(() => getStoredData<SoftDeletedItem[]>('soft_deleted_items_sys', []));
+
+  useEffect(() => {
+    setStoredData('soft_deleted_items_sys', softDeleted);
+  }, [softDeleted]);
 
   useEffect(() => {
     localStorage.setItem('google_leads_staging_sys', JSON.stringify(googleLeads));
@@ -361,6 +366,15 @@ export default function App() {
   });
 
   const [showSimulatedInventory, setShowSimulatedInventory] = useState(false);
+  const lastArchiveTimestamp = useMemo(() => {
+    if (!archiveCycles || archiveCycles.length === 0) return 0;
+    const timestamps = archiveCycles.map(c => Number(c.id)).filter(t => !isNaN(t));
+    if (timestamps.length === 0) return 0;
+    return Math.max(...timestamps);
+  }, [archiveCycles]);
+
+  const parseCairoTime = (dateStr: string): number => new Date(dateStr.replace('Z', '')).getTime();
+
   const simulatedInventory = React.useMemo(() => {
     if (!simulatedDelegate) return [];
     
@@ -384,17 +398,20 @@ export default function App() {
       const weights = getProductWeightsFallback(p);
       weights.forEach(w => {
         const loaded = delLoads
+          .filter(l => parseCairoTime(l.date) > lastArchiveTimestamp)
           .filter(l => {
-            const targetWeightId = l.weightId || w.id;
-            return String(l.productId).trim() === String(p.id).trim() && String(targetWeightId).trim() === String(w.id).trim();
+            const targetWeightId = (l.weightId || '').trim();
+            return String(l.productId).trim() === String(p.id).trim() && targetWeightId === String(w.id).trim();
           })
           .reduce((sum, l) => sum + (l.quantity || 0), 0);
 
         let sold = 0;
-        delInvoices.forEach(inv => {
+        delInvoices
+          .filter(inv => parseCairoTime(inv.date) > lastArchiveTimestamp)
+          .forEach(inv => {
           (inv.items || []).forEach(item => {
-            const targetWeightId = item.weightId || w.id;
-            if (String(item.productId).trim() === String(p.id).trim() && String(targetWeightId).trim() === String(w.id).trim()) {
+            const targetWeightId = (item.weightId || '').trim();
+            if (String(item.productId).trim() === String(p.id).trim() && targetWeightId === String(w.id).trim()) {
               sold += (item.quantity || 0);
             }
           });
@@ -416,7 +433,7 @@ export default function App() {
     });
     
     return stocks;
-  }, [simulatedDelegate, factoryLoads, invoices, products]);
+  }, [simulatedDelegate, factoryLoads, invoices, products, lastArchiveTimestamp]);
 
   // مرجع لتخزين أحدث حالة للبيانات لمنع مشكلة (Stale Closure) أثناء المزامنة التلقائية
   const latestDataRef = useRef({ products, factoryLoads, customers, invoices, expenses, trips, usersList, googleLeads, potentialLeads, settings, dbVersion, currentUser });
@@ -921,6 +938,24 @@ export default function App() {
     }
   };
 
+  const removeFromDeleted = (id: string) => {
+    const deleted = JSON.parse(localStorage.getItem('deleted_records_sys') || '[]');
+    const filtered = deleted.filter((d: string) => d !== id);
+    localStorage.setItem('deleted_records_sys', JSON.stringify(filtered));
+  };
+
+  const removeFromDeletedBulk = (ids: string[]) => {
+    const deleted = JSON.parse(localStorage.getItem('deleted_records_sys') || '[]');
+    const filtered = deleted.filter((d: string) => !ids.includes(d));
+    localStorage.setItem('deleted_records_sys', JSON.stringify(filtered));
+  };
+
+  const softDeleteItem = (originalId: string, type: DeletedItemType, data: any, label?: string) => {
+    const id = `sd-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
+    setSoftDeleted(prev => [...prev, { id, originalId, type, data, deletedAt: nowEgyptISO(), label }]);
+    markAsDeleted(originalId);
+  };
+
   const checkDeleteAllowed = (): boolean => {
     const allowed = currentUser?.role === 'owner' || currentUser?.phone === '01228466613' || (currentUser?.customRoleName && (currentUser.customRoleName.includes('نائب المدير') || currentUser.customRoleName.includes('مشرف عام')));
     if (!allowed) showToast('⚠️ الحذف متاح فقط للمدير ونائب المدير.');
@@ -979,23 +1014,26 @@ export default function App() {
   const handleDeleteProduct = async (id: string) => {
     if (checkSimulationGuard()) return;
     if (!checkDeleteAllowed()) return;
-    const confirmed = await confirmDialog("هل أنت متأكد من حذف هذا الصنف نهائياً؟", true);
+    const confirmed = await confirmDialog("هل أنت متأكد من نقل هذا الصنف إلى سلة المحذوفات؟ يمكن استعادته لاحقاً.", true);
     if (!confirmed) return;
+    const product = products.find(p => p.id === id);
+    if (product) {
+      softDeleteItem(id, 'product', product, `صنف ${product.name || 'غير معروف'}`);
+    }
     setProducts(prev => prev.filter(p => p.id !== id));
-    markAsDeleted(id);
-    promptForSync('حذف صنف من المصنع');
+    promptForSync('نقل صنف إلى المحذوفات');
   };
 
   const handleDeleteAllProducts = async () => {
     if (checkSimulationGuard()) return;
     if (!checkDeleteAllowed()) return;
-    const confirmed = await confirmDialog("هل أنت متأكد من حذف جميع الأصناف نهائياً؟ هذا الإجراء لا يمكن التراجع عنه.", true);
+    const confirmed = await confirmDialog("هل أنت متأكد من نقل جميع الأصناف إلى سلة المحذوفات؟ يمكن استعادتها لاحقاً.", true);
     if (!confirmed) return;
-    products.forEach(p => markAsDeleted(p.id));
-    factoryLoads.forEach(fl => markAsDeleted(fl.id));
+    products.forEach(p => softDeleteItem(p.id, 'product', p, `صنف ${p.name || 'غير معروف'}`));
+    factoryLoads.forEach(fl => softDeleteItem(fl.id, 'factoryLoad', fl, `حمولة ${fl.productName || 'غير معروفة'}`));
     setProducts([]);
     setFactoryLoads([]);
-    promptForSync('مسح جميع الأصناف');
+    promptForSync('نقل جميع الأصناف إلى المحذوفات');
   };
 
   const handleAddLoad = (newLoad: Omit<FactoryLoad, 'id'>) => {
@@ -1013,11 +1051,14 @@ export default function App() {
   const handleDeleteLoad = async (id: string) => {
     if (checkSimulationGuard()) return;
     if (!checkDeleteAllowed()) return;
-    const confirmed = await confirmDialog("هل أنت متأكد من حذف هذه الحمولة نهائياً؟", true);
+    const confirmed = await confirmDialog("هل أنت متأكد من نقل هذه الحمولة إلى سلة المحذوفات؟ يمكن استعادتها لاحقاً.", true);
     if (!confirmed) return;
+    const load = factoryLoads.find(l => l.id === id);
+    if (load) {
+      softDeleteItem(id, 'factoryLoad', load, `حمولة ${load.productName || 'غير معروفة'} - ${load.quantity || 0} قطعة`);
+    }
     setFactoryLoads(prev => prev.filter(load => load.id !== id));
-    markAsDeleted(id);
-    promptForSync('حذف حمولة من السيارة');
+    promptForSync('نقل حمولة إلى المحذوفات');
   };
 
   const handleArchiveFactoryCycle = (delegatePhone: string, delegateName: string) => {
@@ -1026,15 +1067,14 @@ export default function App() {
     const ref = latestDataRef.current;
 
     // 1) Compute IDs to delete from CURRENT state (not from setState callback)
-    const toDeleteLoadIds = ref.factoryLoads
+    const toDeleteLoads = ref.factoryLoads
       .filter(l => {
         const lPhone = (l.delegatePhone || '').trim();
         const lName = (l.delegateName || '').replace(/\s*\(.*?\)/g, '').trim();
         return (delegatePhone && lPhone === delegatePhone) || (cleanName && lName === cleanName);
-      })
-      .map(l => l.id);
+      });
 
-    const toDeleteExpenseIds = ref.expenses
+    const toDeleteExpenses = ref.expenses
       .filter(e => {
         if (e.category === 'سداد للمصنع' || e.type === 'factory_payment') {
           const ePhone = (e.delegatePhone || '').trim();
@@ -1047,15 +1087,18 @@ export default function App() {
           return matchByPhone || matchByName || matchByAdmin || matchByNote;
         }
         return false;
-      })
-      .map(e => e.id);
+      });
 
-    // 2) Now call setState (filter out the matched records)
+    const toDeleteLoadIds = toDeleteLoads.map(l => l.id);
+    const toDeleteExpenseIds = toDeleteExpenses.map(e => e.id);
+
+    // 2) Soft delete all matched items
+    toDeleteLoads.forEach(load => softDeleteItem(load.id, 'factoryLoad', load, `حمولة ${load.productName || 'غير معروفة'} - دورة ${delegateName}`));
+    toDeleteExpenses.forEach(exp => softDeleteItem(exp.id, 'expense', exp, `${exp.description || 'سداد'} - دورة ${delegateName}: ${exp.amount || 0} ج.م`));
+
+    // 3) Now call setState (filter out the matched records)
     setFactoryLoads(prev => prev.filter(l => !toDeleteLoadIds.includes(l.id)));
     setExpenses(prev => prev.filter(e => !toDeleteExpenseIds.includes(e.id)));
-
-    // 3) markAsDeleted with the PRE-COMPUTED IDs (not empty arrays!)
-    [...toDeleteLoadIds, ...toDeleteExpenseIds].forEach(id => markAsDeleted(id));
 
     promptForSync('أرشفة دورة حساب المصنع');
   };
@@ -1107,11 +1150,14 @@ export default function App() {
   const handleDeleteCustomer = async (id: string) => {
     if (checkSimulationGuard()) return;
     if (!checkDeleteAllowed()) return;
-    const confirmed = await confirmDialog("هل أنت متأكد من حذف هذا العميل نهائياً؟", true);
+    const confirmed = await confirmDialog("هل أنت متأكد من نقل هذا العميل إلى سلة المحذوفات؟ يمكن استعادته لاحقاً.", true);
     if (!confirmed) return;
+    const customer = customers.find(c => c.id === id);
+    if (customer) {
+      softDeleteItem(id, 'customer', customer, `عميل ${customer.name || 'غير معروف'} - ${customer.phone || ''}`);
+    }
     setCustomers(prev => prev.filter(c => c.id !== id));
-    markAsDeleted(id);
-    promptForSync('حذف عميل من الدليل');
+    promptForSync('نقل عميل إلى المحذوفات');
   };
 
   const handleAddInvoice = (newInvoice: Omit<Invoice, 'id'>) => {
@@ -1161,7 +1207,7 @@ export default function App() {
   const handleDeleteInvoice = async (id: string) => {
     if (checkSimulationGuard()) return;
     if (!checkDeleteAllowed()) return;
-    const confirmed = await confirmDialog("هل أنت متأكد من حذف هذه الفاتورة نهائياً؟ لا يمكن التراجع عن هذا الإجراء.", true);
+    const confirmed = await confirmDialog("هل أنت متأكد من نقل هذه الفاتورة إلى سلة المحذوفات؟ يمكن استعادتها لاحقاً.", true);
     if (!confirmed) return;
     const invToDelete = invoices.find(i => i.id === id);
     if (invToDelete) {
@@ -1174,10 +1220,10 @@ export default function App() {
             }
           : c
       ));
+      softDeleteItem(id, 'invoice', invToDelete, `فاتورة ${invToDelete.invoiceNumber || ''} - ${invToDelete.customerName || 'غير معروف'} (${invToDelete.totalAfterDiscount || 0} ج.م)`);
     }
     setInvoices(prev => prev.filter(inv => inv.id !== id));
-    markAsDeleted(id);
-    promptForSync('حذف فاتورة بيع');
+    promptForSync('نقل فاتورة إلى المحذوفات');
   };
 
   const handleAddExpense = (newExpense: Omit<Expense, 'id'>) => {
@@ -1196,11 +1242,14 @@ export default function App() {
   const handleDeleteExpense = async (id: string) => {
     if (checkSimulationGuard()) return;
     if (!checkDeleteAllowed()) return;
-    const confirmed = await confirmDialog("هل أنت متأكد من حذف هذا المصروف/الإيراد نهائياً؟", true);
+    const confirmed = await confirmDialog("هل أنت متأكد من نقل هذا المصروف/الإيراد إلى سلة المحذوفات؟ يمكن استعادته لاحقاً.", true);
     if (!confirmed) return;
+    const expense = expenses.find(e => e.id === id);
+    if (expense) {
+      softDeleteItem(id, 'expense', expense, `${expense.description || 'مصروف'}: ${expense.amount || 0} ج.م`);
+    }
     setExpenses(prev => prev.filter(e => e.id !== id));
-    markAsDeleted(id);
-    promptForSync('حذف مصروف/إيراد');
+    promptForSync('نقل مصروف/إيراد إلى المحذوفات');
   };
 
   const handleEditExpense = (id: string, updates: Partial<Omit<Expense, 'id'>>) => {
@@ -1237,11 +1286,14 @@ export default function App() {
   const handleDeleteTrip = async (id: string) => {
     if (checkSimulationGuard()) return;
     if (!checkDeleteAllowed()) return;
-    const confirmed = await confirmDialog("هل أنت متأكد من حذف هذا المشوار نهائياً؟", true);
+    const confirmed = await confirmDialog("هل أنت متأكد من نقل هذا المشوار إلى سلة المحذوفات؟ يمكن استعادته لاحقاً.", true);
     if (!confirmed) return;
+    const trip = trips.find(t => t.id === id);
+    if (trip) {
+      softDeleteItem(id, 'trip', trip, `مشوار ${trip.description || 'غير معروف'} - ${trip.price || 0} ج.م`);
+    }
     setTrips(prev => prev.filter(t => t.id !== id));
-    markAsDeleted(id);
-    promptForSync('حذف مشوار أو تحرك');
+    promptForSync('نقل مشوار إلى المحذوفات');
   };
 
   const handleResetDatabase = (demoMode: boolean) => {
@@ -1300,6 +1352,86 @@ export default function App() {
         showToast('⚠️ التهيئة المحلية تمت لكن فشل الحفظ في الشيت. حاول المزامنة يدوياً.');
       }
     }, 500);
+  };
+
+  const handleRestoreItem = (item: SoftDeletedItem) => {
+    const idsToUnmark = [item.originalId];
+
+    switch (item.type) {
+      case 'factoryLoad': {
+        const existingIds = new Set(factoryLoads.map(l => l.id));
+        if (!existingIds.has(item.originalId)) {
+          setFactoryLoads(prev => [item.data as FactoryLoad, ...prev]);
+        }
+        break;
+      }
+      case 'trip': {
+        const existingIds = new Set(trips.map(t => t.id));
+        if (!existingIds.has(item.originalId)) {
+          setTrips(prev => [item.data as Trip, ...prev]);
+        }
+        break;
+      }
+      case 'expense': {
+        const existingIds = new Set(expenses.map(e => e.id));
+        if (!existingIds.has(item.originalId)) {
+          setExpenses(prev => [item.data as Expense, ...prev]);
+        }
+        break;
+      }
+      case 'invoice': {
+        const inv = item.data as Invoice;
+        const existingIds = new Set(invoices.map(i => i.id));
+        if (!existingIds.has(item.originalId)) {
+          setInvoices(prev => [inv, ...prev]);
+          setCustomers(prev => prev.map(c =>
+            c.id === inv.customerId
+              ? {
+                  ...c,
+                  totalSpent: (c.totalSpent || 0) + inv.totalAfterDiscount,
+                  purchasesCount: (c.purchasesCount || 0) + 1
+                }
+              : c
+          ));
+        }
+        break;
+      }
+      case 'customer': {
+        const existingIds = new Set(customers.map(c => c.id));
+        if (!existingIds.has(item.originalId)) {
+          setCustomers(prev => [item.data as Customer, ...prev]);
+        }
+        break;
+      }
+      case 'product': {
+        const existingIds = new Set(products.map(p => p.id));
+        if (!existingIds.has(item.originalId)) {
+          setProducts(prev => [item.data as Product, ...prev]);
+        }
+        break;
+      }
+      case 'archiveCycle': {
+        const existingIds = new Set(archiveCycles.map((c: any) => c.id));
+        if (!existingIds.has(item.originalId)) {
+          setArchiveCycles(prev => [item.data, ...prev]);
+        }
+        break;
+      }
+    }
+
+    removeFromDeletedBulk(idsToUnmark);
+    setSoftDeleted(prev => prev.filter(sd => sd.id !== item.id));
+    showToast('✓ تمت استعادة العنصر بنجاح');
+    promptForSync('استعادة عنصر من المحذوفات');
+  };
+
+  const handlePermanentDelete = async (item: SoftDeletedItem) => {
+    const confirmed = await confirmDialog(`⚠️ هل أنت متأكد من حذف هذا العنصر نهائياً؟\n\nلا يمكن التراجع عن هذا الإجراء.`, true);
+    if (!confirmed) return;
+    setSoftDeleted(prev => prev.filter(sd => sd.id !== item.id));
+    markAsDeleted(item.originalId);
+    showToast('✓ تم الحذف النهائي للعنصر');
+    promptForSync('حذف نهائي من المحذوفات');
   };
 
   async function syncAllDataToGoogle(silent = false): Promise<boolean> {
@@ -2973,6 +3105,7 @@ export default function App() {
             onNavigate={setActiveTab}
             currentUserPhone={effectiveUser.phone}
             setIsChatOpen={setIsChatOpen}
+            lastArchiveTimestamp={lastArchiveTimestamp}
           />
         )}
 
@@ -3006,6 +3139,9 @@ export default function App() {
             onArchiveFactoryCycle={handleArchiveFactoryCycle}
             archiveCycles={archiveCycles}
             onUpdateArchiveCycles={setArchiveCycles}
+            softDeleted={softDeleted}
+            onRestoreItem={handleRestoreItem}
+            onPermanentDelete={handlePermanentDelete}
           />
         )}
 
@@ -3040,6 +3176,7 @@ export default function App() {
             permittedSubTabs={effectiveUser.permittedSubTabs}
             currentUser={effectiveUser}
             usersList={usersList}
+            lastArchiveTimestamp={lastArchiveTimestamp}
           />
         )}
 
@@ -3211,6 +3348,7 @@ export default function App() {
           trips={filteredTrips}
           currentUser={effectiveUser}
           settings={settings}
+          lastArchiveTimestamp={lastArchiveTimestamp}
         />
       )}
 

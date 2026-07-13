@@ -17,10 +17,12 @@ interface DashboardProps {
   onNavigate: (tab: string) => void;
   currentUserPhone?: string;
   setIsChatOpen: (val: boolean) => void;
+  lastArchiveTimestamp?: number;
 }
 
-export default function Dashboard({ products, factoryLoads, invoices, permittedTabs, onNavigate, currentUserPhone, setIsChatOpen }: DashboardProps) {
-  // Compute loaded and remaining for each product size variant
+export default function Dashboard({ products, factoryLoads, invoices, permittedTabs, onNavigate, currentUserPhone, setIsChatOpen, lastArchiveTimestamp = 0 }: DashboardProps) {
+  const parseCairoTime = (dateStr: string): number => new Date(dateStr.replace('Z', '')).getTime();
+
   const carBalances = React.useMemo(() => {
     const balancesList: Array<{
       productId: string;
@@ -34,19 +36,20 @@ export default function Dashboard({ products, factoryLoads, invoices, permittedT
       unitsPerCarton: number;
     }> = [];
 
+    const activeLoads = factoryLoads.filter(l => parseCairoTime(l.date) > lastArchiveTimestamp);
+    const activeInvoices = invoices.filter(inv => parseCairoTime(inv.date) > lastArchiveTimestamp);
+
     products.forEach(product => {
       const weights = getProductWeightsFallback(product);
       weights.forEach(w => {
-        // Sum loads of this specific product + weight option
-        const loaded = factoryLoads
-          .filter(load => load.productId === product.id && load.weightId === w.id)
+        const loaded = activeLoads
+          .filter(load => String(load.productId).trim() === String(product.id).trim() && String(load.weightId || '').trim() === String(w.id).trim())
           .reduce((sum, load) => sum + load.quantity, 0);
 
-        // Sum sales of this specific product + weight option
         let sold = 0;
-        invoices.forEach(invoice => {
+        activeInvoices.forEach(invoice => {
           invoice.items.forEach(item => {
-            if (item.productId === product.id && item.weightId === w.id) {
+            if (String(item.productId).trim() === String(product.id).trim() && String(item.weightId || '').trim() === String(w.id).trim()) {
               sold += item.quantity;
             }
           });
@@ -69,9 +72,8 @@ export default function Dashboard({ products, factoryLoads, invoices, permittedT
     });
 
     return balancesList;
-  }, [products, factoryLoads, invoices]);
+  }, [products, factoryLoads, invoices, lastArchiveTimestamp]);
 
-  // Is there any warehouse alert?
   const hasAlerts = carBalances.some(bal => bal.remaining <= bal.minAlert);
 
   const activeBalances = React.useMemo(() => {
@@ -80,7 +82,6 @@ export default function Dashboard({ products, factoryLoads, invoices, permittedT
 
   const [showCarStock, setShowCarStock] = React.useState(true);
 
-  // Dynamic AI Field Advisor suggestion tip matching actual real-time state
   const dynamicAITip = React.useMemo(() => {
     const lowItem = carBalances.find(bal => bal.loaded > 0 && bal.remaining <= bal.minAlert);
     if (lowItem) {
@@ -99,7 +100,7 @@ export default function Dashboard({ products, factoryLoads, invoices, permittedT
   return (
     <div className="flex flex-col gap-4 px-2 py-4 w-full max-w-lg mx-auto min-h-screen bg-slate-50 text-right animate-fade-in" dir="rtl" id="dashboard-container">
       
-      {/* Car Stock Widget (رصيد السيارة) */}
+      {/* Car Stock Widget */}
       {activeBalances.length > 0 && (
         <div className="flex flex-col gap-1">
           <button
@@ -122,14 +123,12 @@ export default function Dashboard({ products, factoryLoads, invoices, permittedT
 
           {showCarStock && (
             <div className="bg-white rounded-xl p-3 shadow-sm border border-slate-200 animate-fade-in mx-1 mt-1">
-              {/* Header of Table */}
               <div className="grid grid-cols-12 gap-1 border-b border-slate-200 pb-2 text-center text-[11px] font-black tracking-wider text-slate-500 uppercase">
                 <span className="col-span-6 text-right">الصنف</span>
                 <span className="col-span-3 text-emerald-600">التحميل</span>
                 <span className="col-span-3 text-rose-600">الباقي</span>
               </div>
 
-              {/* List of Products */}
               <div className="max-h-48 overflow-y-auto custom-scroll divide-y divide-slate-100 mt-1 pb-1">
                 {activeBalances.map(item => {
                   const isLow = item.remaining <= item.minAlert;
@@ -165,13 +164,9 @@ export default function Dashboard({ products, factoryLoads, invoices, permittedT
         </div>
       )}
 
-
-      {/* AI Field Advisor Prominent Card Banner removed as requested */}
-
-      {/* Grid Menu of Options mapped precisely to user mockup */}
+      {/* Grid Menu */}
       <h3 className="text-sm font-black text-slate-500 mt-2 px-1">القائمة الرئيسية</h3>
       <div className="grid grid-cols-2 gap-3" id="grid-menu">
-        {/* 1. المصنع (Factory Load) */}
         {permittedTabs.includes('factory') && (
           <button
             onClick={() => onNavigate('factory')}
@@ -187,7 +182,6 @@ export default function Dashboard({ products, factoryLoads, invoices, permittedT
           </button>
         )}
 
-        {/* 2. العملاء (Customers) */}
         {permittedTabs.includes('customers') && (
           <button
             onClick={() => onNavigate('customers')}
@@ -203,7 +197,6 @@ export default function Dashboard({ products, factoryLoads, invoices, permittedT
           </button>
         )}
 
-        {/* 3. فاتورة (New Invoice) */}
         {permittedTabs.includes('invoice') && (
           <button
             onClick={() => onNavigate('invoice')}
@@ -219,7 +212,6 @@ export default function Dashboard({ products, factoryLoads, invoices, permittedT
           </button>
         )}
 
-        {/* 4. قائمة الأسعار (Price List) */}
         {permittedTabs.includes('prices') && (
           <button
             onClick={() => onNavigate('prices')}
@@ -235,7 +227,6 @@ export default function Dashboard({ products, factoryLoads, invoices, permittedT
           </button>
         )}
 
-        {/* 5. المصروفات (Expenses) */}
         {permittedTabs.includes('expenses') && (
           <button
             onClick={() => onNavigate('expenses')}
@@ -251,7 +242,6 @@ export default function Dashboard({ products, factoryLoads, invoices, permittedT
           </button>
         )}
 
-        {/* 6. الإدارة (Administration / Core Control) */}
         {permittedTabs.includes('administrative') && (
           <button
             onClick={() => onNavigate('administrative')}
@@ -268,7 +258,7 @@ export default function Dashboard({ products, factoryLoads, invoices, permittedT
         )}
       </div>
 
-      {/* Footer bar exactly as visually matching */}
+      {/* Footer bar */}
       {permittedTabs.includes('reports') && (
         <button
           onClick={() => onNavigate('reports')}

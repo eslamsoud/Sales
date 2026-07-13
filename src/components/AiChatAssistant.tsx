@@ -16,6 +16,7 @@ interface AiChatAssistantProps {
   trips: Trip[];
   currentUser?: UserAuth | null;
   settings: AppSettings;
+  lastArchiveTimestamp?: number;
 }
 
 export default function AiChatAssistant({
@@ -28,7 +29,8 @@ export default function AiChatAssistant({
   expenses = [],
   trips = [],
   currentUser = null,
-  settings
+  settings,
+  lastArchiveTimestamp = 0
 }: AiChatAssistantProps) {
   const aiBotName = settings?.aiName || 'المستشار الميداني';
 
@@ -83,18 +85,21 @@ export default function AiChatAssistant({
   const getContextString = (): string => {
     try {
       // 1. Car Balance Summary
+      const parseCairoTime = (dateStr: string): number => new Date(dateStr.replace('Z', '')).getTime();
+      const activeLoads = factoryLoads.filter(l => parseCairoTime(l.date) > lastArchiveTimestamp);
+      const activeInvoices = invoices.filter(inv => parseCairoTime(inv.date) > lastArchiveTimestamp);
       const carBalancesList: string[] = [];
       products.forEach(product => {
         const weights = product.weights || [];
         weights.forEach(w => {
-          const loaded = factoryLoads
-            .filter(load => String(load.productId).trim() === String(product.id).trim() && String(load.weightId).trim() === String(w.id).trim())
+          const loaded = activeLoads
+            .filter(load => String(load.productId).trim() === String(product.id).trim() && String(load.weightId || '').trim() === String(w.id).trim())
             .reduce((sum, load) => sum + load.quantity, 0);
 
           let sold = 0;
-          invoices.forEach(invoice => {
+          activeInvoices.forEach(invoice => {
             invoice.items.forEach(item => {
-              if (String(item.productId).trim() === String(product.id).trim() && String(item.weightId).trim() === String(w.id).trim()) {
+              if (String(item.productId).trim() === String(product.id).trim() && String(item.weightId || '').trim() === String(w.id).trim()) {
                 sold += item.quantity;
               }
             });
@@ -105,7 +110,7 @@ export default function AiChatAssistant({
           const remainingCartons = Math.floor(remaining / unitsPerCt);
           const looseUnits = remaining % unitsPerCt;
 
-          if (loaded > 0) {
+          if (loaded > 0 && remaining > 0) {
             carBalancesList.push(`- صنف "${product.name}" (حجم ${w.size}): إجمالي الحمولة المسحوبة ${Math.floor(loaded / unitsPerCt)} كرتونة، المباع منها ${Math.floor(sold / unitsPerCt)} كرتونة، والجاهز الفعلي المتبقي بالسيارة الآن: ${remainingCartons} كرتونة و ${looseUnits} عبوة.`);
           }
         });

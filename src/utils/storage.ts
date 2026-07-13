@@ -8,18 +8,30 @@ import { Product, Customer, Invoice, Expense, FactoryLoad, AppSettings } from '.
 // توقيت مصر (Africa/Cairo) — UTC+2 عادي، UTC+3during DST
 const EGYPT_TZ = 'Africa/Cairo';
 
-/** يُرجع التاريخ والوقت بتوقيت مصر بصيغة ISO */
+/** يُرجع التاريخ والوقت بتوقيت مصر بصيغة ISO محلية بدون حرف Z */
 export function nowEgyptISO(): string {
   const now = new Date();
-  const parts = now.toLocaleString('sv-SE', { timeZone: EGYPT_TZ }).split(' ');
-  const datePart = parts[0]; // YYYY-MM-DD
-  const timePart = parts[1]; // HH:MM:SS
-  return `${datePart}T${timePart}.000Z`;
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: EGYPT_TZ,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hour12: false
+  });
+  const parts = formatter.formatToParts(now);
+  const getPart = (type: string) => parts.find(p => p.type === type)?.value || '';
+  return `${getPart('year')}-${getPart('month')}-${getPart('day')}T${getPart('hour')}:${getPart('minute')}:${getPart('second')}`;
 }
 
 /** يُرجع التاريخ فقط بتوقيت مصر بصيغة YYYY-MM-DD */
 export function todayEgyptISO(): string {
-  return nowEgyptISO().substring(0, 10);
+  const now = new Date();
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: EGYPT_TZ,
+    year: 'numeric', month: '2-digit', day: '2-digit'
+  });
+  const parts = formatter.formatToParts(now);
+  const getPart = (type: string) => parts.find(p => p.type === type)?.value || '';
+  return `${getPart('year')}-${getPart('month')}-${getPart('day')}`;
 }
 
 /** يُرجع التاريخ والوقت بتوقيت مصر كنص عربي */

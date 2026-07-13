@@ -1,9 +1,39 @@
-// 🛡️ دوال مساعدة عامة على مستوى السكربت بالكامل (للوصول إليها من doGet و doPost)
+// 🛡️ دوال مساعدة عامة مطورة ومقفلة بالكامل على توقيت مصر (تمنع فجوة الـ 3 ساعات نهائياً)
+
+var EGYPT_TZ = 'Africa/Cairo';
+
+function nowEgyptISO() {
+  return Utilities.formatDate(new Date(), EGYPT_TZ, "yyyy-MM-dd'T'HH:mm:ss");
+}
+
+function todayEgyptISO() {
+  return Utilities.formatDate(new Date(), EGYPT_TZ, 'yyyy-MM-dd');
+}
+
 function getSafeString(val) {
+  // 1. إذا كانت القيمة كائن تاريخ أصلي قادم من الشيت
   if (val instanceof Date) {
-    return val.toISOString();
+    return Utilities.formatDate(val, EGYPT_TZ, "yyyy-MM-dd'T'HH:mm:ss");
   }
-  return String(val !== undefined && val !== null ? val : '').trim();
+  
+  var str = String(val !== undefined && val !== null ? val : '').trim();
+  
+  // 2. اصطياد النصوص التي تنتهي بـ Z (UTC) وتحويلها فوراً لتوقيت مصر
+  var utcPattern = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{3})?Z$/;
+  var utcPatternShort = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
+  
+  if (utcPattern.test(str) || utcPatternShort.test(str)) {
+    try {
+      var dateObj = new Date(str);
+      if (!isNaN(dateObj.getTime())) {
+        return Utilities.formatDate(dateObj, EGYPT_TZ, "yyyy-MM-dd'T'HH:mm:ss");
+      }
+    } catch(err) {
+      // في حال حدوث خطأ نادر يتم إرجاع النص كما هو كحماية
+    }
+  }
+  
+  return str;
 }
 
 function getSafeNumber(val) {
@@ -21,11 +51,7 @@ function formatPhone(val) {
 }
 
 function getSafePhone(val) {
-  var p = getSafeString(val).replace(/^'/, '').replace(/\s+/g, '').replace(/[^\d]/g, '');
-  if (p.startsWith('0020')) p = p.substring(4);
-  if (p.startsWith('20') && p.length > 10) p = p.substring(2);
-  if (!p.startsWith('0') && p.length >= 7) p = '0' + p;
-  return p;
+  return formatPhone(val);
 }
 
 // 1. استقبال طلب الجلب والتحديث الميداني ثنائي الاتجاه مع نظام التخزين المؤقت (Cache)
@@ -278,7 +304,7 @@ function doPost(e) {
         var folderName = "نسخ_نظام_سوفانا_الاحتياطية";
         var folders = DriveApp.getFoldersByName(folderName);
         var folder = folders.hasNext() ? folders.next() : DriveApp.createFolder(folderName);
-        var dateStr = new Date().toISOString().split('T')[0];
+        var dateStr = todayEgyptISO();
         var fileName = "EAGS_Backup_" + dateStr + "_" + (data.syncPhone || "admin") + ".json";
         folder.createFile(fileName, JSON.stringify(data.data, null, 2), MimeType.PLAIN_TEXT);
         return ContentService.createTextOutput(JSON.stringify({"status": "backup_success"}))
@@ -552,7 +578,7 @@ function doPost(e) {
       summarySheet.clearContents();
       summarySheet.getRange(1, 1, 2, 4).setValues([
         ['تاريخ المزامنة', 'إجمالي المبيعات', 'المنصرف والمصروفات', 'صافي الأرباح'],
-        [data.metadata ? data.metadata.syncedAt : new Date().toISOString(), data.metadata ? (Number(data.metadata.totalSales) || 0) : 0, data.metadata ? (Number(data.metadata.totalExpenses) || 0) : 0, data.metadata ? (Number(data.metadata.netProfit) || 0) : 0]
+        [data.metadata ? data.metadata.syncedAt : nowEgyptISO(), data.metadata ? (Number(data.metadata.totalSales) || 0) : 0, data.metadata ? (Number(data.metadata.totalExpenses) || 0) : 0, data.metadata ? (Number(data.metadata.netProfit) || 0) : 0]
       ]);
       summarySheet.getRange(1, 1, 1, 4).setFontWeight("bold").setBackground("#d9ead3");
       
@@ -572,4 +598,92 @@ function doPost(e) {
   } finally {
     lock.releaseLock();
   }
+}
+
+// =============================================
+// دالة إصلاح التوقيت — تشغّل يدوياً من القائمة
+// تحويل جميع التواريخ من UTC إلى توقيت مصر
+// =============================================
+function fixAllTimezones() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheets = ss.getSheets();
+  var totalFixed = 0;
+
+  // أنماط التواريخ التي نبحث عنها
+  var utcPattern = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{3})?Z$/;  // 2026-07-13T05:35:16.000Z
+  var utcPatternShort = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;        // 2026-07-13T05:35:16Z
+
+  for (var s = 0; s < sheets.length; s++) {
+    var sheet = sheets[s];
+    var lastRow = sheet.getLastRow();
+    var lastCol = sheet.getLastColumn();
+    if (lastRow <= 1 || lastCol <= 0) continue;
+
+    var data = sheet.getRange(1, 1, lastRow, lastCol).getValues();
+    var hasChanges = false;
+
+    for (var r = 0; r < data.length; r++) {
+      for (var c = 0; c < data[r].length; c++) {
+        var cell = data[r][c];
+        var val = '';
+
+        // تحويل Date object إلى نص
+        if (cell instanceof Date) {
+          val = Utilities.formatDate(cell, 'GMT', "yyyy-MM-dd'T'HH:mm:ss'Z'");
+        } else if (typeof cell === 'string') {
+          val = cell.trim();
+        } else {
+          continue;
+        }
+
+        // فحص: هل القيمة بصيغة UTC تنتهي بـ Z؟
+        if (!utcPattern.test(val) && !utcPatternShort.test(val)) continue;
+
+        // تحويل من UTC إلى القاهرة
+        try {
+          var dateObj = new Date(val);
+          if (isNaN(dateObj.getTime())) continue;
+
+          var year = Utilities.formatDate(dateObj, EGYPT_TZ, 'yyyy');
+          var month = Utilities.formatDate(dateObj, EGYPT_TZ, 'MM');
+          var day = Utilities.formatDate(dateObj, EGYPT_TZ, 'dd');
+          var hour = Utilities.formatDate(dateObj, EGYPT_TZ, 'HH');
+          var min = Utilities.formatDate(dateObj, EGYPT_TZ, 'mm');
+          var sec = Utilities.formatDate(dateObj, EGYPT_TZ, 'ss');
+          var newDateStr = year + '-' + month + '-' + day + 'T' + hour + ':' + min + ':' + sec;
+
+          if (newDateStr !== val) {
+            data[r][c] = newDateStr;
+            hasChanges = true;
+            totalFixed++;
+          }
+        } catch(e) {
+          // تجاهل الأخطاء في قيم فردية
+        }
+      }
+    }
+
+    // حفظ التغييرات إذا وجدت
+    if (hasChanges) {
+      sheet.getRange(1, 1, lastRow, lastCol).setValues(data);
+      Logger.log('Sheet "' + sheet.getName() + '": fixed timezone entries');
+    }
+  }
+
+  Logger.log('Total fixed: ' + totalFixed);
+  SpreadsheetApp.getUi().alert(
+    'تم إصلاح التوقيت بنجاح!\n\n' +
+    'عدد القيم المعدّلة: ' + totalFixed + '\n' +
+    'ال sheets المفحوصة: ' + sheets.length
+  );
+}
+
+// =============================================
+// إضافة زر في شريط القوائم لتشغيل الإصلاح
+// =============================================
+function onOpen() {
+  SpreadsheetApp.getUi()
+    .createMenu('🔧 إصلاح التوقيت')
+    .addItem('تحويل UTC → توقيت مصر', 'fixAllTimezones')
+    .addToUi();
 }

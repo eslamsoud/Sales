@@ -164,6 +164,17 @@ export interface UserAuth {
   createdAt: string;
 }
 
+export type DeletedItemType = 'factoryLoad' | 'invoice' | 'expense' | 'trip' | 'customer' | 'product' | 'archiveCycle';
+
+export interface SoftDeletedItem {
+  id: string;
+  originalId: string;
+  type: DeletedItemType;
+  data: any;
+  deletedAt: string;
+  label?: string;
+}
+
 export interface CarBalance {
   productId: string;
   productName: string;
