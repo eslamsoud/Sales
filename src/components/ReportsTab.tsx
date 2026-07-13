@@ -240,6 +240,9 @@ function ReportsTabComponent({
 
   const currentFilteredData = React.useMemo(() => {
     const isWithinPeriod = (dateString: string) => {
+      if (activeSubTab !== 'invoices' && activeSubTab !== 'finance' && activeSubTab !== 'stats') {
+        return true;
+      }
       if (!dateString || typeof dateString !== 'string') return false;
       const d = new Date(dateString);
       if (isNaN(d.getTime())) return false;
@@ -309,7 +312,7 @@ function ReportsTabComponent({
       allExtraPayments: extraPayments || [], // for cumulative calculation
       carriedOverDebt
     };
-  }, [delFilteredInvoices, delFilteredExpenses, delFilteredTrips, delFilteredFactoryLoads, periodFilter, delegateFilter, isManager, currentUser, selectedWeekDays, customStartDate, customEndDate]);
+  }, [delFilteredInvoices, delFilteredExpenses, delFilteredTrips, delFilteredFactoryLoads, periodFilter, delegateFilter, isManager, currentUser, selectedWeekDays, customStartDate, customEndDate, activeSubTab]);
 
   // 1. Calculations based on period filter
   const salesStats = React.useMemo(() => {
@@ -765,60 +768,61 @@ function ReportsTabComponent({
       <html dir="rtl" lang="ar">
       <head>${COMPACT_PRO_CSS}</head>
       <body>
+        <div class="report-wrapper" style="padding: 12mm 14mm;">
 
-        <div class="rh">
-          <h1>تقرير العمليات المالية الشامل</h1>
-          <div class="sub">نظام التوزيع والمبيعات المعتمد</div>
-          <div class="ref">
-            <span>الفترة: ${periodLabel}</span>
-            <span>تاريخ الطباعة: ${new Date().toLocaleDateString('ar-EG')} ${new Date().toLocaleTimeString('ar-EG')}</span>
+          <div class="rh">
+            <h1>تقرير العمليات المالية الشامل</h1>
+            <div class="sub">نظام التوزيع والمبيعات المعتمد</div>
+            <div class="ref">
+              <span>الفترة: ${periodLabel}</span>
+              <span>تاريخ الطباعة: ${new Date().toLocaleDateString('ar-EG')} ${new Date().toLocaleTimeString('ar-EG')}</span>
+            </div>
           </div>
-        </div>
 
-        <div class="sg">
-          <div class="sb gr">
-            <div class="l">صافي الربح التشغيلي</div>
-            <div class="v">${salesStats.operatingNetProfit.toLocaleString('ar-EG')} <span style="font-size:10px">ج.م</span></div>
+          <div class="sg">
+            <div class="sb gr">
+              <div class="l">صافي الربح التشغيلي</div>
+              <div class="v">${salesStats.operatingNetProfit.toLocaleString('ar-EG')} <span style="font-size:10px">ج.م</span></div>
+            </div>
+            <div class="sb gr">
+              <div class="l">صافي التدفق النقدي</div>
+              <div class="v">${salesStats.netProfit.toLocaleString('ar-EG')} <span style="font-size:10px">ج.م</span></div>
+            </div>
+            <div class="sb bl">
+              <div class="l">إجمالي المبيعات</div>
+              <div class="v">${salesStats.totalSales.toLocaleString('ar-EG')} <span style="font-size:10px">ج.م</span></div>
+            </div>
+            <div class="sb gr">
+              <div class="l">المحصل كاش</div>
+              <div class="v">${salesStats.totalCollected.toLocaleString('ar-EG')} <span style="font-size:10px">ج.م</span></div>
+            </div>
+            <div class="sb rd">
+              <div class="l">باقي ديون العملاء</div>
+              <div class="v">${salesStats.totalRemaining.toLocaleString('ar-EG')} <span style="font-size:10px">ج.م</span></div>
+            </div>
+            <div class="sb bl">
+              <div class="l">المسدد للمصنع</div>
+              <div class="v">${salesStats.totalPaidToFactoryInPeriod.toLocaleString('ar-EG')} <span style="font-size:10px">ج.م</span></div>
+            </div>
+            <div class="sb bl">
+              <div class="l">المصروفات التشغيلية</div>
+              <div class="v">${salesStats.totalSpent.toLocaleString('ar-EG')} <span style="font-size:10px">ج.م</span></div>
+            </div>
+            <div class="sb gr">
+              <div class="l">أرباح المشاوير</div>
+              <div class="v">${salesStats.totalTripsCollectedProfit.toLocaleString('ar-EG')} <span style="font-size:10px">ج.م</span></div>
+            </div>
+            <div class="sb rd">
+              <div class="l">مديونية المصنع</div>
+              <div class="v">${salesStats.remainingDebtToFactory.toLocaleString('ar-EG')} <span style="font-size:10px">ج.م</span></div>
+            </div>
           </div>
-          <div class="sb bl">
-            <div class="l">صافي التدفق النقدي</div>
-            <div class="v">${salesStats.netProfit.toLocaleString('ar-EG')} <span style="font-size:10px">ج.م</span></div>
-          </div>
-          <div class="sb am">
-            <div class="l">إجمالي المبيعات</div>
-            <div class="v">${salesStats.totalSales.toLocaleString('ar-EG')} <span style="font-size:10px">ج.م</span></div>
-          </div>
-          <div class="sb gr">
-            <div class="l">المحصل كاش</div>
-            <div class="v">${salesStats.totalCollected.toLocaleString('ar-EG')} <span style="font-size:10px">ج.م</span></div>
-          </div>
-          <div class="sb rd">
-            <div class="l">باقي ديون العملاء</div>
-            <div class="v">${salesStats.totalRemaining.toLocaleString('ar-EG')} <span style="font-size:10px">ج.م</span></div>
-          </div>
-          <div class="sb bl">
-            <div class="l">المسدد للمصنع</div>
-            <div class="v">${salesStats.totalPaidToFactoryInPeriod.toLocaleString('ar-EG')} <span style="font-size:10px">ج.م</span></div>
-          </div>
-          <div class="sb bl">
-            <div class="l">المصروفات التشغيلية</div>
-            <div class="v">${salesStats.totalSpent.toLocaleString('ar-EG')} <span style="font-size:10px">ج.م</span></div>
-          </div>
-          <div class="sb gr">
-            <div class="l">أرباح المشاوير</div>
-            <div class="v">${salesStats.totalTripsCollectedProfit.toLocaleString('ar-EG')} <span style="font-size:10px">ج.م</span></div>
-          </div>
-          <div class="sb rd">
-            <div class="l">مديونية المصنع</div>
-            <div class="v">${salesStats.remainingDebtToFactory.toLocaleString('ar-EG')} <span style="font-size:10px">ج.م</span></div>
-          </div>
-        </div>
         
         <div class="st"><span class="i">1</span> قائمة فواتير مبيعات العملاء للفترة</div>
         <table>
           <thead>
             <tr>
-              <th width="30">م</th>
+              <th width="45">م</th>
               <th>رقم الفاتورة</th>
               <th>العميل</th>
               <th>المندوب</th>
@@ -854,7 +858,7 @@ function ReportsTabComponent({
         <table>
           <thead>
             <tr>
-              <th width="30">م</th>
+              <th width="45">م</th>
               <th>البيان والتفاصيل</th>
               <th>الفئة</th>
               <th>النوع</th>
@@ -883,7 +887,7 @@ function ReportsTabComponent({
         <table>
           <thead>
             <tr>
-              <th width="30">م</th>
+              <th width="45">م</th>
               <th>تفاصيل المشوار والوجهة</th>
               <th>المندوب</th>
               <th>المبلغ</th>
@@ -912,6 +916,7 @@ function ReportsTabComponent({
           <div class="sb2"><div class="ti">المندوب الميداني</div><div class="ln">التوقيع</div></div>
         </div>
 
+        </div>
       </body>
       </html>
     `;
@@ -1064,7 +1069,7 @@ function ReportsTabComponent({
       <html dir="rtl" lang="ar">
         <head>${COMPACT_PRO_CSS}</head>
         <body>
-          <div style="padding:12mm 14mm">
+          <div class="report-wrapper" style="padding:12mm 14mm">
             <div class="rh">
               <h1>تقرير الحسابات الختامية — ${displayDate}</h1>
               <div class="sub">نظام التوزيع والمبيعات المعتمد</div>
@@ -1079,15 +1084,15 @@ function ReportsTabComponent({
                 <div class="l">إجمالي المبيعات (قبل الخصم)</div>
                 <div class="v">${formatNum(mTotalBeforeDisc)} ج.م</div>
               </div>
-              <div class="sb gr">
+              <div class="sb rd">
                 <div class="l">الخصم الممنوح</div>
                 <div class="v">${formatNum(mDisc)} ج.م</div>
               </div>
-              <div class="sb bl">
+              <div class="sb gr">
                 <div class="l">المحصل كاش</div>
                 <div class="v">${formatNum(collected)} ج.م</div>
               </div>
-              <div class="sb am">
+              <div class="sb rd">
                 <div class="l">المتبقي (آجل)</div>
                 <div class="v">${formatNum(remaining)} ج.م</div>
               </div>
@@ -1095,7 +1100,7 @@ function ReportsTabComponent({
                 <div class="l">إيرادات إضافية</div>
                 <div class="v">${formatNum(revenuesParam)} ج.م</div>
               </div>
-              <div class="sb rd">
+              <div class="sb bl">
                 <div class="l">المصروفات</div>
                 <div class="v">${formatNum(expensesParam)} ج.م</div>
               </div>
@@ -1105,10 +1110,10 @@ function ReportsTabComponent({
             <table>
               <thead>
                 <tr>
-                  <th width="30">م</th>
+                  <th width="45">م</th>
                   <th>البيان</th>
-                  <th width="100">النوع</th>
-                  <th width="100">القيمة (ج.م)</th>
+                  <th width="120">النوع</th>
+                  <th width="110">القيمة (ج.م)</th>
                 </tr>
               </thead>
               <tbody>
@@ -1863,7 +1868,7 @@ function ReportsTabComponent({
         })()}
         
         {/* Date period filters for finance and stats */}
-        {(activeSubTab === 'stats' || activeSubTab === 'finance' || activeSubTab === 'invoices') && (
+        {activeSubTab === 'invoices' && (
           <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col gap-5 mb-1 text-right animate-fade-in" dir="rtl">
             
             {/* Header */}
@@ -1984,6 +1989,62 @@ function ReportsTabComponent({
         {/* Finance Tab (الإيرادات والمصروفات) */}
         {activeSubTab === 'finance' && (
           <div className="flex flex-col gap-4 animate-fade-in">
+            {/* Period Filter Card for Finance */}
+            <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-col gap-3 text-right" dir="rtl">
+              <div className="flex flex-row flex-wrap items-center gap-2">
+                <span className="text-xs font-black text-[#2B6CB0] ml-1 shrink-0">فترة التصفية:</span>
+                <div className="flex flex-wrap items-center gap-1.5 flex-1 select-none">
+                  {(['all', 'today', 'week', 'month', 'custom'] as const).map((f) => (
+                    <button 
+                      key={f} 
+                      onClick={() => setPeriodFilter(f)} 
+                      className={`py-1 px-3 rounded-lg text-[10px] font-black transition-colors cursor-pointer shrink-0 ${periodFilter === f ? 'bg-[#1A365D] text-white shadow-xs' : 'bg-[#F7FAFC] text-[#2B6CB0] border border-slate-200 hover:bg-slate-50'}`}
+                    >
+                      {f === 'all' ? 'الكل' : f === 'today' ? 'يومي' : f === 'week' ? 'أسبوعي' : f === 'month' ? 'شهري' : 'مخصص'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {periodFilter === 'week' && (
+                <div className="flex flex-wrap gap-1.5 mt-1 animate-fade-in">
+                  {(['السبت', 'الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة'] as const).map((dayName, idx) => {
+                    const isSelected = selectedWeekDays.includes(idx);
+                    return (
+                      <button 
+                        key={idx} 
+                        onClick={() => { setSelectedWeekDays(prev => isSelected ? prev.filter(d => d !== idx) : [...prev, idx]); }} 
+                        className={`py-1 px-2.5 rounded-lg text-[10px] font-black transition-all cursor-pointer border ${isSelected ? 'bg-[#1A365D] text-white border-[#1A365D] shadow-xs' : 'bg-white text-gray-400 border-gray-200 hover:bg-gray-50'}`}
+                      >
+                        {dayName}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+              {periodFilter === 'custom' && (
+                <div className="grid grid-cols-2 gap-2 mt-1 animate-fade-in">
+                  <div>
+                    <label className="block text-[10px] text-gray-400 font-bold mb-0.5">من تاريخ</label>
+                    <input 
+                      type="date" 
+                      value={customStartDate} 
+                      onChange={(e) => setCustomStartDate(e.target.value)} 
+                      className="w-full bg-[#F7FAFC] border border-slate-200 rounded-lg py-1.5 px-2 text-[11px] font-bold text-[#1A365D]" 
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] text-gray-400 font-bold mb-0.5">إلى تاريخ</label>
+                    <input 
+                      type="date" 
+                      value={customEndDate} 
+                      onChange={(e) => setCustomEndDate(e.target.value)} 
+                      className="w-full bg-[#F7FAFC] border border-slate-200 rounded-lg py-1.5 px-2 text-[11px] font-bold text-[#1A365D]" 
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+
             {/* Today Quick Summary */}
             <div className="bg-gradient-to-r from-[#1A365D] to-[#2B6CB0] rounded-2xl p-4 text-white flex flex-col gap-2 shadow-md">
               <span className="text-[10px] font-black text-blue-200 flex items-center gap-1">
@@ -2187,50 +2248,71 @@ function ReportsTabComponent({
           <div className="flex flex-col gap-4 animate-fade-in">
               
               {/* Factory dashboard numbers */}
-              <div className="grid grid-cols-2 gap-3.5 mt-1">
+              <div className="grid grid-cols-2 gap-4 mt-1">
                 
-                <div className="bg-[#FFFFFF] border border-slate-200 rounded-2xl p-4 shadow-xs flex flex-col gap-1 text-right">
-                  <span className="text-[10px] sm:text-xs font-bold text-emerald-600 flex items-center gap-1 justify-end">💰 المسدد للمصنع في الفترة</span>
-                  <span className="text-xl font-black text-emerald-800" dir="rtl">{salesStats.totalPaidToFactoryInPeriod.toLocaleString('ar-EG')} ج.م</span>
-                  <span className="text-[10px] text-emerald-600/90 font-extrabold mt-0.5">
-                    شحن ومقدمات سداد مباشرة
-                  </span>
+                {/* Card 1: المسدد للمصنع */}
+                <div className="bg-gradient-to-br from-white to-emerald-50/20 border border-slate-150 border-r-4 border-r-emerald-500 rounded-2xl p-4 shadow-xs flex items-center justify-between transition-all hover:shadow-sm">
+                  <div className="flex flex-col gap-1 text-right flex-1">
+                    <div className="flex items-center gap-1.5 justify-start">
+                      <span className="text-[10px] font-black text-emerald-800 bg-emerald-50 border border-emerald-100 rounded-md px-1.5 py-0.5">المسدد</span>
+                      <span className="text-[10px] font-extrabold text-slate-500">للمصنع في الفترة</span>
+                    </div>
+                    <span className="text-lg font-black text-emerald-950 font-mono tracking-tight my-0.5" dir="rtl">{salesStats.totalPaidToFactoryInPeriod.toLocaleString('ar-EG')} <span className="text-[10px] font-bold text-emerald-700 mr-0.5">ج.م</span></span>
+                  </div>
+                  <div className="bg-emerald-500/10 p-2.5 rounded-xl text-emerald-600 border border-emerald-500/10 ml-2">
+                    <HandCoins className="w-5 h-5" />
+                  </div>
                 </div>
 
-                <div className="bg-[#FFFFFF] border border-slate-200 rounded-2xl p-4 shadow-xs flex flex-col gap-1 text-right">
-                  <span className="text-[10px] sm:text-xs font-bold text-rose-600 flex items-center gap-1 justify-end">🏭 المتبقي للمصنع (المديونية)</span>
-                  <span className="text-xl font-black text-rose-800" dir="rtl">{salesStats.remainingDebtToFactory.toLocaleString('ar-EG')} ج.م</span>
-                  <span className="text-[10px] text-rose-500/80 font-extrabold mt-0.5">
-                    مستحقات المصنع المعلقة حالياً
-                  </span>
+                {/* Card 2: المتبقي للمصنع */}
+                <div className="bg-gradient-to-br from-white to-rose-50/20 border border-slate-150 border-r-4 border-r-rose-500 rounded-2xl p-4 shadow-xs flex items-center justify-between transition-all hover:shadow-sm">
+                  <div className="flex flex-col gap-1 text-right flex-1">
+                    <div className="flex items-center gap-1.5 justify-start">
+                      <span className="text-[10px] font-black text-rose-800 bg-rose-50 border border-rose-100 rounded-md px-1.5 py-0.5">المديونية</span>
+                      <span className="text-[10px] font-extrabold text-slate-500">المتبقي للمصنع</span>
+                    </div>
+                    <span className="text-lg font-black text-rose-950 font-mono tracking-tight my-0.5" dir="rtl">{salesStats.remainingDebtToFactory.toLocaleString('ar-EG')} <span className="text-[10px] font-bold text-rose-700 mr-0.5">ج.م</span></span>
+                  </div>
+                  <div className="bg-rose-500/10 p-2.5 rounded-xl text-rose-600 border border-rose-500/10 ml-2">
+                    <Wallet className="w-5 h-5" />
+                  </div>
                 </div>
 
               </div>
 
               {/* Tap-Interactive Primary Dashboards Section */}
-              <div className="grid grid-cols-1 gap-3 mt-1.5">
+              <div className="grid grid-cols-1 gap-4 mt-2">
                 
                 {/* 1. أرباح المشاوير */}
                 <div 
                   onClick={() => setActiveDetailCard(activeDetailCard === 'trips' ? null : 'trips')}
-                  className={`border-2 rounded-2xl p-4 shadow-xs flex items-center justify-between cursor-pointer transition-all hover:bg-indigo-50/20 active:scale-98 select-none ${
-                    activeDetailCard === 'trips' ? 'border-indigo-500 bg-indigo-50/10 shadow-sm ring-2 ring-indigo-200' : 'bg-[#FFFFFF] border-slate-200'
+                  className={`group relative border border-slate-150 border-r-4 rounded-2xl p-4.5 shadow-xs flex items-center justify-between cursor-pointer transition-all active:scale-99 select-none ${
+                    activeDetailCard === 'trips' 
+                      ? 'border-indigo-500 border-r-indigo-600 bg-indigo-50/15 shadow-sm ring-2 ring-indigo-200/50' 
+                      : 'bg-white border-r-indigo-500 hover:bg-slate-50/50 hover:shadow-2xs'
                   }`}
                 >
-                  <div className="flex flex-col gap-0.5 text-right flex-1">
-                    <span className="text-xs font-extrabold text-[#2B6CB0] flex items-center gap-1">
-                      🚚 أرباح المشاوير
-                      <span className="text-[9px] bg-indigo-100 text-indigo-800 px-1.5 py-0.5 rounded font-black">تحليل تفاعلي 🔍</span>
-                    </span>
-                    <span className="text-xl font-black text-[#1A365D]" dir="rtl">{salesStats.totalTripsCollectedProfit.toLocaleString('ar-EG')} ج.م</span>
-                    {salesStats.totalSales > 0 && (
-                      <span className="text-[9px] font-black text-indigo-600 bg-indigo-100 rounded-full px-2 py-0.5 w-fit inline-block">
-                        نسبة: {(salesStats.totalTripsCollectedProfit / salesStats.totalSales * 100).toFixed(1)}%
+                  <div className="flex flex-col gap-1 text-right flex-1">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="text-[10px] font-black text-indigo-850 bg-indigo-50 border border-indigo-100 rounded-md px-2 py-0.5 flex items-center gap-0.5">
+                        🚚 أرباح المشاوير
                       </span>
-                    )}
-                    <span className="text-[10px] text-gray-400 font-bold">اضغط لمشاهدة المصروفات والمحصل الصافي</span>
+                      <span className="text-[9px] bg-indigo-100/60 text-indigo-700 px-1.5 py-0.5 rounded font-black">تحليل تفاعلي 🔍</span>
+                      {salesStats.totalSales > 0 && (
+                        <span className="text-[9px] font-black text-indigo-600 bg-indigo-50 rounded-full px-2 py-0.5">
+                          النسبة: {(salesStats.totalTripsCollectedProfit / salesStats.totalSales * 100).toFixed(1)}%
+                        </span>
+                      )}
+                    </div>
+                    <span className="text-xl font-black text-slate-800 font-mono tracking-tight my-0.5" dir="rtl">
+                      {salesStats.totalTripsCollectedProfit.toLocaleString('ar-EG')} <span className="text-[10px] font-bold text-slate-500 mr-0.5">ج.م</span>
+                    </span>
                   </div>
-                  <div className="bg-indigo-100 p-2.5 rounded-2xl text-[#1A365D]">
+                  <div className={`p-2.5 rounded-xl ml-2 border transition-all ${
+                    activeDetailCard === 'trips' 
+                      ? 'bg-indigo-500 text-white border-indigo-500' 
+                      : 'bg-indigo-50 text-indigo-600 border-indigo-100 group-hover:scale-105'
+                  }`}>
                     <MapPin className={`h-5 w-5 ${activeDetailCard === 'trips' ? 'animate-bounce' : ''}`} />
                   </div>
                 </div>
@@ -2238,19 +2320,28 @@ function ReportsTabComponent({
                 {/* 2. الصافي */}
                 <div 
                   onClick={() => setActiveDetailCard(activeDetailCard === 'net' ? null : 'net')}
-                  className={`border-2 rounded-2xl p-4 shadow-xs flex items-center justify-between cursor-pointer transition-all hover:bg-emerald-50/20 active:scale-98 select-none ${
-                    activeDetailCard === 'net' ? 'border-emerald-500 bg-emerald-50/10 shadow-sm ring-2 ring-emerald-200' : 'bg-[#FFFFFF] border-slate-200'
+                  className={`group relative border border-slate-150 border-r-4 rounded-2xl p-4.5 shadow-xs flex items-center justify-between cursor-pointer transition-all active:scale-99 select-none ${
+                    activeDetailCard === 'net' 
+                      ? 'border-emerald-500 border-r-emerald-600 bg-emerald-50/15 shadow-sm ring-2 ring-emerald-200/50' 
+                      : 'bg-white border-r-emerald-500 hover:bg-slate-50/50 hover:shadow-2xs'
                   }`}
                 >
-                  <div className="flex flex-col gap-0.5 text-right flex-1">
-                    <span className="text-xs font-extrabold text-emerald-700 flex items-center gap-1">
-                      📊 الصافي
-                      <span className="text-[9px] bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded font-black">معادلة الأرباح والتكلفة 🔍</span>
+                  <div className="flex flex-col gap-1 text-right flex-1">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="text-[10px] font-black text-emerald-850 bg-emerald-50 border border-emerald-100 rounded-md px-2 py-0.5 flex items-center gap-0.5">
+                        📊 الصافي
+                      </span>
+                      <span className="text-[9px] bg-emerald-100/60 text-emerald-700 px-1.5 py-0.5 rounded font-black">معادلة الأرباح والتكلفة 🔍</span>
+                    </div>
+                    <span className="text-xl font-black text-emerald-900 font-mono tracking-tight my-0.5" dir="rtl">
+                      {salesStats.cumulativeNetProfit.toLocaleString('ar-EG')} <span className="text-[10px] font-bold text-emerald-600 mr-0.5">ج.م</span>
                     </span>
-                    <span className="text-xl font-black text-emerald-800" dir="rtl">{salesStats.cumulativeNetProfit.toLocaleString('ar-EG')} ج.م</span>
-                    <span className="text-[10px] text-gray-400 font-bold">المحصل + المشاوير + الإيرادات الاضافية - المصروفات التشغيلية</span>
                   </div>
-                  <div className="bg-emerald-100 p-2.5 rounded-2xl text-emerald-800">
+                  <div className={`p-2.5 rounded-xl ml-2 border transition-all ${
+                    activeDetailCard === 'net' 
+                      ? 'bg-emerald-500 text-white border-emerald-500' 
+                      : 'bg-emerald-50 text-emerald-600 border-emerald-100 group-hover:scale-105'
+                  }`}>
                     <TrendingUp className="h-5 w-5" />
                   </div>
                 </div>
@@ -2258,137 +2349,156 @@ function ReportsTabComponent({
                 {/* 3. المتبقي المطلوب تحصيله */}
                 <div 
                   onClick={() => setActiveDetailCard(activeDetailCard === 'debtors' ? null : 'debtors')}
-                  className={`border-2 rounded-2xl p-4 shadow-xs flex items-center justify-between cursor-pointer transition-all hover:bg-rose-50/20 active:scale-98 select-none ${
-                    activeDetailCard === 'debtors' ? 'border-rose-500 bg-rose-50/10 shadow-sm ring-2 ring-rose-200' : 'bg-[#FFFFFF] border-slate-200'
+                  className={`group relative border border-slate-150 border-r-4 rounded-2xl p-4.5 shadow-xs flex items-center justify-between cursor-pointer transition-all active:scale-99 select-none ${
+                    activeDetailCard === 'debtors' 
+                      ? 'border-rose-500 border-r-rose-600 bg-rose-50/15 shadow-sm ring-2 ring-rose-200/50' 
+                      : 'bg-white border-r-rose-500 hover:bg-slate-50/50 hover:shadow-2xs'
                   }`}
                 >
-                  <div className="flex flex-col gap-0.5 text-right flex-1">
-                    <span className="text-xs font-extrabold text-rose-700 flex items-center gap-1">
-                      🎯 المتبقي المطلوب تحصيله
-                      <span className="text-[9px] bg-rose-100 text-rose-800 px-1.5 py-0.5 rounded font-black">ديون العملاء والمناديب 🔍</span>
+                  <div className="flex flex-col gap-1 text-right flex-1">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="text-[10px] font-black text-rose-850 bg-rose-50 border border-rose-100 rounded-md px-2 py-0.5 flex items-center gap-0.5">
+                        🎯 المتبقي المطلوب تحصيله
+                      </span>
+                      <span className="text-[9px] bg-rose-100/60 text-rose-750 px-1.5 py-0.5 rounded font-black">ديون العملاء والمناديب 🔍</span>
+                    </div>
+                    <span className="text-xl font-black text-rose-900 font-mono tracking-tight my-0.5" dir="rtl">
+                      {salesStats.totalRemaining.toLocaleString('ar-EG')} <span className="text-[10px] font-bold text-rose-600 mr-0.5">ج.م</span>
                     </span>
-                    <span className="text-xl font-black text-rose-800" dir="rtl">{salesStats.totalRemaining.toLocaleString('ar-EG')} ج.م</span>
-                    <span className="text-[10px] text-gray-400 font-bold">اضغط لجدولة الديون ومسؤوليات المناديب في الميدان</span>
                   </div>
-                  <div className="bg-rose-100 p-2.5 rounded-2xl text-rose-800">
+                  <div className={`p-2.5 rounded-xl ml-2 border transition-all ${
+                    activeDetailCard === 'debtors' 
+                      ? 'bg-rose-500 text-white border-rose-500' 
+                      : 'bg-rose-50 text-rose-600 border-rose-100 group-hover:scale-105'
+                  }`}>
                     <AlertCircle className="h-5 w-5" />
                   </div>
                 </div>
 
               </div>
 
-              {/* Dynamic Interactive Detail Accordions */}
-              {activeDetailCard === 'trips' && (
-                <div className="bg-indigo-50/60 border border-indigo-200 p-4 rounded-2xl text-right animate-fade-in flex flex-col gap-3">
-                  <div className="flex justify-between items-center border-b border-indigo-200 pb-2">
-                    <h4 className="font-extrabold text-indigo-900 text-xs">🔍 حركة وأرباح تفصيلية للمشاوير والخدمات</h4>
-                    <button onClick={() => setActiveDetailCard(null)} className="text-indigo-400 hover:text-indigo-900 text-xs font-bold bg-[#FFFFFF] px-2 py-0.5 rounded-lg border border-indigo-200 shadow-2xs">علق ✕</button>
-                  </div>
-                  <div className="grid grid-cols-3 gap-2 text-center text-[10px] sm:text-xs font-black">
-                    <div className="bg-[#FFFFFF] border border-indigo-100 p-2 rounded-xl flex flex-col">
-                      <span className="text-indigo-600 font-bold text-[9px] mb-1">ما تم تحصيله</span>
-                      <span className="text-emerald-700" dir="rtl">{(salesStats.totalTripsCollectedProfit).toLocaleString('ar-EG')} ج.م</span>
+              {/* Dynamic Interactive Detail Accordions (Modal Refactoring) */}
+              {activeDetailCard && (
+                <div className="fixed inset-0 bg-black/50 backdrop-blur-xs flex items-center justify-center z-50 p-4 animate-fade-in" dir="rtl">
+                  <div className="rounded-3xl bg-white p-6 shadow-2xl max-w-lg w-full text-right flex flex-col gap-4 relative">
+                    
+                    {/* Header with Close Button */}
+                    <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+                      <h4 className="font-extrabold text-slate-800 text-sm flex items-center gap-1.5">
+                        {activeDetailCard === 'trips' && '🚚 حركة وأرباح تفصيلية للمشاوير والخدمات'}
+                        {activeDetailCard === 'net' && '📊 تفاصيل معادلة صافي الأرباح (الصافي الفعلي)'}
+                        {activeDetailCard === 'debtors' && '🎯 المديونيات والمعلقات المالية'}
+                      </h4>
+                      <button 
+                        type="button" 
+                        onClick={() => setActiveDetailCard(null)} 
+                        className="text-slate-400 hover:text-slate-700 hover:bg-slate-100 h-7 w-7 rounded-full flex items-center justify-center font-bold transition-colors cursor-pointer"
+                      >
+                        ✕
+                      </button>
                     </div>
-                    <div className="bg-[#FFFFFF] border border-indigo-100 p-2 rounded-xl flex flex-col">
-                      <span className="text-indigo-600 font-bold text-[9px] mb-1">المستهلك/المصاريف</span>
-                      <span className="text-rose-700" dir="rtl">{(currentFilteredData.expenses.filter(e => {
-                        if (e.type === 'revenue') return false;
-                        const desc = e.description || '';
-                        return desc.includes('بنزين') || desc.includes('وقود') || desc.includes('مشوار') || desc.includes('سيارة') || desc.includes('سفر');
-                      }).reduce((sum, e) => sum + (e.amount || 0), 0)).toLocaleString('ar-EG')} ج.م</span>
-                    </div>
-                    <div className="bg-[#FFFFFF] border border-indigo-100 p-2 rounded-xl flex flex-col">
-                      <span className="text-indigo-600 font-bold text-[9px] mb-1">الصافي الفعلي</span>
-                      <span className="text-indigo-900" dir="rtl">{((salesStats.totalTripsCollectedProfit) - (currentFilteredData.expenses.filter(e => {
-                        if (e.type === 'revenue') return false;
-                        const desc = e.description || '';
-                        return desc.includes('بنزين') || desc.includes('وقود') || desc.includes('مشوار') || desc.includes('سيارة') || desc.includes('سفر');
-                      }).reduce((sum, e) => sum + (e.amount || 0), 0))).toLocaleString('ar-EG')} ج.م</span>
-                    </div>
-                  </div>
-                  <p className="text-[10px] text-indigo-700 leading-relaxed font-bold">
-                    * ملاحظة: يتم احتساب أرباح النقل والتوصيل (المشاوير) وعرضها بناء على المشاوير المحصلة مع طرح مصاريف الوقود (البنزين) لسيارة التوزيع.
-                  </p>
-                </div>
-              )}
 
-              {activeDetailCard === 'net' && (
-                <div className="bg-emerald-50/60 border border-emerald-200 p-4 rounded-2xl text-right animate-fade-in flex flex-col gap-3">
-                  <div className="flex justify-between items-center border-b border-emerald-200 pb-2">
-                    <h4 className="font-extrabold text-emerald-950 text-xs">📊 تفاصيل معادلة صافي الأرباح (الصافي الفعلي)</h4>
-                    <button onClick={() => setActiveDetailCard(null)} className="text-emerald-500 hover:text-emerald-900 text-xs font-bold bg-[#FFFFFF] px-2 py-0.5 rounded-lg border border-emerald-200 shadow-2xs">غلق ✕</button>
-                  </div>
-                  
-                  <div className="flex flex-col gap-2 text-xs font-bold">
-                    <div className="flex justify-between border-b border-dashed border-emerald-200 pb-1.5">
-                      <span className="text-slate-600">المحصل الفعلي من مبيعات العملاء (كاش)</span>
-                      <span className="text-emerald-800" dir="rtl">{(salesStats.totalCollected).toLocaleString('ar-EG')} ج.م</span>
-                    </div>
-                    <div className="flex justify-between border-b border-dashed border-emerald-200 pb-1.5">
-                      <span className="text-slate-600">يضاف: إيرادات إضافية وأرباح مشاوير محصلة</span>
-                      <span className="text-emerald-700" dir="rtl">+ {(salesStats.extraRevenues + salesStats.totalTripsCollectedProfit).toLocaleString('ar-EG')} ج.م</span>
-                    </div>
-                    <div className="flex justify-between border-b border-dashed border-emerald-200 pb-1.5">
-                      <span className="text-slate-600">يخصم: تكلفة البضاعة المباعة (COGS)</span>
-                      <span className="text-rose-700" dir="rtl">- {(salesStats.factorySoldCost).toLocaleString('ar-EG')} ج.م</span>
-                    </div>
-                    <div className="flex justify-between border-b border-dashed border-emerald-200 pb-1.5">
-                      <span className="text-slate-600">يخصم: إجمالي المصروفات الإدارية والتشغيلية المعتمدة</span>
-                      <span className="text-rose-700" dir="rtl">- {(salesStats.totalSpent).toLocaleString('ar-EG')} ج.م</span>
-                    </div>
-                    <div className="flex justify-between text-xs sm:text-sm font-black border-t border-emerald-300 pt-2 text-[#1A365D]">
-                      <span>الصافي الفعلي النهائي للربح</span>
-                      <span className="text-emerald-800" dir="rtl">{(salesStats.cumulativeNetProfit).toLocaleString('ar-EG')} ج.م</span>
-                    </div>
-                  </div>
-                  <p className="text-[10px] text-emerald-600 leading-relaxed font-semibold">
-                    * يتم احتساب "الصافي" التراكمي (جميع الدورات) = المحصل من العملاء + أرباح المشاوير + الإيرادات الاضافية - المصروفات التشغيلية.
-                  </p>
-                </div>
-              )}
-
-              {activeDetailCard === 'debtors' && (
-                <div className="bg-rose-50/70 border border-rose-200 p-4 rounded-2xl text-right animate-fade-in flex flex-col gap-3">
-                  <div className="flex justify-between items-center border-b border-rose-200 pb-2">
-                    <h4 className="font-extrabold text-rose-950 text-xs flex items-center gap-1.5">
-                      <CircleDollarSign className="h-4 w-4" />
-                      المديونيات والمعلقات المالية
-                    </h4>
-                    <button onClick={() => setActiveDetailCard(null)} className="text-rose-500 hover:text-rose-950 text-xs font-bold bg-[#FFFFFF] px-2 py-0.5 rounded-lg border border-rose-200 shadow-2xs">غلق ✕</button>
-                  </div>
-
-                  {/* Delegate Debts Summary */}
-                  <div className="flex flex-col gap-1.5 text-right">
-                    <span className="text-[11px] font-extrabold text-indigo-900 border-b border-indigo-200/40 pb-1">ديون العملاء والمناديب المعلقة:</span>
-                    <div className="flex flex-col gap-1.5 max-h-[150px] overflow-y-auto">
-                      {delegateDebtBreakdown.length === 0 ? (
-                        <p className="text-[10px] text-gray-400 text-center py-2 font-bold">لا توجد مديونيات معلقة حالياً.</p>
-                      ) : (
-                        delegateDebtBreakdown.map((del, idx) => (
-                          <div key={idx} className="flex justify-between items-center bg-[#FFFFFF] p-2 rounded-lg border border-slate-100 text-xs font-bold">
-                            <span className="text-[#1A365D]" dir="rtl">{del.name}</span>
-                            <span className="text-rose-600" dir="rtl">{del.val.toLocaleString('ar-EG')} ج.م</span>
+                    {/* Modal Content */}
+                    <div className="flex-1 overflow-y-auto max-h-[70vh] flex flex-col gap-3">
+                      {activeDetailCard === 'trips' && (
+                        <div className="flex flex-col gap-3">
+                          <div className="grid grid-cols-3 gap-2 text-center text-[10px] sm:text-xs font-black">
+                            <div className="bg-slate-50 border border-slate-150 p-2.5 rounded-xl flex flex-col">
+                              <span className="text-indigo-600 font-bold text-[9px] mb-1">ما تم تحصيله</span>
+                              <span className="text-emerald-700 font-bold text-xs" dir="rtl">{(salesStats.totalTripsCollectedProfit).toLocaleString('ar-EG')} ج.م</span>
+                            </div>
+                            <div className="bg-slate-50 border border-slate-150 p-2.5 rounded-xl flex flex-col">
+                              <span className="text-indigo-600 font-bold text-[9px] mb-1">المستهلك/المصاريف</span>
+                              <span className="text-rose-700 font-bold text-xs" dir="rtl">{(currentFilteredData.expenses.filter(e => {
+                                if (e.type === 'revenue') return false;
+                                const desc = e.description || '';
+                                return desc.includes('بنزين') || desc.includes('وقود') || desc.includes('مشوار') || desc.includes('سيارة') || desc.includes('سفر');
+                              }).reduce((sum, e) => sum + (e.amount || 0), 0)).toLocaleString('ar-EG')} ج.م</span>
+                            </div>
+                            <div className="bg-slate-50 border border-slate-150 p-2.5 rounded-xl flex flex-col">
+                              <span className="text-indigo-600 font-bold text-[9px] mb-1">الصافي الفعلي</span>
+                              <span className="text-indigo-900 font-bold text-xs" dir="rtl">{((salesStats.totalTripsCollectedProfit) - (currentFilteredData.expenses.filter(e => {
+                                if (e.type === 'revenue') return false;
+                                const desc = e.description || '';
+                                return desc.includes('بنزين') || desc.includes('وقود') || desc.includes('مشوار') || desc.includes('سيارة') || desc.includes('سفر');
+                              }).reduce((sum, e) => sum + (e.amount || 0), 0))).toLocaleString('ar-EG')} ج.م</span>
+                            </div>
                           </div>
-                        ))
+                          <p className="text-[10px] text-slate-500 leading-relaxed font-bold border-t border-slate-100 pt-2">
+                            * ملاحظة: يتم احتساب أرباح النقل والتوصيل (المشاوير) وعرضها بناء على المشاوير المحصلة مع طرح مصاريف الوقود (البنزين) لسيارة التوزيع.
+                          </p>
+                        </div>
+                      )}
+
+                      {activeDetailCard === 'net' && (
+                        <div className="flex flex-col gap-3">
+                          <div className="flex flex-col gap-2 text-xs font-bold">
+                            <div className="flex justify-between border-b border-dashed border-slate-200 pb-1.5">
+                              <span className="text-slate-500">المحصل الفعلي من مبيعات العملاء (كاش)</span>
+                              <span className="text-slate-800" dir="rtl">{(salesStats.totalCollected).toLocaleString('ar-EG')} ج.م</span>
+                            </div>
+                            <div className="flex justify-between border-b border-dashed border-slate-200 pb-1.5">
+                              <span className="text-slate-500">يضاف: إيرادات إضافية وأرباح مشاوير محصلة</span>
+                              <span className="text-emerald-700" dir="rtl">+ {(salesStats.extraRevenues + salesStats.totalTripsCollectedProfit).toLocaleString('ar-EG')} ج.م</span>
+                            </div>
+                            <div className="flex justify-between border-b border-dashed border-slate-200 pb-1.5">
+                              <span className="text-slate-500">يخصم: تكلفة البضاعة المباعة (COGS)</span>
+                              <span className="text-rose-700" dir="rtl">- {(salesStats.factorySoldCost).toLocaleString('ar-EG')} ج.م</span>
+                            </div>
+                            <div className="flex justify-between border-b border-dashed border-slate-200 pb-1.5">
+                              <span className="text-slate-500">يخصم: إجمالي المصروفات الإدارية والتشغيلية المعتمدة</span>
+                              <span className="text-rose-700" dir="rtl">- {(salesStats.totalSpent).toLocaleString('ar-EG')} ج.م</span>
+                            </div>
+                            <div className="flex justify-between text-xs sm:text-sm font-black border-t border-slate-350 pt-2 text-[#1A365D]">
+                              <span>الصافي الفعلي النهائي للربح</span>
+                              <span className="text-emerald-800" dir="rtl">{(salesStats.cumulativeNetProfit).toLocaleString('ar-EG')} ج.م</span>
+                            </div>
+                          </div>
+                          <p className="text-[10px] text-slate-500 leading-relaxed font-semibold border-t border-slate-100 pt-2">
+                            * يتم احتساب "الصافي" التراكمي = المحصل من العملاء + أرباح المشاوير + الإيرادات الاضافية - المصروفات التشغيلية.
+                          </p>
+                        </div>
+                      )}
+
+                      {activeDetailCard === 'debtors' && (
+                        <div className="flex flex-col gap-3">
+                          {/* Delegate Debts Summary */}
+                          <div className="flex flex-col gap-1.5 text-right">
+                            <span className="text-[11px] font-extrabold text-indigo-900 border-b border-indigo-200/40 pb-1">ديون العملاء والمناديب المعلقة:</span>
+                            <div className="flex flex-col gap-1.5 max-h-[150px] overflow-y-auto">
+                              {delegateDebtBreakdown.length === 0 ? (
+                                <p className="text-[10px] text-gray-400 text-center py-2 font-bold">لا توجد مديونيات معلقة حالياً.</p>
+                              ) : (
+                                delegateDebtBreakdown.map((del, idx) => (
+                                  <div key={idx} className="flex justify-between items-center bg-slate-50 p-2 rounded-lg border border-slate-150 text-xs font-bold">
+                                    <span className="text-[#1A365D]" dir="rtl">{del.name}</span>
+                                    <span className="text-rose-600" dir="rtl">{del.val.toLocaleString('ar-EG')} ج.م</span>
+                                  </div>
+                                ))
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="flex justify-between items-center border-t border-rose-200 pt-2 text-[10px] text-rose-900 font-extrabold">
+                            <span>إجمالي المديونيات:</span>
+                            <span dir="rtl">{formatNum(salesStats.totalRemaining)} ج.م</span>
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setActiveDetailCard(null);
+                              setShowDebtorsModal(true);
+                            }}
+                            className="w-full bg-[#1A365D] hover:bg-[#2B6CB0] text-[#FFFFFF] font-black text-xs py-2.5 rounded-xl shadow-xs transition-colors cursor-pointer mt-1 flex items-center justify-center gap-1.5"
+                          >
+                            <Search className="h-3.5 w-3.5" />
+                            فتح سجل العملاء المدينين والتحصيل التفصيلي
+                          </button>
+                        </div>
                       )}
                     </div>
                   </div>
-
-                  <div className="flex justify-between items-center border-t border-rose-200 pt-2 text-[10px] text-rose-900 font-extrabold">
-                    <span>إجمالي المديونيات:</span>
-                    <span dir="rtl">{formatNum(salesStats.totalRemaining)} ج.م</span>
-                  </div>
-
-                  <button
-                    onClick={() => {
-                      setActiveDetailCard(null);
-                      setShowDebtorsModal(true);
-                    }}
-                    className="w-full bg-[#1A365D] hover:bg-[#2B6CB0] text-[#FFFFFF] font-black text-xs py-2.5 rounded-xl shadow-xs transition-colors cursor-pointer mt-1 flex items-center justify-center gap-1.5"
-                  >
-                    <Search className="h-3.5 w-3.5" />
-                    فتح سجل العملاء المدينين والتحصيل التفصيلي
-                  </button>
                 </div>
               )}
 

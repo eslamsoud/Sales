@@ -362,11 +362,11 @@ export const printHTMLInNewWindow = (htmlString: string) => {
 // CSS مدمج للنافذة الجديدة (window.open)
 // ═══════════════════════════════════════════════════════════════
 export const COMPACT_PRO_CSS = `
-<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800;900&family=Tajawal:wght@400;500;700;800;900&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800;900&family=Tajawal:wght@400;500;700;800;900&family=Playfair+Display:ital,wght@0,400..900;1,400..900&display=swap" rel="stylesheet">
 <style>
   @page {
     size: A4 portrait !important;
-    margin: 15mm 12mm 15mm 12mm !important;
+    margin: 10mm 10mm 10mm 10mm !important;
   }
 
   * {
@@ -383,8 +383,10 @@ export const COMPACT_PRO_CSS = `
     overflow: visible !important;
     direction: rtl !important;
     text-align: right !important;
-    font-family: 'Tajawal', 'Segoe UI', system-ui, sans-serif !important;
+    font-family: 'Cairo', 'Tajawal', sans-serif !important;
     background-color: #ffffff !important;
+    color: #0f172a !important;
+    line-height: 1.2 !important;
   }
 
   body > div, .report-wrapper, main {
@@ -396,48 +398,298 @@ export const COMPACT_PRO_CSS = `
     padding: 0 !important;
   }
 
-  table {
-    width: 100% !important;
-    max-width: 100% !important;
-    margin: 10px auto !important;
-    border-collapse: collapse !important;
-    table-layout: fixed !important;
-    word-wrap: break-word !important;
-  }
-
-  th, td {
-    padding: 6px 8px !important;
-    font-size: 11px !important;
-    border: 1px solid #cbd5e1 !important;
-    text-align: center !important;
-  }
-
-  th {
-    background-color: #1e3a8a !important;
-    color: #ffffff !important;
-    font-weight: bold !important;
-  }
-
-  .rh, .header-card, [class*="bg-indigo-"] {
+  /* Luxurious Report Header */
+  .rh {
     width: 100% !important;
     max-width: 100% !important;
     border-radius: 12px !important;
-    padding: 16px !important;
-    margin-bottom: 20px !important;
-    background: #1e3a8a !important;
+    padding: 12px 18px !important;
+    margin-bottom: 12px !important;
+    background: linear-gradient(135deg, #0f172a 0%, #1e3a8a 100%) !important;
+    color: #ffffff !important;
+    position: relative !important;
+    overflow: hidden !important;
+    box-shadow: 0 4px 15px rgba(30, 58, 138, 0.15) !important;
+    border: 1px solid rgba(255, 255, 255, 0.08) !important;
+  }
+
+  .rh::before {
+    content: '' !important;
+    position: absolute !important;
+    top: -50% !important; left: -50% !important;
+    width: 200% !important; height: 200% !important;
+    background: radial-gradient(circle, rgba(217, 119, 6, 0.08) 0%, transparent 60%) !important;
+    pointer-events: none !important;
+  }
+
+  .rh h1 {
+    font-size: 14pt !important;
+    font-weight: 900 !important;
+    letter-spacing: 0.5px !important;
+    margin: 0 0 3px 0 !important;
+    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.2) !important;
     color: #ffffff !important;
   }
 
-  .st {
-    font-size: 13px !important;
-    font-weight: 800 !important;
-    color: #1e3a8a !important;
-    margin-top: 15px !important;
-    margin-bottom: 8px !important;
-    border-right: 4px solid #ea580c !important;
-    padding-right: 8px !important;
+  .rh .sub {
+    font-size: 9.5px !important;
+    color: #cbd5e1 !important;
+    font-weight: 700 !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.5px !important;
   }
-</style>`;
+
+  .rh .ref {
+    margin-top: 8px !important;
+    display: flex !important;
+    justify-content: flex-start !important;
+    gap: 16px !important;
+    font-size: 9px !important;
+    color: #cbd5e1 !important;
+    border-top: 1px solid rgba(255, 255, 255, 0.1) !important;
+    padding-top: 6px !important;
+  }
+
+  .rh .ref span {
+    background: rgba(255, 255, 255, 0.06) !important;
+    padding: 2px 8px !important;
+    border-radius: 8px !important;
+    border: 1px solid rgba(255, 255, 255, 0.04) !important;
+    color: #f1f5f9 !important;
+  }
+
+  /* Grid layout for cards (3 cards per line) */
+  .sg {
+    display: grid !important;
+    grid-template-columns: repeat(3, 1fr) !important;
+    gap: 6px !important;
+    margin-bottom: 12px !important;
+    width: 100% !important;
+  }
+
+  /* Luxurious Executive Card styling */
+  .sb {
+    border-radius: 10px !important;
+    border: 1px solid #e2e8f0 !important;
+    padding: 8px 10px !important;
+    box-shadow: 0 4px 12px rgba(15, 23, 42, 0.03) !important;
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 1px !important;
+    text-align: right !important;
+    position: relative !important;
+    overflow: hidden !important;
+    page-break-inside: avoid !important;
+  }
+
+  .sb::before {
+    content: '' !important;
+    position: absolute !important;
+    top: 0; right: 0; bottom: 0;
+    width: 4px !important;
+    border-radius: 0 10px 10px 0 !important;
+  }
+
+  .sb .l {
+    font-size: 9px !important;
+    font-weight: 800 !important;
+    color: #64748b !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.3px !important;
+  }
+
+  .sb .v {
+    font-size: 12pt !important;
+    font-weight: 900 !important;
+    font-family: 'monospace', 'Courier New', monospace !important;
+    line-height: 1.2 !important;
+    letter-spacing: -0.5px !important;
+  }
+
+  /* Color custom mappings (Tiers) */
+  /* Tier 1: المقبوضات والأرباح والصافي (Emerald Luxury) */
+  .sb.gr, .sb.green {
+    background: linear-gradient(180deg, #f0fdf4 0%, #dcfce7 100%) !important;
+    border-color: #bbf7d0 !important;
+  }
+  .sb.gr::before, .sb.green::before {
+    background-color: #16a34a !important;
+  }
+  .sb.gr .v, .sb.green .v {
+    color: #14532d !important;
+  }
+
+  /* Tier 2: المديونيات والمعلقات المالية (Rose Luxury) */
+  .sb.rd, .sb.red {
+    background: linear-gradient(180deg, #fef2f2 0%, #fee2e2 100%) !important;
+    border-color: #fecaca !important;
+  }
+  .sb.rd::before, .sb.red::before {
+    background-color: #dc2626 !important;
+  }
+  .sb.rd .v, .sb.red .v {
+    color: #7f1d1d !important;
+  }
+
+  /* Tier 3: المصروفات والسيارة والمشاوير (Blue Luxury) */
+  .sb.bl, .sb.blue, .sb.am, .sb.amber {
+    background: linear-gradient(180deg, #eff6ff 0%, #dbeafe 100%) !important;
+    border-color: #bfdbfe !important;
+  }
+  .sb.bl::before, .sb.blue::before, .sb.am::before, .sb.amber::before {
+    background-color: #2563eb !important;
+  }
+  .sb.bl .v, .sb.blue .v, .sb.am .v, .sb.amber .v {
+    color: #1e3a8a !important;
+  }
+
+  /* Section Title */
+  .st {
+    font-size: 11px !important;
+    font-weight: 900 !important;
+    color: #0f172a !important;
+    margin-top: 10px !important;
+    margin-bottom: 6px !important;
+    border-right: 4px solid #d97706 !important;
+    padding-right: 6px !important;
+    letter-spacing: 0.2px !important;
+  }
+
+  .st .i {
+    background-color: #d97706 !important;
+    color: white !important;
+    width: 16px !important;
+    height: 16px !important;
+    border-radius: 50% !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    font-size: 8px !important;
+    font-weight: 900 !important;
+  }
+
+  /* Luxurious Data Tables - Super Compact spacing */
+  table {
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 6px auto !important;
+    border-collapse: separate !important;
+    border-spacing: 0 !important;
+    table-layout: fixed !important;
+    word-wrap: break-word !important;
+    border-radius: 8px !important;
+    overflow: hidden !important;
+    border: 1px solid #e2e8f0 !important;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.03) !important;
+  }
+
+  th, td {
+    padding: 4px 6px !important;
+    font-size: 10px !important;
+    line-height: 1.2 !important;
+    border-bottom: 1px solid #e2e8f0 !important;
+    border-left: 1px solid #e2e8f0 !important;
+    text-align: center !important;
+    font-weight: 500 !important;
+  }
+
+  th:last-child, td:last-child {
+    border-left: none !important;
+  }
+
+  th {
+    background: linear-gradient(180deg, #1e3a8a 0%, #1e40af 100%) !important;
+    color: #ffffff !important;
+    font-weight: 800 !important;
+    font-size: 10px !important;
+    letter-spacing: 0.5px !important;
+    border-bottom: 2px solid #1d4ed8 !important;
+  }
+
+  tbody tr:last-child td {
+    border-bottom: none !important;
+  }
+
+  tbody tr:nth-child(even) {
+    background-color: #f8fafc !important;
+  }
+
+  tbody tr:hover {
+    background-color: #f1f5f9 !important;
+  }
+
+  /* Status Badges - Compact size */
+  .bd-g {
+    background: #dcfce7 !important;
+    color: #15803d !important;
+    padding: 2px 6px !important;
+    border-radius: 4px !important;
+    font-weight: 800 !important;
+    font-size: 8.5px !important;
+    border: 1px solid #bbf7d0 !important;
+    display: inline-block !important;
+    white-space: nowrap !important;
+  }
+  .bd-r {
+    background: #fee2e2 !important;
+    color: #b91c1c !important;
+    padding: 2px 6px !important;
+    border-radius: 4px !important;
+    font-weight: 800 !important;
+    font-size: 8.5px !important;
+    border: 1px solid #fecaca !important;
+    display: inline-block !important;
+    white-space: nowrap !important;
+  }
+  .bd-b {
+    background: #f1f5f9 !important;
+    color: #475569 !important;
+    padding: 2px 6px !important;
+    border-radius: 4px !important;
+    font-weight: 800 !important;
+    font-size: 8.5px !important;
+    border: 1px solid #e2e8f0 !important;
+    display: inline-block !important;
+    white-space: nowrap !important;
+  }
+
+  /* Signature Block */
+  .fs {
+    margin-top: 20px !important;
+    display: flex !important;
+    justify-content: space-between !important;
+    padding-top: 10px !important;
+    border-top: 1px dashed #cbd5e1 !important;
+    page-break-inside: avoid !important;
+  }
+
+  .sb2 {
+    text-align: center !important;
+    width: 45% !important;
+    background: #f8fafc !important;
+    border: 1px solid #e2e8f0 !important;
+    padding: 8px !important;
+    border-radius: 10px !important;
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.02) !important;
+  }
+
+  .sb2 .ti {
+    font-size: 9px !important;
+    font-weight: 900 !important;
+    color: #0f172a !important;
+    margin-bottom: 12px !important;
+  }
+
+  .sb2 .ln {
+    border-top: 1px solid #94a3b8 !important;
+    margin: 0 10px !important;
+    padding-top: 4px !important;
+    font-size: 8px !important;
+    font-weight: 700 !important;
+    color: #64748b !important;
+  }
+</style>
+`;
 
 // ═══════════════════════════════════════════════════════════════
 // انتظار تحميل الخطوط قبل رسم Canvas
