@@ -169,13 +169,13 @@ export default function CyclesArchiveSection({
                           <Printer className="h-3 w-3" /> تنزيل PDF — شهر {monthNames[parseInt(month) - 1]} {year}
                         </button>
                         {cycles.map((cycle, cycleIdx) => {
-                          const totalCyclesInMonth = cycles.length;
+                          const cycleNumber = cycles.length - cycleIdx;
                           return (
                           <details key={cycle.id} className="bg-gradient-to-r from-indigo-50 to-white border border-indigo-200 rounded-xl overflow-hidden shadow-sm">
                             <summary className="px-4 py-3 flex items-center justify-between gap-3 cursor-pointer hover:bg-indigo-100/50 transition-colors select-none">
                               <div className="flex items-center gap-2 text-xs font-bold">
                                 <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
-                                <span className="bg-indigo-600 text-white px-2 py-0.5 rounded-full text-[10px] font-black ml-1">دورة {totalCyclesInMonth - cycleIdx}</span>
+                                <span className="bg-indigo-600 text-white px-2 py-0.5 rounded-full text-[10px] font-black ml-1">دورة {cycleNumber}</span>
                                 <span className="text-indigo-900">{cycle.settledAt}</span>
                               </div>
                               <div className="flex items-center gap-3 text-[10px]">
@@ -191,7 +191,7 @@ export default function CyclesArchiveSection({
                                 <button type="button" onClick={() => downloadArchivedCycleImage(cycle)} className="bg-[#DD6B20] hover:bg-[#C05621] text-white font-extrabold text-[10px] py-1.5 px-3 rounded-lg transition-colors cursor-pointer active:scale-95 flex items-center gap-1"><Image className="h-3 w-3" /> صورة</button>
                                 <button type="button" onClick={() => { setEditingCycle(cycle); setEditData(JSON.parse(JSON.stringify(cycle))); }} className="bg-[#6366F1] hover:bg-[#4F46E5] text-white font-extrabold text-[10px] py-1.5 px-3 rounded-lg transition-colors cursor-pointer active:scale-95 flex items-center gap-1"><Edit className="h-3 w-3" /> تعديل</button>
                                 <button type="button" onClick={async () => {
-                                  const confirmed = await confirmDialog(`هل تريد رجوع الدورة رقم ${totalCyclesInMonth - cycleIdx} للدورة الحالية؟\n⚠️ سيتم حذف هذه الدورة من الأرشيف. الحمولات والدفعات ستظهر مجدداً في الحساب.`);
+                                  const confirmed = await confirmDialog(`هل تريد رجوع الدورة رقم ${cycles.length - cycleIdx} للدورة الحالية؟\n⚠️ سيتم حذف هذه الدورة من الأرشيف. الحمولات والدفعات ستظهر مجدداً في الحساب.`);
                                   if (confirmed) {
                                     try { const deletedIds = JSON.parse(localStorage.getItem('deleted_records_sys') || '[]'); deletedIds.push(cycle.id); localStorage.setItem('deleted_records_sys', JSON.stringify(deletedIds)); } catch {}
                                     setArchiveCycles(prev => { const next = prev.filter(c => c.id !== cycle.id); return next; });
@@ -244,7 +244,7 @@ export default function CyclesArchiveSection({
                                               if (isNaN(parsed) || parsed < 0) { showToast('⚠️ مبلغ غير صحيح!'); return; }
                                               const newNotes = prompt('تعديل البيان:', pay.notes || '') || pay.notes;
                                               const newRecipient = prompt('تعديل المستلم:', pay.recipient || '') || pay.recipient;
-                                              setArchiveCycles(prev => { const next = prev.map(c => { if (c.id !== cycle.id) return c; const updatedPayments = [...(c.payments || [])]; updatedPayments[i] = { ...updatedPayments[i], amount: parsed, notes: newNotes, recipient: newRecipient }; const totalPayments = updatedPayments.reduce((s: number, p: any) => s + (p.amount || 0), 0); return { ...c, payments: updatedPayments, totalAdvancePayments: totalPayments }; }); return next; });
+                                              setArchiveCycles(prev => { const next = prev.map(c => { if (c.id !== cycle.id) return c; const updatedPayments = [...(c.payments || [])]; updatedPayments[i] = { ...updatedPayments[i], amount: parsed, notes: newNotes, recipient: newRecipient }; const totalPayments = updatedPayments.reduce((s: number, p: any) => s + ((p.amount || 0) - ((p as any).appliedToCarriedDebt || 0)), 0); return { ...c, payments: updatedPayments, totalAdvancePayments: totalPayments }; }); return next; });
                                               showToast('✓ تم تعديل الدفعة في الدورة المؤرشفة!');
                                             }} className="text-indigo-600 hover:text-indigo-800 bg-white hover:bg-indigo-50 p-1 rounded border border-slate-200 cursor-pointer transition-all active:scale-95" title="تعديل هذه الدفعة"><Edit className="h-3 w-3" /></button>
                                           </td>

@@ -196,7 +196,7 @@ export default function PaymentsArchiveSection({
                       setArchiveCycles(prev => {
                         const next = prev.map(c => {
                           const updatedPayments = (c.payments || []).map((p: any) => p.id === pay.id ? { ...p, amount: newAmount, notes: editingPaymentNotes || p.notes } : p);
-                          const totalPayments = updatedPayments.reduce((s: number, p: any) => s + (p.amount || 0), 0);
+                          const totalPayments = updatedPayments.reduce((s: number, p: any) => s + ((p.amount || 0) - ((p as any).appliedToCarriedDebt || 0)), 0);
                           return { ...c, payments: updatedPayments, totalAdvancePayments: totalPayments };
                         });
                         return next;
@@ -223,7 +223,7 @@ export default function PaymentsArchiveSection({
                       setArchiveCycles(prev => {
                         const next = prev.map(c => {
                           const updatedPayments = (c.payments || []).filter((p: any) => p.id !== pay.id);
-                          const totalPayments = updatedPayments.reduce((s: number, p: any) => s + (p.amount || 0), 0);
+                          const totalPayments = updatedPayments.reduce((s: number, p: any) => s + ((p.amount || 0) - ((p as any).appliedToCarriedDebt || 0)), 0);
                           return { ...c, payments: updatedPayments, totalAdvancePayments: totalPayments };
                         });
                         return next;

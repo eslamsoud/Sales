@@ -1,4 +1,4 @@
-﻿// @ts-nocheck
+// @ts-nocheck
 import { confirmDialog, duaConfirmDialog } from '../utils/confirm';
 import { jsPDF } from 'jspdf';
 import { COMPACT_PRO_CSS, printHTMLInNewWindow } from '../utils/reportStyles';
@@ -9,7 +9,7 @@ import { COMPACT_PRO_CSS, printHTMLInNewWindow } from '../utils/reportStyles';
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { Product, FactoryLoad, CarBalance, ProductWeight, getProductWeightsFallback, Invoice, Trip, formatNum, Expense, UserAuth, getItemFactoryCost } from '../types';
-import { Truck, Plus, PackagePlus, Package, ArrowRight, History, Trash2, AlertCircle, Edit, Save, HelpCircle, FileText, Image, Scale, CirclePercent, DollarSign, Box, Clock, CheckCircle2, ShieldMinus, Wallet, Printer, Calendar, MapPin, Download, ScanLine, Archive, Landmark, RefreshCw } from 'lucide-react';
+import { Truck, Plus, PackagePlus, Package, ArrowRight, History, Trash2, AlertCircle, Edit, Save, HelpCircle, FileText, Image, Scale, CirclePercent, DollarSign, Box, Clock, CheckCircle2, ShieldMinus, Wallet, Printer, Calendar, MapPin, Download, ScanLine, Archive, Landmark, RefreshCw, ClipboardList, Receipt } from 'lucide-react';
 import { showToast } from '../utils/toast';
 import { nowEgyptISO, todayEgyptISO } from '../utils/storage';
 import SoftDeletedArchive from './SoftDeletedArchive';
@@ -30,6 +30,7 @@ interface FactoryTabProps {
   onDeleteAllProducts?: () => void;
   onAddLoad: (load: Omit<FactoryLoad, 'id'>) => void;
   onDeleteLoad: (id: string) => void;
+  onEditLoad?: (id: string, updates: Partial<Omit<FactoryLoad, 'id'>>) => void;
   onAddTrip: (trip: Omit<Trip, 'id'>) => void;
   onEditTrip: (id: string, updates: Partial<Omit<Trip, 'id'>>) => void;
   onToggleTripCollected: (id: string) => void;
@@ -48,6 +49,8 @@ interface FactoryTabProps {
   softDeleted?: any[];
   onRestoreItem?: (item: any) => void;
   onPermanentDelete?: (item: any) => void;
+  isSyncing?: boolean;
+  returns?: any[];
 }
 
 export default function FactoryTab({
@@ -62,6 +65,7 @@ export default function FactoryTab({
   onDeleteAllProducts,
   onAddLoad,
   onDeleteLoad,
+  onEditLoad,
   onAddTrip,
   onEditTrip,
   onToggleTripCollected,
@@ -79,7 +83,9 @@ export default function FactoryTab({
   onUpdateArchiveCycles,
   softDeleted = [],
   onRestoreItem,
-  onPermanentDelete
+  onPermanentDelete,
+  isSyncing = false,
+  returns = []
 }: FactoryTabProps) {
   const [activeSubTab, setActiveSubTab] = useState<'loads' | 'products' | 'previous_loads' | 'factory_account' | 'trips' | 'deleted_archive'>(() => {
     if (permittedSubTabs && permittedSubTabs.length > 0) {
@@ -182,37 +188,6 @@ export default function FactoryTab({
     return Array.from(delegatesMap.values());
   }, [factoryLoads, trips]);
 
-  const filteredLiveLoads = React.useMemo(() => {
-    return factoryLoads.filter(load => {
-      if (liveLoadDelegateFilter !== 'all') {
-        const lPhone = (load.delegatePhone || '').trim();
-        const lName = (load.delegateName || '').replace(/\s*\(.*?\)/g, '').trim();
-        const selectedDel = archiveDelegates.find(d => d.phone === liveLoadDelegateFilter || d.name === liveLoadDelegateFilter);
-        if (selectedDel) {
-          const matchPhone = selectedDel.phone !== 'مجهول' && lPhone === selectedDel.phone;
-          const matchName = lName === selectedDel.name;
-          if (!matchPhone && !matchName) return false;
-        } else {
-          return false;
-        }
-      }
-
-      const loadDateObj = new Date(load.date);
-      if (isNaN(loadDateObj.getTime())) return false;
-
-      const now = new Date();
-      if (liveLoadFilter === 'daily') return loadDateObj.getDate() === now.getDate() && loadDateObj.getMonth() === now.getMonth() && loadDateObj.getFullYear() === now.getFullYear();
-      if (liveLoadFilter === 'weekly') {
-        if (Math.abs(new Date().getTime() - loadDateObj.getTime()) / (1000 * 60 * 60 * 24) > 7) return false;
-        if (liveLoadDayFilters.length > 0) return liveLoadDayFilters.includes(new Intl.DateTimeFormat('en-US', { weekday: 'long' }).format(loadDateObj));
-        return true;
-      }
-      if (liveLoadFilter === 'monthly') return loadDateObj.getMonth() === new Date().getMonth() && loadDateObj.getFullYear() === new Date().getFullYear();
-      if (liveLoadFilter === 'custom') return (!liveLoadStartDate || load.date >= liveLoadStartDate) && (!liveLoadEndDate || load.date <= liveLoadEndDate + 'T23:59:59');
-      return true;
-    });
-  }, [factoryLoads, liveLoadFilter, liveLoadStartDate, liveLoadEndDate, liveLoadDelegateFilter, liveLoadDayFilters]);
-
   // States for Trips
   const [tripDescription, setTripDescription] = useState('');
   const [tripPrice, setTripPrice] = useState('');
@@ -253,8 +228,8 @@ export default function FactoryTab({
     }
   }, [factoryDelegateFilter]);
 
-  // Helper to check if a record belongs to the selected delegate
-  const filterByFactoryDelegate = (item: any) => {
+  // Helper to check if a record belongs to the selected delegate — memoized to stabilize downstream useMemo
+  const filterByFactoryDelegate = React.useCallback((item: any) => {
     if (!isManager) return true; // Already filtered at app level
     if (factoryDelegateFilter === 'all') return true;
     
@@ -266,38 +241,17 @@ export default function FactoryTab({
     const matchPhone = selectedDel.phone !== 'مجهول' && itemPhone === selectedDel.phone;
     const matchName = itemName === selectedDel.name;
     return matchPhone || matchName;
-  };
+  }, [isManager, factoryDelegateFilter, archiveDelegates]);
 
   // Persistent carried over debt for the factory, keyed per delegate
   const [carriedOverDebt, setCarriedOverDebt] = useState<number>(0);
   const [carriedOverDebtDate, setCarriedOverDebtDate] = useState<string>('');
 
-  useEffect(() => {
-    const key = `factory_carried_debt_sys_${currentDelegateKey}`;
-    const dateKey = `factory_carried_debt_date_sys_${currentDelegateKey}`;
-    let val = parseFloat(localStorage.getItem(key) || 'NaN');
-    if (isNaN(val)) {
-      val = parseFloat(localStorage.getItem('factory_carried_debt_sys') || '0');
-    }
-    let dateVal = localStorage.getItem(dateKey);
-    if (dateVal === null) {
-      dateVal = localStorage.getItem('factory_carried_debt_date_sys') || '';
-    }
-    setCarriedOverDebt(val);
-    setCarriedOverDebtDate(dateVal);
-  }, [currentDelegateKey]);
-
-  useEffect(() => {
-    if (currentDelegateKey) {
-      localStorage.setItem(`factory_carried_debt_sys_${currentDelegateKey}`, carriedOverDebt.toString());
-    }
-  }, [carriedOverDebt, currentDelegateKey]);
-
-  useEffect(() => {
-    if (currentDelegateKey) {
-      localStorage.setItem(`factory_carried_debt_date_sys_${currentDelegateKey}`, carriedOverDebtDate);
-    }
-  }, [carriedOverDebtDate, currentDelegateKey]);
+  const parseCairoTime = (dateStr: string): number => {
+    if (!dateStr) return 0;
+    const d = new Date(dateStr);
+    return isNaN(d.getTime()) ? 0 : d.getTime();
+  };
 
   const archiveCycles = archiveCyclesProp || [];
   const setArchiveCycles = React.useCallback((updater: any[] | ((prev: any[]) => any[])) => {
@@ -305,16 +259,76 @@ export default function FactoryTab({
     onUpdateArchiveCycles(updater);
   }, [onUpdateArchiveCycles]);
 
-  const lastArchiveTimestamp = useMemo(() => {
+  const getDelegateLastArchiveTimestamp = React.useCallback((phone: string, name: string) => {
     if (!archiveCycles || archiveCycles.length === 0) return 0;
-    const timestamps = archiveCycles
+    const cleanPhone = (phone || '').trim();
+    const cleanName = (name || '').replace(/\s*\(.*?\)/g, '').trim();
+    
+    const delegateCycles = archiveCycles.filter(c => {
+      const cPhone = (c.delegatePhone || '').trim();
+      const cName = (c.delegateName || '').replace(/\s*\(.*?\)/g, '').trim();
+      const matchPhone = cleanPhone && cPhone === cleanPhone;
+      const matchName = cleanName && cName === cleanName;
+      return matchPhone || matchName;
+    });
+
+    if (delegateCycles.length === 0) return 0;
+    const timestamps = delegateCycles
       .map(c => Number(c.id))
       .filter(t => !isNaN(t));
     if (timestamps.length === 0) return 0;
     return Math.max(...timestamps);
   }, [archiveCycles]);
 
-  const parseCairoTime = (dateStr: string): number => new Date(dateStr.replace('Z', '')).getTime();
+  const lastArchiveTimestamp = useMemo(() => {
+    if (factoryDelegateFilter && factoryDelegateFilter !== 'all') {
+      const activePhone = factoryDelegateFilter.trim();
+      const activeDel = archiveDelegates.find(d => d.phone === activePhone || d.name === factoryDelegateFilter);
+      const activeName = activeDel ? activeDel.name.replace(/\s*\(.*?\)/g, '').trim() : '';
+      return getDelegateLastArchiveTimestamp(activePhone, activeName);
+    }
+    if (!archiveCycles || archiveCycles.length === 0) return 0;
+    const allTimestamps = archiveCycles
+      .map(c => Number(c.id))
+      .filter(t => !isNaN(t));
+    if (allTimestamps.length === 0) return 0;
+    return Math.max(...allTimestamps);
+  }, [archiveCycles, factoryDelegateFilter, archiveDelegates, getDelegateLastArchiveTimestamp]);
+
+  const filteredLiveLoads = React.useMemo(() => {
+    return factoryLoads.filter(load => {
+      // لا نحذف الحمولات المؤرشفة — تبقى ظاهرة كمرجع للمناديب
+
+      if (liveLoadDelegateFilter !== 'all') {
+        const lPhone = (load.delegatePhone || '').trim();
+        const lName = (load.delegateName || '').replace(/\s*\(.*?\)/g, '').trim();
+        const selectedDel = archiveDelegates.find(d => d.phone === liveLoadDelegateFilter || d.name === liveLoadDelegateFilter);
+        if (selectedDel) {
+          const matchPhone = selectedDel.phone !== 'مجهول' && lPhone === selectedDel.phone;
+          const matchName = lName === selectedDel.name;
+          if (!matchPhone && !matchName) return false;
+        } else {
+          return false;
+        }
+      }
+
+      // لا نخفي الحمولات القديمة — تبقى ظاهرة كمرجع حتى بعد الأرشفة
+
+      const loadDateObj = new Date(load.date);
+      if (isNaN(loadDateObj.getTime())) return false;
+
+      const now = new Date();
+      if (liveLoadFilter === 'daily') return loadDateObj.getDate() === now.getDate() && loadDateObj.getMonth() === now.getMonth() && loadDateObj.getFullYear() === now.getFullYear();
+      if (liveLoadFilter === 'weekly') {
+        if (Math.abs(new Date().getTime() - loadDateObj.getTime()) / (1000 * 60 * 60 * 24) > 7) return false;
+        if (liveLoadDayFilters.length > 0) return liveLoadDayFilters.includes(new Intl.DateTimeFormat('en-US', { weekday: 'long' }).format(loadDateObj));
+        return true;
+      }
+      if (liveLoadFilter === 'monthly') return loadDateObj.getMonth() === new Date().getMonth() && loadDateObj.getFullYear() === new Date().getFullYear();
+      if (liveLoadFilter === 'custom') return (!liveLoadStartDate || load.date >= liveLoadStartDate) && (!liveLoadEndDate || load.date <= liveLoadEndDate + 'T23:59:59');
+      return true;
+    });
+  }, [factoryLoads, liveLoadFilter, liveLoadStartDate, liveLoadEndDate, liveLoadDelegateFilter, liveLoadDayFilters, archiveDelegates]);
 
   const [editingCycle, setEditingCycle] = useState<any>(null);
   const [editData, setEditData] = useState<any>(null);
@@ -355,9 +369,85 @@ export default function FactoryTab({
   const currentCycleExtraPayments = useMemo(() => {
     return extraPayments.filter(p => {
       const timeVal = p.rawDate ? parseCairoTime(p.rawDate) : 0;
-      return timeVal > lastArchiveTimestamp;
+      const t = getDelegateLastArchiveTimestamp(p.delegatePhone || '', p.delegateName || '');
+      return timeVal > t;
     });
-  }, [extraPayments, lastArchiveTimestamp]);
+  }, [extraPayments, getDelegateLastArchiveTimestamp]);
+
+  // Find the last archived cycle for the current delegate
+  const lastCycleForDelegate = useMemo(() => {
+    if (!archiveCycles || archiveCycles.length === 0) return null;
+    
+    let targetPhone = selectedDelegatePhone || '';
+    let targetName = '';
+    if (selectedDelegatePhone) {
+      const found = archiveDelegates.find(d => d.phone === selectedDelegatePhone);
+      if (found) {
+        targetPhone = found.phone;
+        targetName = found.name;
+      }
+    } else if (factoryDelegateFilter !== 'all') {
+      const found = archiveDelegates.find(d => d.phone === factoryDelegateFilter || d.name === factoryDelegateFilter);
+      if (found) {
+        targetPhone = found.phone;
+        targetName = found.name;
+      }
+    }
+    
+    const cleanTargetName = targetName.replace(/\s*\(.*?\)/g, '').trim();
+
+    const delegateCycles = archiveCycles.filter(c => {
+      const cPhone = (c.delegatePhone || '').trim();
+      const cName = (c.delegateName || '').replace(/\s*\(.*?\)/g, '').trim();
+      
+      const matchPhone = targetPhone && targetPhone !== 'مجهول' && cPhone === targetPhone;
+      const matchName = cleanTargetName && cName === cleanTargetName;
+      return matchPhone || matchName;
+    });
+    
+    if (delegateCycles.length === 0) return null;
+    return delegateCycles.sort((a, b) => Number(b.id) - Number(a.id))[0];
+  }, [archiveCycles, selectedDelegatePhone, factoryDelegateFilter, archiveDelegates]);
+
+  const lastArchivedDebt = useMemo(() => {
+    if (!lastCycleForDelegate) return 0;
+    // If the last cycle was fully settled, debt is 0 regardless of amountCarriedOver
+    if (lastCycleForDelegate.settledFully) return 0;
+    const carriedOver = Number(lastCycleForDelegate.amountCarriedOver || 0);
+    const credit = Number(lastCycleForDelegate.creditBalance || 0);
+    return carriedOver - credit;
+  }, [lastCycleForDelegate]);
+
+  const paymentsAppliedToCarriedDebt = useMemo(() => {
+    return currentCycleExtraPayments.reduce((sum, p) => sum + (Number(p.appliedToCarriedDebt) || 0), 0);
+  }, [currentCycleExtraPayments]);
+
+  useEffect(() => {
+    const key = `factory_carried_debt_sys_${currentDelegateKey}`;
+    const dateKey = `factory_carried_debt_date_sys_${currentDelegateKey}`;
+    
+    // Secure read: read from last archived cycle if available, otherwise fallback to localStorage
+    let baseDebt = lastCycleForDelegate ? lastArchivedDebt : parseFloat(localStorage.getItem(key) || '0');
+    if (isNaN(baseDebt)) baseDebt = 0;
+    
+    const currentCalculatedDebt = baseDebt - paymentsAppliedToCarriedDebt;
+    setCarriedOverDebt(currentCalculatedDebt);
+    
+    let dateVal = localStorage.getItem(dateKey) || '';
+    setCarriedOverDebtDate(dateVal);
+  }, [currentDelegateKey, lastCycleForDelegate, lastArchivedDebt, paymentsAppliedToCarriedDebt]);
+
+  useEffect(() => {
+    if (currentDelegateKey) {
+      localStorage.setItem(`factory_carried_debt_sys_${currentDelegateKey}`, carriedOverDebt.toString());
+    }
+  }, [carriedOverDebt, currentDelegateKey]);
+
+  useEffect(() => {
+    if (currentDelegateKey) {
+      localStorage.setItem(`factory_carried_debt_date_sys_${currentDelegateKey}`, carriedOverDebtDate);
+    }
+  }, [carriedOverDebtDate, currentDelegateKey]);
 
   const filteredCurrentPayments = useMemo(() => {
     return currentCycleExtraPayments.filter(pay => {
@@ -390,47 +480,81 @@ export default function FactoryTab({
     });
   }, [currentCycleExtraPayments, currentPaymentsFilter, currentPaymentsDayFilters, currentPaymentsStartDate, currentPaymentsEndDate]);
 
+  // ═══════════════════════════════════════════════════════════════════
+  // جدار حماية مزدوج صارم: فلترة موحدة للحمولات والفواتير النشطة
+  // الشرط 1: تطابق المندوب المحدد حالياً فقط (filterByFactoryDelegate)
+  // الشرط 2: تاريخ العنصر أحدث من آخر أرشفة للمندوب المحدد فقط
+  // ═══════════════════════════════════════════════════════════════════
+  const activeFilteredLoads = useMemo(() => {
+    return factoryLoads
+      .filter(filterByFactoryDelegate)
+      .filter(l => {
+        // لا نحذف الحمولات من العرض — تبقى ظاهرة كمرجع للمناديب حتى بعد الأرشفة
+        // استخدام آخر أرشفة للمندوب المحدد فقط (وليس للمندوب صاحب العنصر)
+        return parseCairoTime(l.date) > lastArchiveTimestamp;
+      });
+  }, [factoryLoads, filterByFactoryDelegate, lastArchiveTimestamp]);
+
+  // جميع حمولات المندوب (بما في ذلك المؤرشفة) — للعرض كمرجع في بيان الحمولة بالسيارة
+  const allLoadsForDisplay = useMemo(() => {
+    return factoryLoads.filter(filterByFactoryDelegate);
+  }, [factoryLoads, filterByFactoryDelegate]);
+
+  const activeFilteredInvoices = useMemo(() => {
+    return invoices
+      .filter(filterByFactoryDelegate)
+      .filter(inv => {
+        if (inv.archived || inv.isArchived || inv.archivedAt) return false;
+        return parseCairoTime(inv.date) > lastArchiveTimestamp;
+      });
+  }, [invoices, filterByFactoryDelegate, lastArchiveTimestamp]);
+
   // حساب الأرصدة الحالية في السيارة لكل صنف ووزن لعرضها في شاشة التحميل
   const weightStocks = useMemo(() => {
     const stocks: Record<string, { loaded: number; sold: number; remaining: number }> = {};
-    
+
     products.forEach(p => {
       const weights = getProductWeightsFallback(p);
       weights.forEach(w => {
         const key = `${p.id}_${w.id}`;
-        const loaded = factoryLoads
+        // Sum loaded pieces from active loads
+        const loaded = activeFilteredLoads
           .filter(l => String(l.productId).trim() === String(p.id).trim() && String(l.weightId || '').trim() === String(w.id).trim())
-          .filter(filterByFactoryDelegate)
-          .filter(l => parseCairoTime(l.date) > lastArchiveTimestamp)
           .reduce((sum, l) => sum + l.quantity, 0);
+        // Sum sold pieces from active invoices only
         let sold = 0;
-        const cycleInvoices = invoices
-          .filter(filterByFactoryDelegate)
-          .filter(inv => parseCairoTime(inv.date) > lastArchiveTimestamp);
-        cycleInvoices.forEach(inv => {
+        activeFilteredInvoices.forEach(inv => {
           inv.items.forEach(item => {
             if (String(item.productId).trim() === String(p.id).trim() && String(item.weightId || '').trim() === String(w.id).trim()) {
               sold += item.quantity;
             }
           });
         });
+        // Subtract returned quantities (returns go back to inventory)
+        let returned = 0;
+        returns.forEach(ret => {
+          if (String(ret.invoiceId || '').trim() === '') return;
+          (ret.items || []).forEach((ri: any) => {
+            if (String(ri.productId || '').trim() === String(p.id).trim() && String(ri.weightId || '').trim() === String(w.id).trim()) {
+              returned += Number(ri.quantity || 0);
+            }
+          });
+        });
         stocks[key] = {
           loaded,
-          sold,
-          remaining: Math.max(0, loaded - sold)
+          sold: sold - returned,
+          remaining: loaded - (sold - returned)
         };
       });
     });
 
-    factoryLoads
-      .filter(filterByFactoryDelegate)
-      .filter(l => parseCairoTime(l.date) > lastArchiveTimestamp)
-      .forEach(load => {
+    // Handle loads with unmatched product/weight combos
+    activeFilteredLoads.forEach(load => {
         const pid = String(load.productId).trim();
         let wid = String(load.weightId || '').trim();
         const loadSize = String((load as any).weightSize || '').trim();
 
-        // محاولة مطابقة الحجم النصي إذا كان weightId فارغاً
+        // Try to match size string if weightId is empty
         if (!wid && loadSize) {
           const prod = products.find(p => String(p.id).trim() === pid);
           if (prod) {
@@ -442,7 +566,7 @@ export default function FactoryTab({
 
         if (!wid) return;
         const key = `${pid}_${wid}`;
-        if (stocks[key]) return;
+        if (stocks[key]) return; // Already computed in the product loop above
         const prod = products.find(p => String(p.id).trim() === pid);
         if (!prod) {
           stocks[key] = { loaded: load.quantity || 0, sold: 0, remaining: load.quantity || 0 };
@@ -456,13 +580,13 @@ export default function FactoryTab({
             stocks[fallbackKey] = { loaded: load.quantity || 0, sold: 0, remaining: load.quantity || 0 };
           } else {
             stocks[fallbackKey].loaded += load.quantity || 0;
-            stocks[fallbackKey].remaining = Math.max(0, stocks[fallbackKey].loaded - stocks[fallbackKey].sold);
+            stocks[fallbackKey].remaining = stocks[fallbackKey].loaded - stocks[fallbackKey].sold;
           }
         }
       });
 
     return stocks;
-  }, [products, factoryLoads, invoices, lastArchiveTimestamp, factoryDelegateFilter]);
+  }, [products, activeFilteredLoads, activeFilteredInvoices, returns]);
 
   const [inventoryFilter, setInventoryFilter] = useState<'all' | 'daily' | 'weekly' | 'monthly' | 'custom'>('all');
   const [inventoryStartDate, setInventoryStartDate] = useState('');
@@ -479,32 +603,49 @@ export default function FactoryTab({
         const key = `${p.id}_${w.id}`;
         seenKeys.add(key);
         const unitsPerC = w.unitsPerCarton || 12;
-        const u = weightStocks[key] || { loaded: 0, sold: 0, remaining: 0 };
+
+        // Use cartonsCount from each load directly (matches loads list display)
+        const loadedC = activeFilteredLoads
+          .filter(l => String(l.productId).trim() === String(p.id).trim() && String(l.weightId || '').trim() === String(w.id).trim())
+          .reduce((sum, l) => sum + (l.cartonsCount !== undefined ? l.cartonsCount : Math.floor(l.quantity / unitsPerC)), 0);
+
+        // حساب المبيع بالقطعة ثم تحويله للكرتونة بشكل دقيق
+        let soldUnits = 0;
+        activeFilteredInvoices.forEach(inv => {
+          inv.items.forEach(item => {
+            if (String(item.productId).trim() === String(p.id).trim() && String(item.weightId || '').trim() === String(w.id).trim()) {
+              soldUnits += item.quantity;
+            }
+          });
+        });
+        // Subtract returned quantities
+        let returnedUnits = 0;
+        returns.forEach(ret => {
+          (ret.items || []).forEach((ri: any) => {
+            if (String(ri.productId || '').trim() === String(p.id).trim() && String(ri.weightId || '').trim() === String(w.id).trim()) {
+              returnedUnits += Number(ri.quantity || 0);
+            }
+          });
+        });
+        const effectiveSold = soldUnits - returnedUnits;
+        const soldC = Math.floor(effectiveSold / unitsPerC);
+
         stocks[key] = {
-          loaded: Math.floor(u.loaded / unitsPerC),
-          sold: Math.floor(u.sold / unitsPerC),
-          remaining: Math.floor(u.remaining / unitsPerC)
+          loaded: loadedC,
+          sold: soldC,
+          remaining: loadedC - soldC
         };
       });
     });
 
-    Object.keys(weightStocks).forEach(key => {
-      if (seenKeys.has(key)) return;
-      const u = weightStocks[key];
-      stocks[key] = {
-        loaded: Math.floor(u.loaded / 12),
-        sold: Math.floor(u.sold / 12),
-        remaining: Math.floor(u.remaining / 12)
-      };
-    });
-
     return stocks;
-  }, [weightStocks, products]);
+  }, [products, activeFilteredLoads, activeFilteredInvoices, returns]);
 
   const inventoryFilteredStocks = useMemo(() => {
     if (inventoryFilter === 'all') return weightStocksInCartons;
 
     const now = new Date();
+
     const isDateInRange = (dateStr: string) => {
       const d = new Date(dateStr.replace('Z', ''));
       if (isNaN(d.getTime())) return false;
@@ -526,6 +667,10 @@ export default function FactoryTab({
       return true;
     };
 
+    // Apply date range filter on top of the same shared filtered arrays
+    const dateFilteredLoads = activeFilteredLoads.filter(l => isDateInRange(l.date));
+    const dateFilteredInvoices = activeFilteredInvoices.filter(inv => isDateInRange(inv.date));
+
     const stocks: Record<string, { loaded: number; sold: number; remaining: number }> = {};
     const seenKeys = new Set<string>();
     products.forEach(p => {
@@ -534,40 +679,43 @@ export default function FactoryTab({
         const key = `${p.id}_${w.id}`;
         seenKeys.add(key);
         const unitsPerC = w.unitsPerCarton || 12;
-        const loaded = factoryLoads
-          .filter(l => String(l.productId).trim() === String(p.id).trim() && String(l.weightId || '').trim() === String(w.id).trim() && isDateInRange(l.date))
-          .filter(filterByFactoryDelegate)
-          .filter(l => parseCairoTime(l.date) > lastArchiveTimestamp)
-          .reduce((sum, l) => sum + l.quantity, 0);
-        let sold = 0;
-        invoices
-          .filter(filterByFactoryDelegate)
-          .filter(inv => parseCairoTime(inv.date) > lastArchiveTimestamp)
-          .forEach(inv => {
-            if (!isDateInRange(inv.date)) return;
-            inv.items.forEach(item => {
+        const loadedC = dateFilteredLoads
+          .filter(l => String(l.productId).trim() === String(p.id).trim() && String(l.weightId || '').trim() === String(w.id).trim())
+          .reduce((sum, l) => sum + (l.cartonsCount !== undefined ? l.cartonsCount : Math.floor(l.quantity / unitsPerC)), 0);
+        let soldUnits = 0;
+        dateFilteredInvoices.forEach(inv => {
+          inv.items.forEach(item => {
             if (String(item.productId).trim() === String(p.id).trim() && String(item.weightId || '').trim() === String(w.id).trim()) {
-                sold += item.quantity;
-              }
-            });
+              soldUnits += item.quantity;
+            }
           });
+        });
+        // Subtract returned quantities in date range
+        const dateFilteredReturns = returns.filter(r => isDateInRange(r.date));
+        let returnedUnits = 0;
+        dateFilteredReturns.forEach(ret => {
+          (ret.items || []).forEach((ri: any) => {
+            if (String(ri.productId || '').trim() === String(p.id).trim() && String(ri.weightId || '').trim() === String(w.id).trim()) {
+              returnedUnits += Number(ri.quantity || 0);
+            }
+          });
+        });
+        const effectiveSold = soldUnits - returnedUnits;
+        const soldC = Math.floor(effectiveSold / unitsPerC);
         stocks[key] = {
-          loaded: Math.floor(loaded / unitsPerC),
-          sold: Math.floor(sold / unitsPerC),
-          remaining: Math.floor((loaded - sold) / unitsPerC)
+          loaded: loadedC,
+          sold: soldC,
+          remaining: loadedC - soldC
         };
       });
     });
-    factoryLoads
-      .filter(filterByFactoryDelegate)
-      .filter(l => parseCairoTime(l.date) > lastArchiveTimestamp)
-      .filter(l => isDateInRange(l.date))
-      .forEach(load => {
+
+    // Handle unmatched loads
+    dateFilteredLoads.forEach(load => {
         const pid = String(load.productId).trim();
         let wid = String(load.weightId || '').trim();
         const loadSize = String((load as any).weightSize || '').trim();
 
-        // محاولة مطابقة الحجم النصي إذا كان weightId فارغاً
         if (!wid && loadSize) {
           const prod = products.find(p => String(p.id).trim() === pid);
           if (prod) {
@@ -581,26 +729,34 @@ export default function FactoryTab({
         const key = `${pid}_${wid}`;
         if (seenKeys.has(key)) return;
         const unitsPerC = 12;
-        const loaded = load.quantity || 0;
-        let sold = 0;
-        invoices
-          .filter(filterByFactoryDelegate)
-          .filter(inv => parseCairoTime(inv.date) > lastArchiveTimestamp)
-          .forEach(inv => {
-            if (!isDateInRange(inv.date)) return;
+        const loadedC = load.cartonsCount !== undefined ? load.cartonsCount : Math.floor((load.quantity || 0) / unitsPerC);
+        let soldUnits = 0;
+        dateFilteredInvoices.forEach(inv => {
             inv.items.forEach(item => {
               if (String(item.productId).trim() === pid && String(item.weightId || '').trim() === wid) {
-                sold += item.quantity;
+                soldUnits += item.quantity;
               }
             });
           });
-        stocks[key] = { loaded: Math.floor(loaded / unitsPerC), sold: Math.floor(sold / unitsPerC), remaining: Math.floor((loaded - sold) / unitsPerC) };
+        let returnedUnits2 = 0;
+        dateFilteredReturns.forEach(ret => {
+          (ret.items || []).forEach((ri: any) => {
+            if (String(ri.productId || '').trim() === pid && String(ri.weightId || '').trim() === wid) {
+              returnedUnits2 += Number(ri.quantity || 0);
+            }
+          });
+        });
+        const effectiveSold2 = soldUnits - returnedUnits2;
+        const soldC = Math.floor(effectiveSold2 / unitsPerC);
+        stocks[key] = { loaded: loadedC, sold: soldC, remaining: loadedC - soldC };
       });
     return stocks;
-  }, [weightStocksInCartons, products, factoryLoads, invoices, inventoryFilter, inventoryStartDate, inventoryEndDate, inventoryDayFilters, lastArchiveTimestamp, factoryDelegateFilter]);
+  }, [weightStocksInCartons, products, activeFilteredLoads, activeFilteredInvoices, returns, inventoryFilter, inventoryStartDate, inventoryEndDate, inventoryDayFilters]);
 
   const filteredLoads = React.useMemo(() => {
     return factoryLoads.filter(load => {
+      if (load.archived || load.isArchived || load.archivedAt) return false;
+
       if (archiveDelegateFilter !== 'all') {
         const lPhone = (load.delegatePhone || '').trim();
         const lName = (load.delegateName || '').replace(/\s*\(.*?\)/g, '').trim();
@@ -636,14 +792,14 @@ export default function FactoryTab({
         return loadDateObj.getMonth() === now.getMonth() && loadDateObj.getFullYear() === now.getFullYear();
       }
       if (archiveFilter === 'custom') {
-        const dStr = load.date.split('T')[0]; // "YYYY-MM-DD" or similar
+        const dStr = load.date.split('T')[0];
         if (archiveStartDate && dStr < archiveStartDate) return false;
         if (archiveEndDate && dStr > archiveEndDate) return false;
         return true;
       }
       return true;
     });
-  }, [factoryLoads, archiveFilter, archiveStartDate, archiveEndDate, archiveDelegateFilter, archiveDayFilters]);
+  }, [factoryLoads, archiveFilter, archiveStartDate, archiveEndDate, archiveDelegateFilter, archiveDayFilters, archiveDelegates]);
 
   const groupedLoadsByDate = React.useMemo(() => {
     const groups: Record<string, typeof filteredLoads> = {};
@@ -691,6 +847,11 @@ export default function FactoryTab({
         arr.sort((a: any, b: any) => {
           const da = (a.settledAt || '').replace(/[٠-٩]/g, (c: string) => String.fromCharCode(c.charCodeAt(0) - 0x0660 + 48)).replace(/\u200F/g, '');
           const db = (b.settledAt || '').replace(/[٠-٩]/g, (c: string) => String.fromCharCode(c.charCodeAt(0) - 0x0660 + 48)).replace(/\u200F/g, '');
+          const dateA = new Date(da);
+          const dateB = new Date(db);
+          if (!isNaN(dateA.getTime()) && !isNaN(dateB.getTime())) {
+            return dateB.getTime() - dateA.getTime();
+          }
           return db.localeCompare(da);
         });
       });
@@ -815,14 +976,35 @@ export default function FactoryTab({
   const [newPaymentAmount, setNewPaymentAmount] = useState('');
   const [newPaymentNotes, setNewPaymentNotes] = useState('');
   const [newPaymentRecipient, setNewPaymentRecipient] = useState('');
+  const [newPaymentLocation, setNewPaymentLocation] = useState('');
   const [settleRecipient, setSettleRecipient] = useState('');
   const [settleMethod, setSettleMethod] = useState('');
+  const [settlePaymentAmount, setSettlePaymentAmount] = useState('');
+  const [settleReason, setSettleReason] = useState('');
+  const [settleReceiptLocation, setSettleReceiptLocation] = useState('');
   const [showSettleModal, setShowSettleModal] = useState(false);
-  const [waiveRecipient, setWaiveRecipient] = useState('');
-  const [waiveNotes, setWaiveNotes] = useState('');
-  const [waiveReason, setWaiveReason] = useState('');
-  const [showWaiveModal, setShowWaiveModal] = useState(false);
+  const [showArchiveConfirmModal, setShowArchiveConfirmModal] = useState(false);
+  const [archiveConfirmRecipient, setArchiveConfirmRecipient] = useState('');
+  const [archiveConfirmNotes, setArchiveConfirmNotes] = useState('');
+  const [archiveConfirmLocation, setArchiveConfirmLocation] = useState('');
+  const [showEditLoadModal, setShowEditLoadModal] = useState(false);
+  const [editLoadTarget, setEditLoadTarget] = useState<FactoryLoad | null>(null);
+  const [editLoadNewCartons, setEditLoadNewCartons] = useState('');
+  const [showReceiptModal, setShowReceiptModal] = useState(false);
+  const [receiptData, setReceiptData] = useState<{amount: number; method: string; recipient: string; location: string; date: string; notes: string} | null>(null);
+  const [lastActiveReceipt, setLastActiveReceipt] = useState<any | null>(null);
   
+  useEffect(() => {
+    // Reset edit/popup states on tab changes to prevent modal leaks
+    setShowSettleModal(false);
+    setShowArchiveConfirmModal(false);
+    setShowEditLoadModal(false);
+    setIsAddingProduct(false);
+    setEditingPaymentId(null);
+    setEditingCycle(null);
+    setEditData(null);
+  }, [activeSubTab]);
+
   // Product form states
   const [isAddingProduct, setIsAddingProduct] = useState(false); // Controls visibility of the add form
   const [prodName, setProdName] = useState('');
@@ -1161,57 +1343,15 @@ export default function FactoryTab({
     if (isManager) setLoadDelegatePhone('');
   };
 
-  // Compute live cumulative totals of the current total factory load invoice (حساب المصنع والكميات المحملة)
-  const factoryInvoiceSummary = useMemo(() => {
-    let grandFactoryCost = 0;
-    let totalCrates = 0;
-    let totalIndividualItems = 0;
-
-    const itemsList = factoryLoads.map(load => {
-      const prod = products.find(p => String(p.id).trim() === String(load.productId).trim());
-      const weights = prod ? getProductWeightsFallback(prod) : [];
-      const weight = weights.find(w => String(w.id).trim() === String(load.weightId).trim()) || weights[0];
-
-      const cartons = load.cartonsCount !== undefined ? load.cartonsCount : Math.floor(load.quantity / (weight?.unitsPerCarton || 12));
-      const loose = load.looseUnitsCount !== undefined ? load.looseUnitsCount : (load.quantity % (weight?.unitsPerCarton || 12));
-      const cartonPrice = load.cartonPrice !== undefined ? Number(load.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) : 0) || 0);
-      const factoryPricePerUnit = load.unitPrice !== undefined ? Number(load.unitPrice) : (Number(weight?.factoryPricePerUnit) || (prod ? Number(prod.price) : 0) || 0);
-
-      const subtotal = (cartons * cartonPrice) + (loose * factoryPricePerUnit);
-
-      grandFactoryCost += subtotal;
-      totalCrates += cartons;
-      totalIndividualItems += load.quantity;
-
-      return {
-        id: load.id,
-        productName: prod ? prod.name : ((load as any).productName || 'صنف مجهول'),
-        size: weight ? weight.size : ((load as any).weightSize || 'حجم عادي'),
-        cartons,
-        loose,
-        cartonPrice,
-        subtotal,
-        date: load.date,
-        warehouseKeeper: load.warehouseKeeper,
-        advanceAmount: load.advanceAmount,
-        delegateName: load.delegateName
-      };
-    });
-
-    return {
-      itemsList,
-      grandFactoryCost,
-      totalCrates,
-      totalIndividualItems
-    };
-  }, [factoryLoads, products]);
-
   const filteredLiveLoadsSummary = useMemo(() => {
     let grandFactoryCost = 0;
     let totalCrates = 0;
     let totalIndividualItems = 0;
 
-    const itemsList = filteredLiveLoads.map(load => {
+    // ✅ حساب فقط الحمولات غير المؤرشفة — الحمولات المؤرشفة تظهر في الواجهة بالوسم لكن لا تدخل الحساب
+    const activeLoads = filteredLiveLoads.filter(l => !l.archived && !l.isArchived && !l.archivedAt);
+
+    const itemsList = activeLoads.map(load => {
       const prod = products.find(p => String(p.id).trim() === String(load.productId).trim());
       const weights = prod ? getProductWeightsFallback(prod) : [];
       const weight = weights.find(w => String(w.id).trim() === String(load.weightId).trim()) || weights[0];
@@ -1247,7 +1387,13 @@ export default function FactoryTab({
     };
   }, [filteredLiveLoads, products]);
 
+  // ✅ الحمولات النشطة فقط (بدون المؤرشفة) — للمعاملات الحسابية
+  const activeNonArchivedLoads = useMemo(() => {
+    return filteredLiveLoads.filter(l => !l.archived && !l.isArchived && !l.archivedAt);
+  }, [filteredLiveLoads]);
+
   // Group load items by product so they are listed with each product name written only once
+  // ✅ تجميع الحمولات — يعتمد فقط على المصفوفات النشطة المفلترة (وليس على المصفوفات الخام)
   const groupedFactoryLoads = useMemo(() => {
     const groups: Record<string, {
       productId: string;
@@ -1268,7 +1414,7 @@ export default function FactoryTab({
       }>
     }> = {};
 
-    factoryLoads.forEach(load => {
+    activeFilteredLoads.forEach(load => {
       const prod = products.find(p => String(p.id).trim() === String(load.productId).trim());
       const weights = prod ? getProductWeightsFallback(prod) : [];
       const weight = weights.find(w => String(w.id).trim() === String(load.weightId).trim()) || weights[0];
@@ -1305,7 +1451,7 @@ export default function FactoryTab({
     });
 
     return Object.values(groups);
-  }, [factoryLoads, products]);
+  }, [activeFilteredLoads, products]);
 
   // DRAW AND DOWNLOAD DYNAMIC STATEMENT OF SELLING LOADS AS HIGH-FIDELITY PDF
   const handlePrintCurrentLoads = () => {
@@ -1755,6 +1901,175 @@ export default function FactoryTab({
     link.click();
   };
 
+  const handlePrintReceiptPDF = (receipt: any) => {
+    if (!receipt) return;
+    const html = `
+      <!DOCTYPE html>
+      <html dir="rtl" lang="ar">
+      <head>
+        <title>إيصال تصفية حساب المصنع</title>
+        <style>
+          body { font-family: 'Tajawal', sans-serif; padding: 30px; direction: rtl; text-align: right; background-color: #fff; color: #1e293b; }
+          .container { max-width: 500px; margin: 0 auto; border: 2px solid #e2e8f0; padding: 25px; border-radius: 16px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); }
+          .header { text-align: center; border-bottom: 2px dashed #cbd5e1; padding-bottom: 15px; margin-bottom: 20px; }
+          .header h2 { margin: 0; color: #1e3a8a; font-size: 22px; }
+          .header p { margin: 5px 0 0; font-size: 12px; color: #64748b; }
+          .row { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #f1f5f9; padding: 10px 0; font-size: 14px; }
+          .row:last-child { border-bottom: none; }
+          .label { color: #64748b; font-weight: bold; }
+          .value { color: #0f172a; font-weight: 800; }
+          .amount { font-size: 18px; color: #16a34a; font-weight: 900; }
+          .footer { text-align: center; margin-top: 25px; font-size: 11px; color: #94a3b8; border-top: 1px solid #e2e8f0; padding-top: 15px; }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h2>إيصال تصفية حساب المصنع</h2>
+            <p>سند صرف للمورد وإغلاق الدورة</p>
+          </div>
+          <div class="row">
+            <span class="label">المبلغ المسدد عند التصفية:</span>
+            <span class="value amount">${formatNum(receipt.amount)} ج.م</span>
+          </div>
+          <div class="row">
+            <span class="label">طريقة السداد:</span>
+            <span class="value">${receipt.method}</span>
+          </div>
+          <div class="row">
+            <span class="label">المستلم:</span>
+            <span class="value">${receipt.recipient}</span>
+          </div>
+          <div class="row">
+            <span class="label">مكان الاستلام:</span>
+            <span class="value">📍 ${receipt.location}</span>
+          </div>
+          <div class="row">
+            <span class="label">المبلغ المتبقي المرحل:</span>
+            <span class="value text-rose-600">${formatNum(receipt.amountCarriedOver || 0)} ج.م</span>
+          </div>
+          <div class="row">
+            <span class="label">التاريخ والوقت:</span>
+            <span class="value">${receipt.date}</span>
+          </div>
+          <div class="row">
+            <span class="label">البيان والسبب:</span>
+            <span class="value">${receipt.settlementReason || receipt.notes || ''}</span>
+          </div>
+          <div class="footer">
+            تم إصدار هذا الإيصال تلقائياً عبر نظام إدارة المبيعات — ${new Date().toLocaleDateString('ar-EG')}
+          </div>
+        </div>
+        <script>
+          window.onload = function() { window.print(); }
+        </script>
+      </body>
+      </html>
+    `;
+    printHTMLInNewWindow(html);
+  };
+
+  const handleDownloadReceiptAsImage = (receipt: any) => {
+    if (!receipt) return;
+    
+    const W = 450;
+    const H = 480;
+    const { canvas, ctx, dpr } = setupHiDPICanvas(W, H);
+    
+    // Draw background
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, W, H);
+    
+    // Draw border
+    ctx.strokeStyle = '#e2e8f0';
+    ctx.lineWidth = 4;
+    ctx.strokeRect(10, 10, W - 20, H - 20);
+    
+    ctx.textAlign = 'right';
+    
+    // Draw header text (centered)
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#1e3a8a';
+    ctx.font = 'bold 20px system-ui, sans-serif';
+    ctx.fillText('إيصال تصفية حساب المصنع', W / 2, 45);
+    ctx.fillStyle = '#64748b';
+    ctx.font = '12px system-ui, sans-serif';
+    ctx.fillText('سند صرف للمورد وإغلاق الدورة', W / 2, 65);
+    
+    // Draw dashed separator line
+    ctx.strokeStyle = '#cbd5e1';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([5, 5]);
+    ctx.beginPath();
+    ctx.moveTo(25, 80);
+    ctx.lineTo(W - 25, 80);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    
+    let y = 115;
+    const drawReceiptRow = (label: string, value: string, isAmount = false) => {
+      ctx.textAlign = 'right';
+      ctx.fillStyle = '#64748b';
+      ctx.font = 'bold 13px system-ui, sans-serif';
+      ctx.fillText(label, W - 30, y);
+      
+      ctx.textAlign = 'left';
+      if (isAmount) {
+        ctx.fillStyle = '#16a34a';
+        ctx.font = 'black 16px system-ui, sans-serif';
+      } else {
+        ctx.fillStyle = '#0f172a';
+        ctx.font = 'bold 13px system-ui, sans-serif';
+      }
+      ctx.fillText(value, 30, y);
+      
+      // Draw light horizontal separator line
+      ctx.strokeStyle = '#f1f5f9';
+      ctx.beginPath();
+      ctx.moveTo(25, y + 15);
+      ctx.lineTo(W - 25, y + 15);
+      ctx.stroke();
+      
+      y += 40;
+    };
+    
+    drawReceiptRow('المبلغ المسدد عند التصفية:', `${formatNum(receipt.amount)} ج.م`, true);
+    drawReceiptRow('طريقة السداد:', receipt.method);
+    drawReceiptRow('المستلم:', receipt.recipient);
+    drawReceiptRow('مكان الاستلام:', `📍 ${receipt.location}`);
+    drawReceiptRow('المبلغ المتبقي المرحل:', `${formatNum(receipt.amountCarriedOver || 0)} ج.م`);
+    drawReceiptRow('التاريخ والوقت:', receipt.date);
+    
+    // Reason needs word wrapping if it's long
+    ctx.textAlign = 'right';
+    ctx.fillStyle = '#64748b';
+    ctx.font = 'bold 13px system-ui, sans-serif';
+    ctx.fillText('البيان والسبب:', W - 30, y);
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#0f172a';
+    ctx.font = 'bold 12px system-ui, sans-serif';
+    const reasonText = receipt.settlementReason || receipt.notes || '';
+    if (reasonText.length > 30) {
+      ctx.fillText(reasonText.substring(0, 30), 30, y);
+      ctx.fillText(reasonText.substring(30), 30, y + 18);
+    } else {
+      ctx.fillText(reasonText, 30, y);
+    }
+    
+    // Draw footer
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = '10px system-ui, sans-serif';
+    ctx.fillText(`تم التصدير من نظام إدارة المبيعات — ${new Date().toLocaleDateString('ar-EG')}`, W / 2, H - 35);
+    
+    // Download image
+    const dataUrl = canvas.toDataURL('image/png');
+    const link = document.createElement('a');
+    link.download = `إيصال_تصفية_حساب_${Date.now()}.png`;
+    link.href = dataUrl;
+    link.click();
+  };
+
   const exportFactoryLedgerAsPDF = () => {
     const selectedDel = archiveDelegates.find(d => d.phone === factoryDelegateFilter || d.name === factoryDelegateFilter);
     const delegateHeader = selectedDel ? `<div style="display:inline-block;background:#e0e7ff;color:#3730a3;padding:4px 16px;border-radius:20px;font-size:12px;font-weight:700;margin-top:8px;">المندوب: ${selectedDel.name} ${selectedDel.phone !== 'مجهول' ? `(${selectedDel.phone})` : ''}</div>` : '';
@@ -1796,26 +2111,29 @@ export default function FactoryTab({
 
         <div class="sg">
           <div class="sb bl">
-            <div class="l">حساب المصنع (المحمل)</div>
-            <div class="v">${totalFactoryBalanceDetails.totalWithdrawnValue.toLocaleString('ar-EG')} <span style="font-size:10px">ج.م</span></div>
+            <div class="l">حساب المصنع (المحمل - كلي)</div>
+            <div class="v">${totalFactoryBalanceDetails.totalLoadedAllTime.toLocaleString('ar-EG')} <span style="font-size:10px">ج.م</span></div>
           </div>
           <div class="sb gr">
-            <div class="l">إجمالي المسدد</div>
-            <div class="v">${totalFactoryBalanceDetails.totalAdvancePayments.toLocaleString('ar-EG')} <span style="font-size:10px">ج.م</span></div>
+            <div class="l">إجمالي المسدد (كل الدورات)</div>
+            <div class="v">${(totalFactoryBalanceDetails.totalAllPayments || totalFactoryBalanceDetails.totalAdvancePayments).toLocaleString('ar-EG')} <span style="font-size:10px">ج.م</span></div>
           </div>
-          ${totalFactoryBalanceDetails.netRemainingDueToFactory > 0 ? `
+          ${(() => {
+            const allTimeRemaining = totalFactoryBalanceDetails.totalLoadedAllTime - (totalFactoryBalanceDetails.totalAllPayments || totalFactoryBalanceDetails.totalAdvancePayments) - totalFactoryBalanceDetails.totalWaivedAmount;
+            if (allTimeRemaining > 0) { return `
           <div class="sb rd">
             <div class="l">المتبقي للمصنع</div>
-            <div class="v">${totalFactoryBalanceDetails.netRemainingDueToFactory.toLocaleString('ar-EG')} <span style="font-size:10px">ج.م</span></div>
-          </div>` : totalFactoryBalanceDetails.netRemainingDueToFactory === 0 ? `
+            <div class="v">${allTimeRemaining.toLocaleString('ar-EG')} <span style="font-size:10px">ج.م</span></div>
+          </div>`; } else if (allTimeRemaining === 0) { return `
           <div class="sb gr">
             <div class="l">المتبقي للمصنع</div>
             <div class="v" style="color:#16a34a">مسوى ✔️</div>
-          </div>` : `
+          </div>`; } else { return `
           <div class="sb pu">
             <div class="l">رصيد دائن لصالحنا</div>
-            <div class="v">${Math.abs(totalFactoryBalanceDetails.netRemainingDueToFactory).toLocaleString('ar-EG')} <span style="font-size:10px">ج.م</span></div>
-          </div>`}
+            <div class="v">${Math.abs(allTimeRemaining).toLocaleString('ar-EG')} <span style="font-size:10px">ج.م</span></div>
+          </div>`; }
+          })()}
         </div>
 
         <div class="st"><span class="i">1</span> تفاصيل البضاعة (المحمل - المبيع - المتبقي)</div>
@@ -1907,16 +2225,21 @@ export default function FactoryTab({
           <tbody>
             <tr>
               <td style="font-weight:700">إجمالي قيمة المحمل من المصنع</td>
-              <td style="text-align:center; font-weight:800; font-family:'Tajawal',monospace">${totalFactoryBalanceDetails.totalWithdrawnValue.toLocaleString('ar-EG')}</td>
+              <td style="text-align:center; font-weight:800; font-family:'Tajawal',monospace">${totalFactoryBalanceDetails.totalLoadedAllTime.toLocaleString('ar-EG')}</td>
             </tr>
             <tr>
               <td>إجمالي المستحق (المبيع بسعر المصنع)</td>
               <td style="text-align:center; font-weight:700; font-family:'Tajawal',monospace">${totalSoldValuePdf.toLocaleString('ar-EG')}</td>
             </tr>
             <tr>
-              <td style="font-weight:700; color:#15803d">إجمالي المسدد والمقدمات</td>
-              <td style="text-align:center; font-weight:800; color:#15803d; font-family:'Tajawal',monospace">${totalFactoryBalanceDetails.totalAdvancePayments.toLocaleString('ar-EG')}</td>
+              <td style="font-weight:700; color:#15803d">إجمالي المسدد والمقدمات (كل الدورات)</td>
+              <td style="text-align:center; font-weight:800; color:#15803d; font-family:'Tajawal',monospace">${(totalFactoryBalanceDetails.totalAllPayments || totalFactoryBalanceDetails.totalAdvancePayments).toLocaleString('ar-EG')}</td>
             </tr>
+            ${totalFactoryBalanceDetails.totalWaivedAmount > 0 ? `
+            <tr>
+              <td style="color:#d97706">إجمالي المبالغ المتنازل عنها</td>
+              <td style="text-align:center; font-weight:700; color:#d97706; font-family:'Tajawal',monospace">${totalFactoryBalanceDetails.totalWaivedAmount.toLocaleString('ar-EG')}</td>
+            </tr>` : ''}
             ${carriedOverDebt > 0 ? `
             <tr>
               <td style="color:#dc2626">دين من دورة سابقة</td>
@@ -1955,12 +2278,11 @@ export default function FactoryTab({
     
     const filteredLoads = factoryLoads
       .filter(filterByFactoryDelegate)
-      .filter(l => parseCairoTime(l.date) > lastArchiveTimestamp);
+      .filter(l => {
+        if (l.archived || l.isArchived || l.archivedAt) return false;
+        return parseCairoTime(l.date) > lastArchiveTimestamp;
+      });
       
-    const filteredInvoices = invoices
-      .filter(filterByFactoryDelegate)
-      .filter(inv => parseCairoTime(inv.date) > lastArchiveTimestamp);
-
     // Calculate total loaded costs from factoryLoads
     filteredLoads.forEach(load => {
       const prod = products.find(p => String(p.id).trim() === String(load.productId).trim());
@@ -1974,35 +2296,6 @@ export default function FactoryTab({
       const subtotal = (cartons * cartonPrice) + (loose * unitPrice);
       rawLoadedValue += subtotal;
       currentAdvances += load.advanceAmount ?? 0;
-    });
-
-    // Calculate total sold items from invoices matching our products list
-    let totalSoldValue = 0; // إجمالي قيمة المبيعات للعملاء
-    let totalSoldFactoryValue = 0; // إجمالي قيمة المبيعات بسعر المصنع (المستحق للمصنع)
-    const soldCounts: Record<string, { cartons: number, units: number, value: number, factoryValue: number }> = {}; // weightId -> counts
-
-    filteredInvoices.forEach(inv => {
-      inv.items.forEach(item => {
-        const prod = products.find(p => String(p.id).trim() === String(item.productId).trim());
-        if (!prod) return;
-        const weights = getProductWeightsFallback(prod);
-        const weight = weights.find(w => String(w.id).trim() === String(item.weightId).trim());
-        if (!weight) return;
-
-        const key = item.weightId || 'raw_' + item.productId;
-        const current = soldCounts[key] || { cartons: 0, units: 0, value: 0, factoryValue: 0 };
-        const upc = weight.unitsPerCarton || 12;
-        current.units += item.quantity;
-        current.cartons += item.quantity / upc;
-        current.value += item.finalPrice * item.quantity;
-        const factoryCartonPrice = Number(weight.cartonPriceFromFactory) || Number(prod.price) || (Number(weight.factoryPricePerUnit) || 0);
-        const factoryUnitPrice = factoryCartonPrice / upc;
-        current.factoryValue += (item.quantity / upc) * factoryCartonPrice;
-        soldCounts[key] = current;
-
-        totalSoldValue += item.finalPrice * item.quantity;
-        totalSoldFactoryValue += (item.quantity / upc) * factoryCartonPrice;
-      });
     });
 
     // المدين = إجمالي قيمة البضاعة المحملة من المصنع بسعر المصنع (كل ما تم سحبه من المصنع)
@@ -2020,33 +2313,45 @@ export default function FactoryTab({
       rawLoadedValue,
       totalWithdrawnValue,
       totalAdvancePayments,
-      totalSoldValue,
-      totalSoldFactoryValue,
       netRemainingDueToFactory,
-      soldCounts,
       manualPaymentsSum,
       currentAdvances
     };
-  }, [factoryLoads, products, invoices, carriedOverDebt, currentCycleExtraPayments, factoryDelegateFilter, isManager, lastArchiveTimestamp]);
+  }, [factoryLoads, products, carriedOverDebt, currentCycleExtraPayments, filterByFactoryDelegate, lastArchiveTimestamp]);
 
-  // ═══════════════════════════════════════════════════════════════
-  // الرصيد الكلي للمصنع (بدون فلتر مندوب) — لضمان أي سداد يُحسب على الرصيد الكلي
-  // ═══════════════════════════════════════════════════════════════
   const totalFactoryPayments = useMemo(() => {
+    // Use lastArchiveTimestamp as cycle boundary for payments/expenses
+    // Safely handle expenses without delegate info (they'd get t=0 and pass everything)
     return expenses
       .filter(e => e.category === 'سداد للمصنع' || e.type === 'factory_payment')
+      .filter(filterByFactoryDelegate)
       .filter(e => {
+        if (e.archived || e.isArchived || e.archivedAt) return false;
         const timeVal = e.date ? parseCairoTime(e.date) : 0;
+        if (factoryDelegateFilter === 'all') {
+          const ePhone = (e.delegatePhone || '').trim();
+          const eName = (e.delegateName || '').trim();
+          if (!ePhone && !eName) {
+            // No delegate info — use the global cycle boundary
+            return timeVal > lastArchiveTimestamp;
+          }
+          const t = getDelegateLastArchiveTimestamp(ePhone, eName);
+          return timeVal > t;
+        }
         return timeVal > lastArchiveTimestamp;
       });
-  }, [expenses, lastArchiveTimestamp]);
+  }, [expenses, getDelegateLastArchiveTimestamp, factoryDelegateFilter, lastArchiveTimestamp]);
 
   const totalFactoryBalanceDetails = useMemo(() => {
     let rawLoadedValue = 0;
     let currentAdvances = 0;
 
     const allLoads = factoryLoads
-      .filter(l => parseCairoTime(l.date) > lastArchiveTimestamp);
+      .filter(filterByFactoryDelegate)
+      .filter(l => {
+        if (l.archived || l.isArchived || l.archivedAt) return false;
+        return parseCairoTime(l.date) > lastArchiveTimestamp;
+      });
 
     allLoads.forEach(load => {
       const prod = products.find(p => String(p.id).trim() === String(load.productId).trim());
@@ -2064,18 +2369,32 @@ export default function FactoryTab({
 
     const totalWithdrawnValue = rawLoadedValue;
 
-    const allPaymentsSum = totalFactoryPayments.reduce((sum, p) => {
-      let parsed = p;
+    // ✅ مدفوعات الدورة الحالية فقط (لحساب المتبقي)
+    const currentPaymentsSum = totalFactoryPayments.reduce((sum, p) => {
+      let parsed: any = p;
       try { parsed = JSON.parse(p.description || '{}'); } catch {}
       const applied = (parsed && parsed.appliedToCarriedDebt) || 0;
       return sum + (p.amount - applied);
     }, 0);
 
-    const totalAdvancePayments = currentAdvances + allPaymentsSum;
+    const totalAdvancePayments = currentAdvances + currentPaymentsSum;
     const netRemainingDueToFactory = totalWithdrawnValue - totalAdvancePayments + carriedOverDebt;
 
-    return { rawLoadedValue, totalWithdrawnValue, totalAdvancePayments, netRemainingDueToFactory };
-  }, [factoryLoads, products, totalFactoryPayments, carriedOverDebt, lastArchiveTimestamp]);
+    // ✅ إجمالي المدفوعات من جميع الدورات (للاستعراض فقط)
+    const archivedLoadedTotal = archiveCycles.reduce((sum, cycle) => {
+      return sum + (cycle.rawLoadedValue || cycle.totalWithdrawnValue || 0);
+    }, 0);
+    const archivedPaymentsTotal = archiveCycles.reduce((sum, cycle) => {
+      return sum + (cycle.totalAdvancePayments || 0);
+    }, 0);
+    const totalWaivedAmount = archiveCycles.reduce((sum, cycle) => {
+      return sum + (cycle.waivedAmount || 0);
+    }, 0);
+    const totalAllPayments = totalAdvancePayments + archivedPaymentsTotal;
+    const totalLoadedAllTime = totalWithdrawnValue + archivedLoadedTotal;
+
+    return { rawLoadedValue, totalWithdrawnValue, totalAdvancePayments, netRemainingDueToFactory, currentAdvances, totalAllPayments, archivedLoadedTotal, archivedPaymentsTotal, totalLoadedAllTime, totalWaivedAmount };
+  }, [factoryLoads, products, totalFactoryPayments, carriedOverDebt, filterByFactoryDelegate, lastArchiveTimestamp, archiveCycles]);
 
   // Filters for the withdrawn goods visual component (Box 1 in Factory Account)
   const [accountLoadsFilter, setAccountLoadsFilter] = useState<'all' | 'daily' | 'weekly' | 'monthly' | 'custom'>('all');
@@ -2084,12 +2403,9 @@ export default function FactoryTab({
   const [accountLoadsDayFilters, setAccountLoadsDayFilters] = useState<string[]>([]);
 
   const filteredAccountLoads = React.useMemo(() => {
-    return factoryLoads.filter(load => {
-      if (!filterByFactoryDelegate(load)) return false;
+    return activeFilteredLoads.filter(load => {
       const loadDateObj = new Date(load.date);
       if (isNaN(loadDateObj.getTime())) return false;
-      const loadTime = loadDateObj.getTime();
-      if (loadTime <= lastArchiveTimestamp) return false;
       const now = new Date();
       if (accountLoadsFilter === 'daily') return loadDateObj.toDateString() === now.toDateString();
       if (accountLoadsFilter === 'weekly') {
@@ -2108,7 +2424,7 @@ export default function FactoryTab({
       }
       return true;
     });
-  }, [factoryLoads, accountLoadsFilter, accountLoadsStartDate, accountLoadsEndDate, accountLoadsDayFilters, factoryDelegateFilter, isManager, lastArchiveTimestamp]);
+  }, [activeFilteredLoads, accountLoadsFilter, accountLoadsStartDate, accountLoadsEndDate, accountLoadsDayFilters]);
 
   const accountLoadsSummary = useMemo(() => {
     const totals: Record<string, { loaded: number; sold: number; remaining: number; loadedValue: number; soldValue: number; remainingValue: number; storedProductName?: string; storedWeightSize?: string }> = {};
@@ -2138,24 +2454,15 @@ export default function FactoryTab({
       const splitIdx = key.indexOf('_');
       const prodId = key.substring(0, splitIdx);
       const weightId = key.substring(splitIdx + 1);
-      const stock = weightStocks[key] || { loaded: 0, sold: 0, remaining: 0 };
+      const stock = weightStocksInCartons[key] || { loaded: 0, sold: 0, remaining: 0 };
       const prod = products.find(p => String(p.id).trim() === String(prodId).trim());
       const weights = prod ? getProductWeightsFallback(prod) : [];
       const weight = weights.find(w => String(w.id).trim() === String(weightId).trim());
-      const unitsPerCarton = weight?.unitsPerCarton || 12;
       const cartonPrice = weight ? (Number(weight.cartonPriceFromFactory) || Number(prod?.price || 0)) : 0;
-      const unitPrice = weight ? (Number(weight.factoryPricePerUnit) || Number(prod?.price || 0)) : 0;
-      // stock.sold و stock.remaining بالقطعة — تحويل إلى كرتونة + باقي
-      const soldFullCartons = Math.floor(stock.sold / unitsPerCarton);
-      const soldLoose = stock.sold % unitsPerCarton;
-      const soldValue = (soldFullCartons * cartonPrice) + (soldLoose * unitPrice);
-      const remFullCartons = Math.floor(stock.remaining / unitsPerCarton);
-      const remLoose = stock.remaining % unitsPerCarton;
-      const remainingValue = (remFullCartons * cartonPrice) + (remLoose * unitPrice);
-      totals[key].sold = soldFullCartons;
-      totals[key].remaining = remFullCartons;
-      totals[key].soldValue = soldValue;
-      totals[key].remainingValue = remainingValue;
+      totals[key].sold = stock.sold;
+      totals[key].remaining = stock.remaining;
+      totals[key].soldValue = stock.sold * cartonPrice;
+      totals[key].remainingValue = stock.remaining * cartonPrice;
     });
 
     const prod = (pid: string) => products.find(p => String(p.id).trim() === String(pid).trim());
@@ -2181,7 +2488,7 @@ export default function FactoryTab({
         unitsPerCarton
       };
     });
-  }, [filteredAccountLoads, products, weightStocks]);
+  }, [filteredAccountLoads, products, weightStocksInCartons]);
 
   // فلترة بيانات المبيعات لنفس الفترة الزمنية المستخدمة في حركة البضاعة المسحوبة
   const filteredSoldCounts = useMemo(() => {
@@ -2208,10 +2515,7 @@ export default function FactoryTab({
       return true;
     };
 
-    const filtered = invoices
-      .filter(filterByFactoryDelegate)
-      .filter(inv => parseCairoTime(inv.date) > lastArchiveTimestamp)
-      .filter(inv => isDateInRange(inv.date));
+    const filtered = activeFilteredInvoices.filter(inv => isDateInRange(inv.date));
 
     const counts: Record<string, { cartons: number; units: number; value: number; factoryValue: number }> = {};
     filtered.forEach(inv => {
@@ -2221,7 +2525,7 @@ export default function FactoryTab({
         const weights = getProductWeightsFallback(prod);
         const weight = weights.find(w => String(w.id).trim() === String(item.weightId).trim());
         if (!weight) return;
-        const key = item.weightId || 'raw_' + item.productId;
+        const key = `${item.productId}_${item.weightId || 'raw_' + item.productId}`;
         const current = counts[key] || { cartons: 0, units: 0, value: 0, factoryValue: 0 };
         const upc = weight.unitsPerCarton || 12;
         current.units += item.quantity;
@@ -2233,10 +2537,13 @@ export default function FactoryTab({
       });
     });
     return counts;
-  }, [invoices, products, accountLoadsFilter, accountLoadsStartDate, accountLoadsEndDate, accountLoadsDayFilters, factoryDelegateFilter, isManager, lastArchiveTimestamp]);
+  }, [activeFilteredInvoices, products, accountLoadsFilter, accountLoadsStartDate, accountLoadsEndDate, accountLoadsDayFilters]);
 
   const allAccountLoadsForExport = useMemo(() => {
-    const allLoads = factoryLoads.filter(filterByFactoryDelegate).filter(l => !l.archivedAt);
+    const allLoads = factoryLoads.filter(filterByFactoryDelegate).filter(l => {
+      if (l.archived || l.isArchived || l.archivedAt) return false;
+      return parseCairoTime(l.date) > lastArchiveTimestamp;
+    });
     const totals: Record<string, { loaded: number; sold: number; remaining: number; loadedValue: number; soldValue: number; remainingValue: number; storedProductName?: string; storedWeightSize?: string }> = {};
 
     allLoads.forEach(load => {
@@ -2307,7 +2614,7 @@ export default function FactoryTab({
         unitsPerCarton
       };
     });
-  }, [factoryLoads, products, weightStocks, factoryDelegateFilter, isManager]);
+  }, [factoryLoads, products, weightStocks, filterByFactoryDelegate, lastArchiveTimestamp]);
 
   const exportAccountLoads = (format: 'png' | 'pdf') => {
     const list = allAccountLoadsForExport;
@@ -2522,10 +2829,7 @@ export default function FactoryTab({
   useEffect(() => {
     const activeDebt = factoryBalanceDetails.netRemainingDueToFactory;
     if (activeDebt <= 0) {
-      if (carriedOverDebt > 0) {
-        setCarriedOverDebt(0);
-      }
-      // Keep negative carriedOverDebt (credit balance) — don't clear it
+      // Do NOT clear carriedOverDebt here — it persists to the next cycle via archive
       if (carriedOverDebtDate) {
         setCarriedOverDebtDate('');
       }
@@ -2534,7 +2838,7 @@ export default function FactoryTab({
         setCarriedOverDebtDate(new Date().toLocaleDateString('ar-EG'));
       }
     }
-  }, [factoryBalanceDetails.netRemainingDueToFactory, carriedOverDebtDate, carriedOverDebt]);
+  }, [factoryBalanceDetails.netRemainingDueToFactory, carriedOverDebtDate]);
 
   // Auto-archive when remaining balance becomes exactly 0 (after payment settles it)
   const prevNetRemainingRef = React.useRef(totalFactoryBalanceDetails.netRemainingDueToFactory);
@@ -2543,16 +2847,20 @@ export default function FactoryTab({
     const curr = totalFactoryBalanceDetails.netRemainingDueToFactory;
     prevNetRemainingRef.current = curr;
 
+    const finalPhone = selectedDelegatePhone || factoryDelegateFilter || currentUser?.phone || '';
+    const finalName = selectedDelegatePhone ? (archiveDelegates.find(d => d.phone === selectedDelegatePhone)?.name || currentUser?.name || 'مجهول') : (factoryDelegateFilter ? (archiveDelegates.find(d => d.phone === factoryDelegateFilter || d.name === factoryDelegateFilter)?.name || 'مجهول') : 'مجهول');
+    const t = getDelegateLastArchiveTimestamp(finalPhone, finalName);
+
     // Only trigger when transitioning from > 0 to exactly 0
     if (prev > 0 && curr === 0 && !isArchiving) {
-      const hasLoads = factoryLoads.filter(l => parseCairoTime(l.date) > lastArchiveTimestamp).length > 0;
+      const hasLoads = activeFilteredLoads.length > 0;
       const hasPayments = totalFactoryPayments.length > 0;
       if (hasLoads || hasPayments) {
         showToast("✅ الحساب المتبقي صفر! جاري ترحيل الدورة تلقائياً للأرشيف...");
         setTimeout(async () => {
           setIsArchiving(true);
           try {
-            const currentLoads = factoryLoads.filter(l => parseCairoTime(l.date) > lastArchiveTimestamp).map(l => {
+            const currentLoads = activeFilteredLoads.map(l => {
               const prod = products.find(p => String(p.id).trim() === String(l.productId).trim());
               const weights = prod ? getProductWeightsFallback(prod) : [];
               const weight = weights.find(w => String(w.id).trim() === String(l.weightId).trim());
@@ -2573,12 +2881,17 @@ export default function FactoryTab({
               try { parsed = JSON.parse(p.description || '{}'); } catch {}
               return {
                 id: p.id, amount: p.amount, date: p.date, notes: parsed.notes || '',
-                recipient: parsed.recipient || '', delegateName: p.delegateName || '',
+                recipient: parsed.recipient || '', location: parsed.location || '', delegateName: p.delegateName || '',
                 delegatePhone: p.delegatePhone || '', appliedToCarriedDebt: parsed.appliedToCarriedDebt || 0
               };
             });
             const rawSum = currentLoads.reduce((s, l) => s + l.subtotal, 0);
-            const totalPaidAuto = currentPayments.reduce((s, p) => s + p.amount, 0);
+            const currentAdvancesSum = currentLoads.reduce((s: number, l: any) => s + (l.advanceAmount ?? 0), 0);
+            const totalPaidAuto = currentAdvancesSum + currentPayments.reduce((s, p) => s + (p.amount - ((p as any).appliedToCarriedDebt || 0)), 0);
+            const cycleCollected = activeFilteredInvoices.reduce((sum: number, inv: any) => sum + (inv.paidAmount !== undefined ? inv.paidAmount : (inv.totalAfterDiscount || 0)), 0);
+            const cycleTripsCollected = (trips || []).filter((t: any) => t.collected && parseCairoTime(t.date) > lastArchiveTimestamp).reduce((sum: number, t: any) => sum + (t.price || 0), 0);
+            const cycleExtraRevenues = (expenses || []).filter((e: any) => e.type === 'revenue' && parseCairoTime(e.date) > lastArchiveTimestamp).reduce((sum: number, e: any) => sum + (e.amount || 0), 0);
+            const cycleExpenses = (expenses || []).filter((e: any) => e.type !== 'revenue' && e.category !== 'سداد للمصنع' && e.type !== 'factory_payment' && parseCairoTime(e.date) > lastArchiveTimestamp).reduce((sum: number, e: any) => sum + (e.amount || 0), 0);
             const newCycle = {
               id: Date.now().toString(),
               settledAt: new Date().toLocaleDateString('ar-EG') + ' ' + new Date().toLocaleTimeString('ar-EG'),
@@ -2587,9 +2900,18 @@ export default function FactoryTab({
               rawLoadedValue: rawSum,
               totalWithdrawnValue: totalFactoryBalanceDetails.totalWithdrawnValue,
               totalAdvancePayments: totalPaidAuto,
+              collectedAmount: cycleCollected,
+              tripsCollected: cycleTripsCollected,
+              extraRevenues: cycleExtraRevenues,
+              cycleExpenses: cycleExpenses,
               creditBalance: 0,
               carriedOverDebtAtTime: carriedOverDebt,
-              settledFully: true
+              settledFully: true,
+              amountPaidInSettlement: totalPaidAuto,
+              amountCarriedOver: 0,
+              settlementReason: 'تسوية تلقائية — الحساب = صفر',
+              delegatePhone: finalPhone,
+              delegateName: finalName
             };
             setArchiveCycles(prev => {
               const next = [...prev, newCycle];
@@ -2599,15 +2921,24 @@ export default function FactoryTab({
             setCarriedOverDebt(0);
             setCarriedOverDebtDate('');
 
+            const newReceipt = {
+              amount: totalPaidAuto,
+              method: 'تلقائي',
+              recipient: 'أمين المخزن',
+              location: 'المصنع',
+              date: new Date().toLocaleDateString('ar-EG') + ' ' + new Date().toLocaleTimeString('ar-EG'),
+              notes: 'تسوية تلقائية — الحساب = صفر',
+              amountCarriedOver: 0,
+              settlementReason: 'تسوية تلقائية — الحساب = صفر'
+            };
+            setLastActiveReceipt(newReceipt);
+
             if (onArchiveFactoryCycle) {
-              const finalPhone = selectedDelegatePhone || factoryDelegateFilter || currentUser?.phone || '';
-              const finalName = selectedDelegatePhone ? (archiveDelegates.find(d => d.phone === selectedDelegatePhone)?.name || currentUser?.name || 'مجهول') : (factoryDelegateFilter ? (archiveDelegates.find(d => d.phone === factoryDelegateFilter || d.name === factoryDelegateFilter)?.name || 'مجهول') : 'مجهول');
               onArchiveFactoryCycle(finalPhone, finalName);
             } else {
-              const loadsToArchive = factoryLoads.filter(l => parseCairoTime(l.date) > lastArchiveTimestamp);
-              for (const load of loadsToArchive) { onDeleteLoad(load.id); }
+              // لا نحذف الحمولات — تبقى ظاهرة كمرجع للمناديب
               const currentExpenses = expenses.filter(e =>
-                (e.category === 'سداد للمصنع' || e.type === 'factory_payment') && parseCairoTime(e.date) > lastArchiveTimestamp);
+                (e.category === 'سداد للمصنع' || e.type === 'factory_payment') && filterByFactoryDelegate(e) && parseCairoTime(e.date) > lastArchiveTimestamp && !(e.archived || e.isArchived || e.archivedAt));
               for (const exp of currentExpenses) { onDeleteExpense(exp.id); }
             }
             showToast("✓ تم ترحيل الدورة تلقائياً للأرشيف!");
@@ -2903,7 +3234,7 @@ export default function FactoryTab({
       ctx.fillText(`${netRemainingDueToFactory.toLocaleString('ar-EG')} ج.م`, leftBoxX + leftBoxW / 2, netCenterY);
       ctx.font = '12px system-ui, sans-serif';
       ctx.fillStyle = '#dc2626';
-      ctx.fillText('يجب سداد المبلغ أعلاه', leftBoxX + leftBoxW / 2, netCenterY + 28);
+      ctx.fillText('يجب سداد المتبقي للمصنع', leftBoxX + leftBoxW / 2, netCenterY + 28);
     } else if (netRemainingDueToFactory === 0) {
       ctx.fillStyle = '#059669';
       ctx.font = 'bold 28px system-ui, sans-serif';
@@ -2964,8 +3295,13 @@ export default function FactoryTab({
     const loadsTableH = loads.length > 0 ? 36 + loads.length * loadRowH + 36 : 50;
     const summaryRowH = 36;
     const bottomBoxH = Math.max(pays.length * payRowH + 100, 180);
+    // قسم الإيرادات والمصروفات + تفاصيل الترحيل
+    const hasCycleData = (cycle.collectedAmount || 0) > 0 || (cycle.tripsCollected || 0) > 0 || (cycle.extraRevenues || 0) > 0 || (cycle.cycleExpenses || 0) > 0;
+    const hasSettlement = (cycle.amountPaidInSettlement || 0) > 0 || (cycle.amountCarriedOver || 0) > 0 || cycle.settlementReason;
+    const cycleDataSectionH = hasCycleData ? 130 : 0;
+    const settlementSectionH = hasSettlement ? 110 : 0;
     const footerH = 70;
-    const totalH = headerH + 10 + loadsTableH + summaryRowH + 15 + bottomBoxH + footerH + 40;
+    const totalH = headerH + 10 + loadsTableH + summaryRowH + 15 + cycleDataSectionH + settlementSectionH + bottomBoxH + footerH + 40;
 
     const canvas = document.createElement('canvas');
     const TARGET_W = 3840;
@@ -3097,6 +3433,102 @@ export default function FactoryTab({
     ctx.fillText(`${formatNum(totalLoadValue)} ج.م`, colTotal, y + 24);
     y += summaryRowH + 15;
 
+    // ── قسم الإيرادات والمصروفات ──
+    if (hasCycleData) {
+      roundRect(ctx, colX, y, tableW, cycleDataSectionH - 10, 6);
+      ctx.fillStyle = '#f0fdf4';
+      ctx.fill();
+      ctx.strokeStyle = '#16a34a';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+
+      ctx.fillStyle = '#16a34a';
+      ctx.fillRect(colX, y, tableW, 28);
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 12px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('إيرادات ومصروفات الدورة', colX + tableW / 2, y + 19);
+
+      let cdY = y + 38;
+      const cdLeftX = colX + tableW / 2 + 10;
+      const cdRightX = colX + 20;
+
+      const drawCycleRow = (label: string, value: number, color: string, x: number, yy: number) => {
+        ctx.fillStyle = '#475569';
+        ctx.font = '11px system-ui, sans-serif';
+        ctx.textAlign = 'right';
+        ctx.fillText(label, x + tableW / 2 - 30, yy);
+        ctx.fillStyle = color;
+        ctx.font = 'bold 12px system-ui, sans-serif';
+        ctx.textAlign = 'left';
+        ctx.fillText(`${formatNum(value)} ج.م`, x + 20, yy);
+      };
+
+      if ((cycle.collectedAmount || 0) > 0) {
+        drawCycleRow('محصل من العملاء', cycle.collectedAmount, '#0d7c5f', cdRightX, cdY);
+        drawCycleRow('مشاوير محصلة', cycle.tripsCollected || 0, '#0d7c5f', cdLeftX, cdY);
+        cdY += 22;
+      } else if ((cycle.tripsCollected || 0) > 0) {
+        drawCycleRow('مشاوير محصلة', cycle.tripsCollected || 0, '#0d7c5f', cdRightX, cdY);
+        cdY += 22;
+      }
+      if ((cycle.extraRevenues || 0) > 0) {
+        drawCycleRow('إيرادات إضافية', cycle.extraRevenues, '#0d7c5f', cdRightX, cdY);
+        cdY += 22;
+      }
+      if ((cycle.cycleExpenses || 0) > 0) {
+        drawCycleRow('مصروفات تشغيلية', cycle.cycleExpenses, '#dc2626', cdRightX, cdY);
+        cdY += 22;
+      }
+
+      y += cycleDataSectionH;
+    }
+
+    // ── قسم تفاصيل الترحيل ──
+    if (hasSettlement) {
+      roundRect(ctx, colX, y, tableW, settlementSectionH - 10, 6);
+      ctx.fillStyle = '#fef3c7';
+      ctx.fill();
+      ctx.strokeStyle = '#d97706';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+
+      ctx.fillStyle = '#d97706';
+      ctx.fillRect(colX, y, tableW, 28);
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 12px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('تفاصيل الترحيل', colX + tableW / 2, y + 19);
+
+      let stY = y + 38;
+      if ((cycle.amountPaidInSettlement || 0) > 0) {
+        ctx.fillStyle = '#0d7c5f';
+        ctx.font = 'bold 12px system-ui, sans-serif';
+        ctx.textAlign = 'right';
+        ctx.fillText('المبلغ المسدد عند الإغلاق:', colX + tableW - 20, stY);
+        ctx.textAlign = 'left';
+        ctx.fillText(`${formatNum(cycle.amountPaidInSettlement)} ج.م`, colX + 20, stY);
+        stY += 22;
+      }
+      if ((cycle.amountCarriedOver || 0) > 0) {
+        ctx.fillStyle = '#d97706';
+        ctx.font = 'bold 12px system-ui, sans-serif';
+        ctx.textAlign = 'right';
+        ctx.fillText('المبلغ المرحل للدورة القادمة:', colX + tableW - 20, stY);
+        ctx.textAlign = 'left';
+        ctx.fillText(`${formatNum(cycle.amountCarriedOver)} ج.م`, colX + 20, stY);
+        stY += 22;
+      }
+      if (cycle.settlementReason) {
+        ctx.fillStyle = '#475569';
+        ctx.font = '11px system-ui, sans-serif';
+        ctx.textAlign = 'right';
+        ctx.fillText(`السبب: ${cycle.settlementReason}`, colX + tableW - 20, stY);
+      }
+
+      y += settlementSectionH;
+    }
+
     // ── Bottom two boxes ──
     const boxGap = 15;
     const rightBoxW = (tableW - boxGap) * 0.55;
@@ -3192,7 +3624,7 @@ export default function FactoryTab({
       ctx.textAlign = 'center';
       ctx.fillText(`${formatNum(netRemaining)} ج.م`, leftBoxX + leftBoxW / 2, netCenterY);
       ctx.font = '12px system-ui, sans-serif';
-      ctx.fillText('يجب سداد المبلغ أعلاه', leftBoxX + leftBoxW / 2, netCenterY + 28);
+      ctx.fillText(cycle.settlementReason || 'يجب سداد المبلغ أعلاه', leftBoxX + leftBoxW / 2, netCenterY + 28);
     } else if (netRemaining === 0) {
       ctx.fillStyle = '#059669';
       ctx.font = 'bold 28px system-ui, sans-serif';
@@ -3284,6 +3716,27 @@ export default function FactoryTab({
           <span>${formatNum(totalLoadValue)} ج.م</span>
         </div>
 
+        ${(cycle.collectedAmount || 0) > 0 || (cycle.tripsCollected || 0) > 0 || (cycle.extraRevenues || 0) > 0 || (cycle.cycleExpenses || 0) > 0 ? `
+        <div style="background:#f0fdf4;border:2px solid #16a34a;border-radius:12px;padding:14px;margin-bottom:14px">
+          <div style="font-weight:800;font-size:13px;color:#16a34a;text-align:center;margin-bottom:10px">إيرادات ومصروفات الدورة</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:11px">
+            ${cycle.collectedAmount ? `<div style="display:flex;justify-content:space-between;background:white;padding:8px;border-radius:6px;border:1px solid #bbf7d0"><span style="color:#475569">محصل من العملاء</span><span style="color:#0d7c5f;font-weight:800">${formatNum(cycle.collectedAmount)} ج.م</span></div>` : ''}
+            ${cycle.tripsCollected ? `<div style="display:flex;justify-content:space-between;background:white;padding:8px;border-radius:6px;border:1px solid #bbf7d0"><span style="color:#475569">مشاوير محصلة</span><span style="color:#0d7c5f;font-weight:800">${formatNum(cycle.tripsCollected)} ج.م</span></div>` : ''}
+            ${cycle.extraRevenues ? `<div style="display:flex;justify-content:space-between;background:white;padding:8px;border-radius:6px;border:1px solid #bbf7d0"><span style="color:#475569">إيرادات إضافية</span><span style="color:#0d7c5f;font-weight:800">${formatNum(cycle.extraRevenues)} ج.م</span></div>` : ''}
+            ${cycle.cycleExpenses ? `<div style="display:flex;justify-content:space-between;background:white;padding:8px;border-radius:6px;border:1px solid #fecaca"><span style="color:#475569">مصروفات تشغيلية</span><span style="color:#dc2626;font-weight:800">${formatNum(cycle.cycleExpenses)} ج.م</span></div>` : ''}
+          </div>
+        </div>` : ''}
+
+        ${(cycle.amountPaidInSettlement || 0) > 0 || (cycle.amountCarriedOver || 0) > 0 || cycle.settlementReason ? `
+        <div style="background:#fef3c7;border:2px solid #d97706;border-radius:12px;padding:14px;margin-bottom:14px">
+          <div style="font-weight:800;font-size:13px;color:#d97706;text-align:center;margin-bottom:10px">تفاصيل الترحيل</div>
+          <div style="display:flex;flex-direction:column;gap:6px;font-size:11px">
+            ${cycle.amountPaidInSettlement ? `<div style="display:flex;justify-content:space-between;background:white;padding:8px;border-radius:6px;border:1px solid #fde68a"><span style="color:#475569">المبلغ المسدد عند الإغلاق</span><span style="color:#0d7c5f;font-weight:800">${formatNum(cycle.amountPaidInSettlement)} ج.م</span></div>` : ''}
+            ${cycle.amountCarriedOver ? `<div style="display:flex;justify-content:space-between;background:white;padding:8px;border-radius:6px;border:1px solid #fde68a"><span style="color:#475569">المبلغ المرحل للدورة القادمة</span><span style="color:#d97706;font-weight:800">${formatNum(cycle.amountCarriedOver)} ج.م</span></div>` : ''}
+            ${cycle.settlementReason ? `<div style="background:white;padding:8px;border-radius:6px;border:1px solid #fde68a;color:#475569;text-align:center"><strong>السبب:</strong> ${cycle.settlementReason}</div>` : ''}
+          </div>
+        </div>` : ''}
+
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px">
           <div style="border:2px solid #1e3a5f;border-radius:12px;overflow:hidden">
             <div class="tt" style="padding:8px 12px;font-weight:800;font-size:12px;text-align:center">سجل الدفعات المستلمة</div>
@@ -3305,7 +3758,7 @@ export default function FactoryTab({
             <div class="tt" style="padding:8px 12px;font-weight:800;font-size:12px;text-align:center">صافي المستحق (المتبقي)</div>
             <div style="padding:12px;min-height:100px;background:#f8fafc;display:flex;flex-direction:column;align-items:center;justify-content:center">
               <div style="font-size:28px;font-weight:900;margin:8px 0;color:${netColor}">${netRemaining === 0 ? '٠.٠٠ ج.م' : `${formatNum(Math.abs(netRemaining))} ج.م`}</div>
-              <div style="font-size:11px;font-weight:700;color:${netColor}">${netRemaining > 0 ? 'يجب سداد المبلغ أعلاه' : netRemaining === 0 ? '*تم تسوية الحساب بالكامل*' : 'رصيد دائن لصالحنا'}</div>
+              <div style="font-size:11px;font-weight:700;color:${netColor}">${netRemaining > 0 ? (cycle.settlementReason || 'يجب سداد المبلغ أعلاه') : netRemaining === 0 ? '*تم تسوية الحساب بالكامل*' : 'رصيد دائن لصالحنا'}</div>
               ${settleNote}
             </div>
           </div>
@@ -3376,6 +3829,25 @@ export default function FactoryTab({
             <span>إجمالي المسحوبات</span>
             <span>${formatNum(totalLoadValue)} ج.م</span>
           </div>
+          ${(cycle.collectedAmount || 0) > 0 || (cycle.tripsCollected || 0) > 0 || (cycle.extraRevenues || 0) > 0 || (cycle.cycleExpenses || 0) > 0 ? `
+          <div style="background:#f0fdf4;border:2px solid #16a34a;border-radius:10px;padding:12px;margin-bottom:8px">
+            <div style="font-weight:800;font-size:12px;color:#16a34a;text-align:center;margin-bottom:8px">إيرادات ومصروفات الدورة</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:10px">
+              ${cycle.collectedAmount ? `<div style="background:white;padding:6px;border-radius:4px;border:1px solid #bbf7d0;display:flex;justify-content:space-between"><span>محصل من العملاء</span><span style="color:#0d7c5f;font-weight:800">${formatNum(cycle.collectedAmount)} ج.م</span></div>` : ''}
+              ${cycle.tripsCollected ? `<div style="background:white;padding:6px;border-radius:4px;border:1px solid #bbf7d0;display:flex;justify-content:space-between"><span>مشاوير محصلة</span><span style="color:#0d7c5f;font-weight:800">${formatNum(cycle.tripsCollected)} ج.م</span></div>` : ''}
+              ${cycle.extraRevenues ? `<div style="background:white;padding:6px;border-radius:4px;border:1px solid #bbf7d0;display:flex;justify-content:space-between"><span>إيرادات إضافية</span><span style="color:#0d7c5f;font-weight:800">${formatNum(cycle.extraRevenues)} ج.م</span></div>` : ''}
+              ${cycle.cycleExpenses ? `<div style="background:white;padding:6px;border-radius:4px;border:1px solid #fecaca;display:flex;justify-content:space-between"><span>مصروفات تشغيلية</span><span style="color:#dc2626;font-weight:800">${formatNum(cycle.cycleExpenses)} ج.م</span></div>` : ''}
+            </div>
+          </div>` : ''}
+          ${(cycle.amountPaidInSettlement || 0) > 0 || (cycle.amountCarriedOver || 0) > 0 || cycle.settlementReason ? `
+          <div style="background:#fef3c7;border:2px solid #d97706;border-radius:10px;padding:12px;margin-bottom:8px">
+            <div style="font-weight:800;font-size:12px;color:#d97706;text-align:center;margin-bottom:6px">تفاصيل الترحيل</div>
+            <div style="display:flex;flex-direction:column;gap:4px;font-size:10px">
+              ${cycle.amountPaidInSettlement ? `<div style="background:white;padding:6px;border-radius:4px;border:1px solid #fde68a;display:flex;justify-content:space-between"><span>المبلغ المسدد عند الإغلاق</span><span style="color:#0d7c5f;font-weight:800">${formatNum(cycle.amountPaidInSettlement)} ج.م</span></div>` : ''}
+              ${cycle.amountCarriedOver ? `<div style="background:white;padding:6px;border-radius:4px;border:1px solid #fde68a;display:flex;justify-content:space-between"><span>المبلغ المرحل للدورة القادمة</span><span style="color:#d97706;font-weight:800">${formatNum(cycle.amountCarriedOver)} ج.م</span></div>` : ''}
+              ${cycle.settlementReason ? `<div style="background:white;padding:6px;border-radius:4px;border:1px solid #fde68a;text-align:center"><strong>السبب:</strong> ${cycle.settlementReason}</div>` : ''}
+            </div>
+          </div>` : ''}
           ${cycle.creditBalance > 0 ? `<div style="background:#fef3c7;border:1px solid #f59e0b;border-radius:6px;padding:6px;color:#92400e;font-weight:bold;font-size:11px;text-align:center">رصيد دائن: ${formatNum(cycle.creditBalance)} ج.م</div>` : ''}
         </div>`;
 
@@ -3472,6 +3944,25 @@ export default function FactoryTab({
             <span>إجمالي المسحوبات</span>
             <span>${formatNum(totalLoadValue)} ج.م</span>
           </div>
+          ${(cycle.collectedAmount || 0) > 0 || (cycle.tripsCollected || 0) > 0 || (cycle.extraRevenues || 0) > 0 || (cycle.cycleExpenses || 0) > 0 ? `
+          <div style="background:#f0fdf4;border:2px solid #16a34a;border-radius:10px;padding:12px;margin-bottom:8px">
+            <div style="font-weight:800;font-size:12px;color:#16a34a;text-align:center;margin-bottom:8px">إيرادات ومصروفات الدورة</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:10px">
+              ${cycle.collectedAmount ? `<div style="background:white;padding:6px;border-radius:4px;border:1px solid #bbf7d0;display:flex;justify-content:space-between"><span>محصل من العملاء</span><span style="color:#0d7c5f;font-weight:800">${formatNum(cycle.collectedAmount)} ج.م</span></div>` : ''}
+              ${cycle.tripsCollected ? `<div style="background:white;padding:6px;border-radius:4px;border:1px solid #bbf7d0;display:flex;justify-content:space-between"><span>مشاوير محصلة</span><span style="color:#0d7c5f;font-weight:800">${formatNum(cycle.tripsCollected)} ج.م</span></div>` : ''}
+              ${cycle.extraRevenues ? `<div style="background:white;padding:6px;border-radius:4px;border:1px solid #bbf7d0;display:flex;justify-content:space-between"><span>إيرادات إضافية</span><span style="color:#0d7c5f;font-weight:800">${formatNum(cycle.extraRevenues)} ج.م</span></div>` : ''}
+              ${cycle.cycleExpenses ? `<div style="background:white;padding:6px;border-radius:4px;border:1px solid #fecaca;display:flex;justify-content:space-between"><span>مصروفات تشغيلية</span><span style="color:#dc2626;font-weight:800">${formatNum(cycle.cycleExpenses)} ج.م</span></div>` : ''}
+            </div>
+          </div>` : ''}
+          ${(cycle.amountPaidInSettlement || 0) > 0 || (cycle.amountCarriedOver || 0) > 0 || cycle.settlementReason ? `
+          <div style="background:#fef3c7;border:2px solid #d97706;border-radius:10px;padding:12px;margin-bottom:8px">
+            <div style="font-weight:800;font-size:12px;color:#d97706;text-align:center;margin-bottom:6px">تفاصيل الترحيل</div>
+            <div style="display:flex;flex-direction:column;gap:4px;font-size:10px">
+              ${cycle.amountPaidInSettlement ? `<div style="background:white;padding:6px;border-radius:4px;border:1px solid #fde68a;display:flex;justify-content:space-between"><span>المبلغ المسدد عند الإغلاق</span><span style="color:#0d7c5f;font-weight:800">${formatNum(cycle.amountPaidInSettlement)} ج.م</span></div>` : ''}
+              ${cycle.amountCarriedOver ? `<div style="background:white;padding:6px;border-radius:4px;border:1px solid #fde68a;display:flex;justify-content:space-between"><span>المبلغ المرحل للدورة القادمة</span><span style="color:#d97706;font-weight:800">${formatNum(cycle.amountCarriedOver)} ج.م</span></div>` : ''}
+              ${cycle.settlementReason ? `<div style="background:white;padding:6px;border-radius:4px;border:1px solid #fde68a;text-align:center"><strong>السبب:</strong> ${cycle.settlementReason}</div>` : ''}
+            </div>
+          </div>` : ''}
         </div>`;
 
       allPaymentsHtml += `
@@ -3528,16 +4019,30 @@ export default function FactoryTab({
     const tableW = W - padX * 2;
     const headerH = 110;
     const rowH = 34;
+    const payRowH = 28;
     const footerH = 50;
 
     // Pre-calculate total height
     let totalContentH = 0;
     archiveCycles.forEach(cycle => {
       const loads = cycle.loads || [];
+      const pays = cycle.payments || [];
       totalContentH += 40; // cycle title
       totalContentH += 32; // table header
       totalContentH += loads.length * rowH; // load rows
       totalContentH += 36; // summary row
+      // قسم الدفعات
+      totalContentH += 30; // payments header
+      totalContentH += pays.length * payRowH; // payment rows
+      totalContentH += 24; // payments total
+      // قسم الإيرادات والمصروفات
+      if ((cycle.collectedAmount || 0) > 0 || (cycle.tripsCollected || 0) > 0 || (cycle.extraRevenues || 0) > 0 || (cycle.cycleExpenses || 0) > 0) {
+        totalContentH += 80;
+      }
+      // قسم الترحيل
+      if ((cycle.amountPaidInSettlement || 0) > 0 || (cycle.amountCarriedOver || 0) > 0 || cycle.settlementReason) {
+        totalContentH += 60;
+      }
       totalContentH += 30; // gap
     });
     const totalH = headerH + 10 + totalContentH + footerH + 40;
@@ -3608,7 +4113,9 @@ export default function FactoryTab({
 
     archiveCycles.forEach((cycle, cycleIdx) => {
       const loads = cycle.loads || [];
+      const pays = cycle.payments || [];
       const totalLoadValue = loads.reduce((s: number, l: any) => s + (l.subtotal || 0), 0);
+      const totalPayments = pays.reduce((s: number, p: any) => s + (p.amount || 0), 0);
 
       // Cycle title
       ctx.fillStyle = '#2c3e6b';
@@ -3616,7 +4123,7 @@ export default function FactoryTab({
       ctx.fillStyle = '#ffffff';
       ctx.font = 'bold 12px system-ui, sans-serif';
       ctx.textAlign = 'right';
-      ctx.fillText(`الدورة ${cycleIdx + 1} — ${cycle.settledAt || '—'} (${loads.length} حمولة)`, colX + tableW - 10, y + 21);
+      ctx.fillText(`الدورة ${cycleIdx + 1} — ${cycle.settledAt || '—'} (${loads.length} حمولة، ${pays.length} دفعة)`, colX + tableW - 10, y + 21);
       y += 30;
 
       // Table header
@@ -3665,7 +4172,115 @@ export default function FactoryTab({
       ctx.fillText('إجمالي المسحوبات', colDesc, y + 24);
       ctx.textAlign = 'center';
       ctx.fillText(`${formatNum(totalLoadValue)} ج.م`, colTotal, y + 24);
-      y += 36 + 30;
+      y += 36;
+
+      // ── قسم الدفعات ──
+      ctx.fillStyle = '#1e3a5f';
+      ctx.fillRect(colX, y, tableW, 28);
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 11px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(`سجل الدفعات (${pays.length})`, colX + tableW / 2, y + 19);
+      y += 28;
+
+      if (pays.length > 0) {
+        pays.forEach((p: any, idx: number) => {
+          ctx.fillStyle = idx % 2 === 0 ? '#f8fafc' : '#ffffff';
+          ctx.fillRect(colX, y, tableW, payRowH);
+          ctx.strokeStyle = '#e2e8f0';
+          ctx.lineWidth = 0.5;
+          ctx.strokeRect(colX, y, tableW, payRowH);
+
+          ctx.fillStyle = '#1a1a1a';
+          ctx.font = '10px system-ui, sans-serif';
+          ctx.textAlign = 'right';
+          ctx.fillText(`${p.notes || 'تسديد'} - ${p.date || ''}`, colX + tableW - 20, y + 18);
+          ctx.fillStyle = '#0d7c5f';
+          ctx.font = 'bold 11px system-ui, sans-serif';
+          ctx.textAlign = 'left';
+          ctx.fillText(`${formatNum(p.amount)} ج.م`, colX + 20, y + 18);
+          y += payRowH;
+        });
+
+        // Payments total
+        ctx.fillStyle = '#e2e8f0';
+        ctx.fillRect(colX, y, tableW, 24);
+        ctx.fillStyle = '#1a1a1a';
+        ctx.font = 'bold 10px system-ui, sans-serif';
+        ctx.textAlign = 'right';
+        ctx.fillText(`إجمالي المسدد: ${formatNum(totalPayments)} ج.م`, colX + tableW - 20, y + 17);
+        ctx.textAlign = 'left';
+        ctx.fillText(`الدفعات: ${pays.length}`, colX + 20, y + 17);
+        y += 24;
+      } else {
+        ctx.fillStyle = '#94a3b8';
+        ctx.font = '10px system-ui, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('لا توجد دفعات', colX + tableW / 2, y + 15);
+        y += 24;
+      }
+
+      // ── قسم الإيرادات والمصروفات ──
+      const hasCycleData = (cycle.collectedAmount || 0) > 0 || (cycle.tripsCollected || 0) > 0 || (cycle.extraRevenues || 0) > 0 || (cycle.cycleExpenses || 0) > 0;
+      if (hasCycleData) {
+        ctx.fillStyle = '#f0fdf4';
+        ctx.fillRect(colX, y, tableW, 70);
+        ctx.strokeStyle = '#16a34a';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(colX, y, tableW, 70);
+
+        ctx.fillStyle = '#16a34a';
+        ctx.font = 'bold 10px system-ui, sans-serif';
+        ctx.textAlign = 'right';
+        let cdX = colX + tableW - 20;
+        if ((cycle.collectedAmount || 0) > 0) {
+          ctx.fillText(`محصل: ${formatNum(cycle.collectedAmount)} ج.م`, cdX, y + 18);
+          cdX -= 180;
+        }
+        if ((cycle.tripsCollected || 0) > 0) {
+          ctx.fillText(`مشاوير: ${formatNum(cycle.tripsCollected)} ج.م`, cdX, y + 18);
+          cdX -= 180;
+        }
+        if ((cycle.extraRevenues || 0) > 0) {
+          ctx.fillText(`إيرادات: ${formatNum(cycle.extraRevenues)} ج.م`, cdX, y + 18);
+        }
+        if ((cycle.cycleExpenses || 0) > 0) {
+          ctx.fillStyle = '#dc2626';
+          ctx.textAlign = 'left';
+          ctx.fillText(`مصروفات: ${formatNum(cycle.cycleExpenses)} ج.م`, colX + 20, y + 18);
+        }
+        y += 70;
+      }
+
+      // ── قسم الترحيل ──
+      if ((cycle.amountPaidInSettlement || 0) > 0 || (cycle.amountCarriedOver || 0) > 0 || cycle.settlementReason) {
+        ctx.fillStyle = '#fef3c7';
+        ctx.fillRect(colX, y, tableW, 50);
+        ctx.strokeStyle = '#d97706';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(colX, y, tableW, 50);
+
+        ctx.fillStyle = '#d97706';
+        ctx.font = 'bold 10px system-ui, sans-serif';
+        ctx.textAlign = 'right';
+        let stX = colX + tableW - 20;
+        if ((cycle.amountPaidInSettlement || 0) > 0) {
+          ctx.fillText(`مسدد: ${formatNum(cycle.amountPaidInSettlement)} ج.م`, stX, y + 18);
+          stX -= 200;
+        }
+        if ((cycle.amountCarriedOver || 0) > 0) {
+          ctx.fillText(`مرحل: ${formatNum(cycle.amountCarriedOver)} ج.م`, stX, y + 18);
+        }
+        if (cycle.settlementReason) {
+          ctx.fillStyle = '#475569';
+          ctx.font = '9px system-ui, sans-serif';
+          ctx.textAlign = 'center';
+          ctx.fillText(cycle.settlementReason, colX + tableW / 2, y + 38);
+        }
+        y += 50;
+      }
+
+      y += 30;
     });
 
     // Footer
@@ -4381,7 +4996,13 @@ export default function FactoryTab({
 
   const getFilteredLoads = () => {
     const now = new Date();
-    return factoryLoads.filter(load => {
+    return factoryLoads
+      .filter(filterByFactoryDelegate)
+      .filter(l => {
+        if (l.archived || l.isArchived || l.archivedAt) return false;
+        return parseCairoTime(l.date) > lastArchiveTimestamp;
+      })
+      .filter(load => {
       const loadDateObj = new Date(load.date);
       if (reportTimeframe === 'daily') {
         return loadDateObj.toDateString() === now.toDateString();
@@ -4485,9 +5106,9 @@ export default function FactoryTab({
       const loadedCartons = Number((load.cartonsCount !== undefined ? load.cartonsCount : (load.quantity / (weight?.unitsPerCarton || 12))).toFixed(3));
       const totalLoadedValue = loadedCartons * cartonPrice;
 
-      // Calculate total quantity sold for this specific product + weight variant in all client invoices
+      // Calculate total quantity sold for this specific product + weight variant in active invoices only
       let totalUnitsSold = 0;
-      invoices.forEach(inv => {
+      activeFilteredInvoices.forEach(inv => {
         inv.items.forEach(item => {
           if (item.productId === load.productId && item.weightId === load.weightId) {
             totalUnitsSold += item.quantity;
@@ -4699,9 +5320,6 @@ export default function FactoryTab({
     y += 32;
 
     let totalLoadedCrates = 0;
-    let totalSoldCrates = 0;
-    let totalRemainingCrates = 0;
-    let totalSoldValue = 0;
     let totalAdvanceAmounts = 0;
 
     filteredLoads.forEach((load, idx) => {
@@ -4712,12 +5330,6 @@ export default function FactoryTab({
       const cartons = load.cartonsCount !== undefined ? load.cartonsCount : Math.floor(load.quantity / unitsPerCarton);
       const cartonPrice = load.cartonPrice !== undefined ? Number(load.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) : 0) || 0);
       const unitPrice = load.unitPrice !== undefined ? Number(load.unitPrice) : (Number(weight?.factoryPricePerUnit) || (prod ? Number(prod.price) : 0) || 0);
-
-      const key = `${load.productId}_${load.weightId || (weight ? weight.id : '')}`;
-      const stock = weightStocks[key] || { loaded: 0, sold: 0, remaining: 0 };
-      const soldCartons = Math.floor(stock.sold / unitsPerCarton);
-      const remainingCartons = Math.max(0, cartons - soldCartons);
-      const soldValueForLoad = soldCartons * cartonPrice;
 
       const prodName = prod ? prod.name : (load.productName || 'غير معروف');
       const weightSize = weight ? weight.size : (load as any).weightSize || '';
@@ -4738,21 +5350,33 @@ export default function FactoryTab({
       ctx.fillText(String(cartons), colLoaded, y + 24);
       ctx.fillStyle = '#16a34a';
       ctx.font = 'bold 11px system-ui, sans-serif';
-      ctx.fillText(String(soldCartons), colSold, y + 24);
-      ctx.fillStyle = remainingCartons > 0 ? '#DD6B20' : '#16a34a';
-      ctx.fillText(String(remainingCartons), colRemaining, y + 24);
+      ctx.fillText('—', colSold, y + 24);
+      ctx.fillStyle = '#DD6B20';
+      ctx.fillText('—', colRemaining, y + 24);
       ctx.fillStyle = '#1a1a1a';
       ctx.font = '11px system-ui, sans-serif';
       ctx.fillText(`${cartonPrice.toLocaleString('ar-EG')} ج.م`, colPrice, y + 24);
       ctx.font = 'bold 11px system-ui, sans-serif';
-      ctx.fillText(`${soldValueForLoad.toLocaleString('ar-EG')} ج.م`, colTotal, y + 24);
+      ctx.fillText(`${(cartons * cartonPrice).toLocaleString('ar-EG')} ج.م`, colTotal, y + 24);
 
       totalLoadedCrates += cartons;
-      totalSoldCrates += soldCartons;
-      totalRemainingCrates += remainingCartons;
-      totalSoldValue += soldValueForLoad;
       totalAdvanceAmounts += (load.advanceAmount || 0);
       y += loadRowH;
+    });
+
+    // Compute actual sold totals from weightStocksInCartons for summary
+    let actualTotalSold = 0;
+    let actualTotalSoldValue = 0;
+    filteredLoads.forEach(load => {
+      const prod = products.find(p => String(p.id).trim() === String(load.productId).trim());
+      const weights = prod ? getProductWeightsFallback(prod) : [];
+      const weight = weights.find(w => String(w.id).trim() === String(load.weightId).trim()) || weights[0];
+      const unitsPerCarton = weight?.unitsPerCarton || 12;
+      const stockKey = `${load.productId}_${load.weightId || (weight ? weight.id : '')}`;
+      const stock = weightStocksInCartons[stockKey] || { loaded: 0, sold: 0, remaining: 0 };
+      actualTotalSold = stock.sold;
+      const cartonPrice = load.cartonPrice !== undefined ? Number(load.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) : 0) || 0);
+      actualTotalSoldValue += stock.sold * cartonPrice;
     });
 
     // Summary row
@@ -4767,9 +5391,9 @@ export default function FactoryTab({
     ctx.fillText('المجموع', colDesc, y + 24);
     ctx.textAlign = 'center';
     ctx.fillText(String(totalLoadedCrates), colLoaded, y + 24);
-    ctx.fillText(String(totalSoldCrates), colSold, y + 24);
-    ctx.fillText(String(totalRemainingCrates), colRemaining, y + 24);
-    ctx.fillText(`${totalSoldValue.toLocaleString('ar-EG')} ج.م`, colTotal, y + 24);
+    ctx.fillText(String(actualTotalSold), colSold, y + 24);
+    ctx.fillText(String(totalLoadedCrates - actualTotalSold), colRemaining, y + 24);
+    ctx.fillText(`${actualTotalSoldValue.toLocaleString('ar-EG')} ج.م`, colTotal, y + 24);
 
     // Totals row
     y += summaryRowH;
@@ -4780,7 +5404,7 @@ export default function FactoryTab({
     ctx.textAlign = 'right';
     ctx.fillText('إجمالي المستحق (المبيع بسعر المصنع)', colDesc, y + 24);
     ctx.textAlign = 'center';
-    ctx.fillText(`${totalSoldValue.toLocaleString('ar-EG')} ج.م`, colTotal, y + 24);
+    ctx.fillText(`${actualTotalSoldValue.toLocaleString('ar-EG')} ج.م`, colTotal, y + 24);
     y += summaryRowH + 15;
 
     // ── Bottom two boxes ──
@@ -4817,11 +5441,11 @@ export default function FactoryTab({
     infoY += 22;
     ctx.font = 'bold 12px system-ui, sans-serif';
     ctx.fillStyle = '#0d7c5f';
-    ctx.fillText(`المتبقي: ${totalRemainingCrates} كرتونة`, rightBoxX + rightBoxW - 20, infoY);
+    ctx.fillText(`المتبقي: ${totalLoadedCrates - actualTotalSold} كرتونة`, rightBoxX + rightBoxW - 20, infoY);
 
     // Left Box: صافي المستحق
     const totalDirectPayments = filteredArchiveExtraPayments.reduce((sum, p) => sum + (p.amount - (p.appliedToCarriedDebt || 0)), 0);
-    const netDue = totalSoldValue - totalAdvanceAmounts - totalDirectPayments;
+    const netDue = actualTotalSoldValue - totalAdvanceAmounts - totalDirectPayments;
 
     roundRect(ctx, leftBoxX, y, leftBoxW, bottomBoxH, 6);
     ctx.fillStyle = netDue > 0 ? '#FFF5F5' : '#ffffff';
@@ -4874,10 +5498,11 @@ export default function FactoryTab({
     const filterLabel = archiveFilter === 'all' ? 'جميع الفترات' : archiveFilter === 'daily' ? 'يومي (اليوم الحالي)' : archiveFilter === 'weekly' ? 'أسبوعي (آخر 7 أيام)' : archiveFilter === 'monthly' ? 'شهري (آخر 30 يوم)' : 'مخصص';
 
     let totalLoadedCrates = 0;
-    let totalSoldCrates = 0;
-    let totalRemainingCrates = 0;
-    let totalSoldValue = 0;
     let totalAdvanceAmounts = 0;
+
+    // Compute actual sold totals from weightStocksInCartons for summary
+    let pdfActualTotalSold = 0;
+    let pdfActualTotalSoldValue = 0;
 
     const loadsRows = filteredLoads.map((load, i) => {
       const prod = products.find(p => String(p.id).trim() === String(load.productId).trim());
@@ -4887,32 +5512,29 @@ export default function FactoryTab({
       const cartons = load.cartonsCount !== undefined ? load.cartonsCount : Math.floor(load.quantity / unitsPerCarton);
       const cartonPrice = load.cartonPrice !== undefined ? Number(load.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) : 0) || 0);
 
-      const key = `${load.productId}_${load.weightId || (weight ? weight.id : '')}`;
-      const stock = weightStocks[key] || { loaded: 0, sold: 0, remaining: 0 };
-      const soldCartons = Math.floor(stock.sold / unitsPerCarton);
-      const remainingCartons = Math.max(0, cartons - soldCartons);
-      const soldValueForLoad = soldCartons * cartonPrice;
-
       const prodName = prod ? prod.name : (load.productName || 'غير معروف');
       const weightSize = weight ? weight.size : (load as any).weightSize || '';
       totalLoadedCrates += cartons;
-      totalSoldCrates += soldCartons;
-      totalRemainingCrates += remainingCartons;
-      totalSoldValue += soldValueForLoad;
       totalAdvanceAmounts += (load.advanceAmount || 0);
+
+      const stockKey = `${load.productId}_${load.weightId || (weight ? weight.id : '')}`;
+      const stock = weightStocksInCartons[stockKey] || { loaded: 0, sold: 0, remaining: 0 };
+      pdfActualTotalSold = stock.sold;
+      pdfActualTotalSoldValue += stock.sold * cartonPrice;
+
       return `<tr>
         <td style="text-align:center">${String(i + 1).padStart(2, '0')}</td>
         <td style="text-align:right">${prodName} ${weightSize}</td>
         <td style="text-align:center">${cartons}</td>
-        <td style="text-align:center;color:#16a34a;font-weight:bold">${soldCartons}</td>
-        <td style="text-align:center;color:${remainingCartons > 0 ? '#DD6B20' : '#16a34a'};font-weight:bold">${remainingCartons}</td>
+        <td style="text-align:center;color:#16a34a;font-weight:bold">—</td>
+        <td style="text-align:center;color:#DD6B20;font-weight:bold">—</td>
         <td style="text-align:center">${cartonPrice.toLocaleString('ar-EG')} ج.م</td>
-        <td style="text-align:center;font-weight:bold">${soldValueForLoad.toLocaleString('ar-EG')} ج.م</td>
+        <td style="text-align:center;font-weight:bold">${(cartons * cartonPrice).toLocaleString('ar-EG')} ج.م</td>
       </tr>`;
     }).join('');
 
     const totalDirectPayments = filteredArchiveExtraPayments.reduce((sum, p) => sum + (p.amount - (p.appliedToCarriedDebt || 0)), 0);
-    const netDue = totalSoldValue - totalAdvanceAmounts - totalDirectPayments;
+    const netDue = pdfActualTotalSoldValue - totalAdvanceAmounts - totalDirectPayments;
     const netColor = netDue > 0 ? '#dc2626' : netDue === 0 ? '#059669' : '#4f46e5';
     const netText = netDue > 0 ? `${netDue.toLocaleString('ar-EG')} ج.م — يجب سداد المبلغ` : netDue === 0 ? '٠.٠٠ ج.م — *تم تسوية الحساب بالكامل*' : `${Math.abs(netDue).toLocaleString('ar-EG')} ج.م — رصيد دائن لصالحنا (دفعات زائدة)`;
 
@@ -4942,16 +5564,16 @@ export default function FactoryTab({
             <tr class="summary-row">
               <td colspan="2" style="text-align:center;border:none;padding:10px 6px">المجموع</td>
               <td style="text-align:center;border:none;padding:10px 6px">${totalLoadedCrates}</td>
-              <td style="text-align:center;border:none;padding:10px 6px">${totalSoldCrates}</td>
-              <td style="text-align:center;border:none;padding:10px 6px">${totalRemainingCrates}</td>
+              <td style="text-align:center;border:none;padding:10px 6px">${pdfActualTotalSold}</td>
+              <td style="text-align:center;border:none;padding:10px 6px">${totalLoadedCrates - pdfActualTotalSold}</td>
               <td style="border:none;padding:10px 6px"></td>
-              <td style="text-align:center;border:none;padding:10px 6px">${totalSoldValue.toLocaleString('ar-EG')} ج.م</td>
+              <td style="text-align:center;border:none;padding:10px 6px">${pdfActualTotalSoldValue.toLocaleString('ar-EG')} ج.م</td>
             </tr>
           </tbody>
         </table>
         <div class="tt" style="padding:10px 12px;border-radius:8px;display:flex;justify-content:space-between;font-weight:800;font-size:12px;margin-bottom:14px">
           <span>إجمالي المستحق (المبيع)</span>
-          <span>${totalSoldValue.toLocaleString('ar-EG')} ج.م</span>
+          <span>${pdfActualTotalSoldValue.toLocaleString('ar-EG')} ج.م</span>
         </div>
 
         <div class="sg">
@@ -4960,8 +5582,8 @@ export default function FactoryTab({
             <div style="margin-top:8px">
               <div style="font-size:11px;margin:4px 0;display:flex;justify-content:space-between"><span>عدد الشحنات:</span><span style="font-weight:800">${filteredLoads.length}</span></div>
               <div style="font-size:11px;margin:4px 0;display:flex;justify-content:space-between"><span>إجمالي المحمل:</span><span style="font-weight:800">${totalLoadedCrates.toLocaleString('ar-EG')} كرتونة</span></div>
-              <div style="font-size:11px;margin:4px 0;display:flex;justify-content:space-between"><span>إجمالي المبيع:</span><span style="font-weight:800;color:#059669">${totalSoldCrates.toLocaleString('ar-EG')} كرتونة</span></div>
-              <div style="font-size:11px;margin:4px 0;display:flex;justify-content:space-between"><span>إجمالي المتبقي:</span><span style="font-weight:800;color:#DD6B20">${totalRemainingCrates.toLocaleString('ar-EG')} كرتونة</span></div>
+              <div style="font-size:11px;margin:4px 0;display:flex;justify-content:space-between"><span>إجمالي المبيع:</span><span style="font-weight:800;color:#059669">${pdfActualTotalSold.toLocaleString('ar-EG')} كرتونة</span></div>
+              <div style="font-size:11px;margin:4px 0;display:flex;justify-content:space-between"><span>إجمالي المتبقي:</span><span style="font-weight:800;color:#DD6B20">${(totalLoadedCrates - pdfActualTotalSold).toLocaleString('ar-EG')} كرتونة</span></div>
               <div style="font-size:11px;margin:4px 0;display:flex;justify-content:space-between"><span>إجمالي المقدمات:</span><span style="font-weight:800">${totalAdvanceAmounts.toLocaleString('ar-EG')} ج.م</span></div>
             </div>
           </div>
@@ -5493,7 +6115,7 @@ export default function FactoryTab({
               ) : (
                 <div className="flex flex-col gap-4">
                   <div className="max-h-64 overflow-y-auto custom-scroll border border-slate-100 rounded-xl p-2.5 bg-[#F7FAFC]/50 divide-y divide-slate-150 flex flex-col gap-2.5">
-                    {filteredLiveLoads.map((load) => {
+                    {[...filteredLiveLoads].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).map((load) => {
                       const prod = products.find(p => String(p.id).trim() === String(load.productId).trim());
                       const weights = prod ? getProductWeightsFallback(prod) : [];
                       const weight = weights.find(w => String(w.id).trim() === String(load.weightId).trim()) || weights[0];
@@ -5530,16 +6152,41 @@ export default function FactoryTab({
                           المندوب: {load.delegateName.replace(/ \(.*?\)/g, '').trim()} {load.delegatePhone ? `(${load.delegatePhone})` : ''}
                                 </span>
                               )}
+                              {(load.archived || load.isArchived || load.archivedAt) && (
+                                <span className="bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-md font-bold border border-emerald-200">
+                                  مؤرشفة
+                                </span>
+                              )}
                             </div>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                onDeleteLoad(load.id);
-                              }}
-                              className="text-rose-500 hover:text-rose-700 cursor-pointer active:scale-90 transition-all font-bold"
-                            >
-                              حذف
-                            </button>
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  const currentQty = load.cartonsCount ?? Math.floor(load.quantity / (weight?.unitsPerCarton || 12));
+                                  setEditLoadTarget(load);
+                                  setEditLoadNewCartons(String(currentQty));
+                                  setShowEditLoadModal(true);
+                                }}
+                                className="p-1 hover:bg-slate-100 rounded-lg transition-colors text-blue-500 hover:text-blue-700 cursor-pointer"
+                                title="تعديل الكمية"
+                              >
+                                <Edit className="h-3.5 w-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  onDeleteLoad(load.id);
+                                }}
+                                className="p-1 hover:bg-slate-100 rounded-lg transition-colors text-red-500 hover:text-red-700 cursor-pointer"
+                                title="حذف"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </button>
+                            </div>
                           </div>
                         </div>
                       );
@@ -5630,7 +6277,7 @@ export default function FactoryTab({
                             <td className="border border-slate-800 p-1.5 text-center">{index + 1}</td>
                             <td className="border border-slate-800 p-1.5">{formattedDateStr}</td>
                             <td className="border border-slate-800 p-1.5 font-bold">
-                              <div>{pName} - ({wSize})</div>
+                              <div>{pName} - ({wSize}) {(load.archived || load.isArchived || load.archivedAt) && <span className="text-emerald-600 text-[9px]">[مؤرشفة]</span>}</div>
                         <div className="text-gray-500 font-normal mt-0.5 text-[10px]">المندوب: {load.delegateName?.replace(/ \(.*?\)/g, '').trim() || 'مجهول'} {load.delegatePhone ? `(${load.delegatePhone})` : ''}</div>
                             </td>
                             <td className="border border-slate-800 p-1.5 text-center font-bold" dir="rtl">
@@ -5651,7 +6298,7 @@ export default function FactoryTab({
                   <div className="border border-slate-800 p-3 rounded mt-3 text-[11.5px] font-bold bg-[#F7FAFC] flex flex-col gap-2 w-full ml-auto">
                     <div className="flex justify-between">
                       <span>إجمالي عدد شحنات السحب:</span>
-                      <span>{filteredLiveLoads.length} شحنة تحميل</span>
+                      <span>{activeNonArchivedLoads.length} شحنة تحميل</span>
                     </div>
                     <div className="flex justify-between border-t border-slate-300 pt-1">
                       <span>إجمالي قيم البضائع المسحوبة من المصنع الحالية:</span>
@@ -5662,13 +6309,13 @@ export default function FactoryTab({
                     <div className="flex justify-between border-t border-slate-300 pt-1 text-emerald-800">
                       <span>إجمالي الدفعات المقدمة والمباشرة:</span>
                       <span>
-                        {formatNum(filteredLiveLoads.reduce((s, l) => s + (l.advanceAmount || 0), 0))}ج.م
+                        {formatNum(activeNonArchivedLoads.reduce((s, l) => s + (l.advanceAmount || 0), 0))}ج.م
                       </span>
                     </div>
                     <div className="flex justify-between border-t border-slate-300 pt-1 text-rose-800 text-sm">
                       <span>المتبقي للمصنع (المدين الباقي):</span>
                       <span>
-                        {formatNum(filteredLiveLoadsSummary.grandFactoryCost - filteredLiveLoads.reduce((s, l) => s + (l.advanceAmount || 0), 0))}ج.م
+                        {formatNum(filteredLiveLoadsSummary.grandFactoryCost - activeNonArchivedLoads.reduce((s, l) => s + (l.advanceAmount || 0), 0))}ج.م
                       </span>
                     </div>
                   </div>
@@ -5691,6 +6338,92 @@ export default function FactoryTab({
                 </div>
               )}
             </div>
+
+            {/* Edit Load Modal */}
+            {showEditLoadModal && editLoadTarget && (() => {
+              const targetProd = products.find(p => String(p.id).trim() === String(editLoadTarget.productId).trim());
+              const targetWeights = targetProd ? getProductWeightsFallback(targetProd) : [];
+              const targetWeight = targetWeights.find(w => String(w.id).trim() === String(editLoadTarget.weightId).trim()) || targetWeights[0];
+              const pName = targetProd ? targetProd.name : (editLoadTarget.productName || 'الصنف مجهول');
+              const wSize = targetWeight ? targetWeight.size : (editLoadTarget.weightSize || 'وزن غير مسجل');
+              const upc = targetWeight?.unitsPerCarton || 12;
+              const newCartons = Math.max(0, Number(editLoadNewCartons) || 0);
+              return (
+              <div className="fixed inset-0 z-[100000] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-in fade-in duration-200" dir="rtl" onClick={() => setShowEditLoadModal(false)}>
+                <div className="bg-[#FFFFFF] rounded-2xl shadow-xl border border-slate-100 w-full max-w-sm overflow-hidden scale-in duration-200" onClick={(e) => e.stopPropagation()}>
+                  <div className="p-5 flex flex-col gap-3 bg-gradient-to-br from-blue-50 to-indigo-50 border-b border-indigo-100">
+                    <div className="flex items-center gap-3 text-indigo-700">
+                      <div className="bg-indigo-100 text-indigo-600 p-2 rounded-xl flex items-center justify-center">
+                        <svg className="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path strokeLinecap="round" strokeLinejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
+                      </div>
+                      <h3 className="font-extrabold text-lg">تعديل كمية الحمولة المحملة</h3>
+                    </div>
+                  </div>
+                  <div className="p-5 flex flex-col gap-4">
+                    <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs font-bold text-[#1A365D] flex flex-col gap-2">
+                      <div className="flex justify-between">
+                        <span className="text-slate-500">الصنف:</span>
+                        <span>{pName} ({wSize})</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-500">المندوب:</span>
+                        <span>{editLoadTarget.delegateName || 'غير محدد'}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-500">التاريخ:</span>
+                        <span>{new Date(editLoadTarget.date).toLocaleDateString('ar-EG')}</span>
+                      </div>
+                    </div>
+                    <div className="bg-white border border-indigo-200 rounded-xl p-3 text-xs font-bold text-[#1A365D] flex flex-col gap-1 focus-within:ring-2 focus-within:ring-indigo-500/30 focus-within:border-indigo-400 transition-all">
+                      <span className="text-slate-500">الكمية الحالية (كرتونة):</span>
+                      <input
+                        type="number"
+                        min="0"
+                        step="1"
+                        placeholder="الكمية المعدلة الجديدة"
+                        value={editLoadNewCartons}
+                        onChange={(e) => setEditLoadNewCartons(e.target.value)}
+                        className="w-full bg-transparent outline-none text-lg font-black font-mono text-indigo-700"
+                        autoFocus
+                      />
+                    </div>
+                    <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-2.5 text-center">
+                      <span className="text-[10px] block font-bold text-indigo-600 mb-0.5">المعادلة: {newCartons} كرتونة × {upc} عبوة/كرتونة = {newCartons * upc} عبوة</span>
+                    </div>
+                  </div>
+                  <div className="bg-slate-50 px-5 py-3 flex items-center justify-end gap-2 border-t border-slate-100">
+                    <button
+                      onClick={() => setShowEditLoadModal(false)}
+                      className="px-4 py-2 rounded-lg text-sm font-bold text-slate-500 hover:text-[#1A365D] hover:bg-slate-200 transition-colors cursor-pointer"
+                    >
+                      إلغاء
+                    </button>
+                    <button
+                      disabled={newCartons <= 0}
+                      onClick={() => {
+                        if (newCartons <= 0) return;
+                        const newQuantity = newCartons * upc;
+                        const updates: Partial<Omit<FactoryLoad, 'id'>> = {
+                          quantity: newQuantity,
+                          cartonsCount: newCartons,
+                          looseUnitsCount: 0
+                        };
+                        if (onEditLoad) {
+                          onEditLoad(editLoadTarget.id, updates);
+                        }
+                        setShowEditLoadModal(false);
+                        showToast("✓ تم تعديل كمية الحمولة بنجاح!");
+                      }}
+                      className={`px-5 py-2.5 rounded-lg text-sm font-bold shadow-sm transition-all cursor-pointer ${newCartons <= 0 ? 'bg-slate-200 text-slate-400 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-700 text-white'}`}
+                    >
+                      حفظ التعديل
+                    </button>
+                  </div>
+                </div>
+              </div>
+              );
+            })()}
+
           </div>
         )}
 
@@ -5908,16 +6641,10 @@ export default function FactoryTab({
                         const loadedCartons = Number((load.cartonsCount !== undefined ? load.cartonsCount : (load.quantity / (weight?.unitsPerCarton || 12))).toFixed(3));
                         const totalLoadedValue = loadedCartons * cartonPrice;
 
-                        // Quantity sold
-                        let totalUnitsSold = 0;
-                        invoices.forEach(inv => {
-                          inv.items.forEach(item => {
-                            if (item.productId === load.productId && item.weightId === load.weightId) {
-                              totalUnitsSold += item.quantity;
-                            }
-                          });
-                        });
-                        const cartonsSold = Number((totalUnitsSold / (weight?.unitsPerCarton || 12)).toFixed(3));
+                        // Quantity sold — use weightStocksInCartons (cycle-filtered)
+                        const stockKey = `${load.productId}_${load.weightId}`;
+                        const stockData = weightStocksInCartons[stockKey] || { loaded: 0, sold: 0, remaining: 0 };
+                        const cartonsSold = stockData.sold;
 
                         const loadDateObj = new Date(load.date);
                         const formattedDateStr = loadDateObj.toLocaleDateString('ar-EG', {
@@ -6383,14 +7110,22 @@ export default function FactoryTab({
                               <div className="flex items-center gap-1">
                                 <button
                                   type="button"
-                                  onClick={() => handleEditWeightInList(w.id || '')}
+                                  onClick={(e) => {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    handleEditWeightInList(w.id || '');
+                                  }}
                                   className="p-1 text-blue-500 hover:bg-blue-50 rounded"
                                 >
                                   <Edit className="h-3.5 w-3.5" />
                                 </button>
                                 <button
                                   type="button"
-                                  onClick={() => handleRemoveWeightFromList(w.id || '')}
+                                  onClick={(e) => {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    handleRemoveWeightFromList(w.id || '');
+                                  }}
                                   className="p-1 text-red-500 hover:bg-red-50 rounded"
                                 >
                                   <Trash2 className="h-3.5 w-3.5" />
@@ -6521,73 +7256,98 @@ export default function FactoryTab({
               <div className="bg-[#1A365D] text-white p-3 rounded-2xl shadow-sm flex flex-col justify-between">
                 <span className="text-[10px] text-indigo-205 font-bold">حساب المصنع (كلي)</span>
                 <span className="text-sm font-black mt-2 font-mono">
-                  {formatNum(totalFactoryBalanceDetails.totalWithdrawnValue)} <span className="text-[10px]">ج.م</span>
+                  {formatNum(totalFactoryBalanceDetails.totalLoadedAllTime)} <span className="text-[10px]">ج.م</span>
                 </span>
               </div>
               <div className="bg-[#10B981] text-white p-3 rounded-2xl shadow-sm flex flex-col justify-between">
                 <span className="text-[10px] text-emerald-100 font-bold">المسدد للمصنع (كلي)</span>
                 <span className="text-sm font-black mt-2 font-mono">
-                  {formatNum(totalFactoryBalanceDetails.totalAdvancePayments)} <span className="text-[10px]">ج.م</span>
+                  {formatNum(totalFactoryBalanceDetails.totalAllPayments || totalFactoryBalanceDetails.totalAdvancePayments)} <span className="text-[10px]">ج.م</span>
                 </span>
               </div>
-              {totalFactoryBalanceDetails.netRemainingDueToFactory > 0 ? (
-                <div className="bg-rose-600 text-white p-3 rounded-2xl shadow-sm flex flex-col justify-between">
-                  <span className="text-[10px] text-rose-100 font-bold">المتبقي للمصنع (كلي)</span>
-                  <span className="text-sm font-black mt-2 font-mono">
-                    {formatNum(totalFactoryBalanceDetails.netRemainingDueToFactory)} <span className="text-[10px]">ج.م</span>
-                  </span>
-                </div>
-              ) : totalFactoryBalanceDetails.netRemainingDueToFactory === 0 ? (
-                <div className="bg-emerald-500 text-white p-3 rounded-2xl shadow-sm flex flex-col justify-between">
-                  <span className="text-[10px] text-emerald-100 font-bold">المتبقي للمصنع (كلي)</span>
-                  <span className="text-sm font-black mt-2 font-mono">
-                    مسوى <span className="text-[10px]">✔️</span>
-                  </span>
-                </div>
-              ) : (
-                <div className="bg-indigo-600 text-white p-3 rounded-2xl shadow-sm flex flex-col justify-between">
-                  <span className="text-[10px] text-indigo-100 font-bold">رصيد دائن لصالحنا (دفعات زائدة)</span>
-                  <span className="text-sm font-black mt-2 font-mono">
-                    {formatNum(Math.abs(totalFactoryBalanceDetails.netRemainingDueToFactory))} <span className="text-[10px]">ج.م</span>
-                  </span>
-                </div>
-              )}
+              {(() => {
+                const allTimeRemaining = totalFactoryBalanceDetails.totalLoadedAllTime - (totalFactoryBalanceDetails.totalAllPayments || totalFactoryBalanceDetails.totalAdvancePayments) - totalFactoryBalanceDetails.totalWaivedAmount;
+                if (allTimeRemaining > 0) {
+                  return (
+                    <div className="bg-rose-600 text-white p-3 rounded-2xl shadow-sm flex flex-col justify-between">
+                      <span className="text-[10px] text-rose-100 font-bold">المتبقي للمصنع (كلي)</span>
+                      <span className="text-sm font-black mt-2 font-mono">
+                        {formatNum(allTimeRemaining)} <span className="text-[10px]">ج.م</span>
+                      </span>
+                    </div>
+                  );
+                } else if (allTimeRemaining === 0) {
+                  return (
+                    <div className="bg-emerald-500 text-white p-3 rounded-2xl shadow-sm flex flex-col justify-between">
+                      <span className="text-[10px] text-emerald-100 font-bold">المتبقي للمصنع (كلي)</span>
+                      <span className="text-sm font-black mt-2 font-mono">
+                        مسوى <span className="text-[10px]">✔️</span>
+                      </span>
+                    </div>
+                  );
+                } else {
+                  return (
+                    <div className="bg-indigo-600 text-white p-3 rounded-2xl shadow-sm flex flex-col justify-between">
+                      <span className="text-[10px] text-indigo-100 font-bold">رصيد دائن لصالحنا (دفعات زائدة)</span>
+                      <span className="text-sm font-black mt-2 font-mono">
+                        {formatNum(Math.abs(allTimeRemaining))} <span className="text-[10px]">ج.م</span>
+                      </span>
+                    </div>
+                  );
+                }
+              })()}
             </div>
 
             {/* Direct Multi-Panel configuration */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-5 items-stretch">
               
               {/* Panel A: تسجيل دفعة سداد للمصنع */}
-              <div className="bg-[#FFFFFF] p-4.5 rounded-2xl border border-slate-200 shadow-sm flex flex-col gap-3">
+              <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col h-full">
                 <span className="text-xs font-black text-[#1A365D] flex items-center gap-1 bg-[#F7FAFC] px-2 py-1.5 rounded-lg border border-slate-200 w-max">
                   <Wallet className="h-4 w-4 text-[#DD6B20]" />
                   تسجيل دفعة مسددة للمورد
                 </span>
 
-                <div className="flex flex-col gap-3 mt-1.5">
-                  <div className="flex gap-2">
-                    <input
-                      type="number"
-                      placeholder="مبلغ السداد (ج.م)"
-                      value={newPaymentAmount}
-                      onChange={(e) => setNewPaymentAmount(e.target.value)}
-                      className="w-1/2 bg-[#F7FAFC] border border-slate-200 rounded-xl p-3 text-xs font-bold text-center text-[#1A365D] outline-none focus:ring-2 focus:ring-[#DD6B20]/30 focus:border-[#DD6B20] transition-all"
-                    />
-                    <input
-                      type="text"
-                      placeholder="البيان (مثال: شيك، نقدي مندوب)"
-                      value={newPaymentNotes}
-                      onChange={(e) => setNewPaymentNotes(e.target.value)}
-                      className="w-1/2 bg-[#F7FAFC] border border-slate-200 rounded-xl p-3 text-xs font-bold text-[#1A365D] outline-none focus:ring-2 focus:ring-[#DD6B20]/30 focus:border-[#DD6B20] transition-all"
-                    />
+                <div className="flex flex-col gap-3 mt-1.5 flex-1">
+                  <div className="flex flex-col gap-2">
+                    <div className="flex flex-col gap-1 w-full text-right" dir="rtl">
+                      <label className="text-[10px] font-bold text-slate-500 mr-1">مبلغ السداد (ج.م)</label>
+                      <input
+                        type="number"
+                        placeholder="أدخل المبلغ المسدد"
+                        value={newPaymentAmount}
+                        onChange={(e) => setNewPaymentAmount(e.target.value)}
+                        className="w-full bg-[#F7FAFC] border border-slate-200 rounded-xl p-3 text-xs font-bold text-center text-[#1A365D] outline-none focus:ring-2 focus:ring-[#DD6B20]/30 focus:border-[#DD6B20] transition-all"
+                      />
+                    </div>
+                    <div className="flex flex-col gap-1 w-full text-right" dir="rtl">
+                      <label className="text-[10px] font-bold text-slate-500 mr-1">طريقة السداد والبيان</label>
+                      <input
+                        type="text"
+                        placeholder="مثال: تحويل بنكي / فودافون كاش"
+                        value={newPaymentNotes}
+                        onChange={(e) => setNewPaymentNotes(e.target.value)}
+                        className="w-full bg-[#F7FAFC] border border-slate-200 rounded-xl p-3 text-xs font-bold text-right text-[#1A365D] outline-none focus:ring-2 focus:ring-[#DD6B20]/30 focus:border-[#DD6B20] transition-all"
+                      />
+                    </div>
                   </div>
                   <div className="w-full bg-[#F7FAFC] border border-slate-200 rounded-xl p-3 text-xs font-bold text-[#1A365D] flex items-center gap-1">
                     <span className="text-slate-500 shrink-0">السيد /</span>
                     <input
                       type="text"
-                      placeholder="مستلم السداد"
+                      placeholder=""
                       value={newPaymentRecipient}
                       onChange={(e) => setNewPaymentRecipient(e.target.value)}
+                      className="flex-1 bg-transparent outline-none text-xs font-bold text-[#1A365D]"
+                    />
+                  </div>
+                  <div className="w-full bg-[#F7FAFC] border border-slate-200 rounded-xl p-3 text-xs font-bold text-[#1A365D] flex items-center gap-1">
+                    <span className="text-slate-500 shrink-0">📍 مكان الاستلام /</span>
+                    <input
+                      type="text"
+                      placeholder=""
+                      value={newPaymentLocation}
+                      onChange={(e) => setNewPaymentLocation(e.target.value)}
                       className="flex-1 bg-transparent outline-none text-xs font-bold text-[#1A365D]"
                     />
                   </div>
@@ -6675,7 +7435,8 @@ export default function FactoryTab({
                         description: JSON.stringify({
                           notes: noteText || 'تسديد مباشر',
                           appliedToCarriedDebt,
-                          recipient: newPaymentRecipient.trim()
+                          recipient: newPaymentRecipient.trim(),
+                          location: newPaymentLocation.trim()
                         }),
                         delegateName: finalName,
                         delegatePhone: finalPhone
@@ -6683,7 +7444,21 @@ export default function FactoryTab({
                       setNewPaymentAmount('');
                       setNewPaymentNotes('');
                       setNewPaymentRecipient('');
+                      setNewPaymentLocation('');
                       showToast(`✓ تم تسجيل دفعة مالية للمصنع بقيمة ${amount}ج.م بنجاح!`);
+                      const newReceipt = {
+                        amount,
+                        method: newPaymentNotes.trim() || 'سداد مباشر',
+                        recipient: newPaymentRecipient.trim() || 'غير محدد',
+                        location: newPaymentLocation.trim() || 'غير محدد',
+                        date: nowEgyptISO(),
+                        notes: noteText || 'تسديد مباشر',
+                        amountCarriedOver: 0,
+                        settlementReason: 'تسجيل دفعة سداد'
+                      };
+                      setReceiptData(newReceipt);
+                      setLastActiveReceipt(newReceipt);
+                      setShowReceiptModal(true);
                     }}
                     className={`font-black py-3 rounded-2xl text-xs transition-all active:scale-95 text-center w-full ${(!newPaymentAmount || parseFloat(newPaymentAmount) <= 0 || (isManager && !paymentTargetDelegate)) ? 'bg-slate-200 text-slate-400 cursor-not-allowed' : 'bg-[#DD6B20] hover:bg-[#C05621] text-white shadow-md hover:shadow-lg cursor-pointer'}`}
                   >
@@ -6695,18 +7470,17 @@ export default function FactoryTab({
               {/* Panel B: خانة المتبقي للمصنع / الرصيد الدائن / زر الأرشفة — يستخدم الرصيد الكلي */}
               {(() => {
                 const netRemaining = totalFactoryBalanceDetails.netRemainingDueToFactory;
-                const rawValue = totalFactoryBalanceDetails.rawLoadedValue;
                 const creditBalance = Math.max(0, totalFactoryBalanceDetails.totalAdvancePayments - totalFactoryBalanceDetails.totalWithdrawnValue - carriedOverDebt);
-                const isSettledAndCanArchive = (netRemaining <= 0) && (factoryLoads.length > 0 || totalFactoryPayments.length > 0 || carriedOverDebt !== 0);
 
+                // CASE 1: Debt (netRemaining > 0)
                 if (netRemaining > 0) {
                   return (
-                    <div className="bg-[#FFF5F5] border border-rose-200 p-4.5 rounded-2xl shadow-sm flex flex-col gap-3 animate-fade-in" id="factory-remaining-box">
+                    <div className="bg-white border border-rose-200 p-5 rounded-2xl shadow-sm flex flex-col h-full gap-3 animate-fade-in" id="factory-remaining-box">
                       <span className="text-xs font-black text-rose-800 flex items-center gap-1 bg-rose-50 px-2 py-1.5 rounded-lg border border-rose-100 w-max">
                         <AlertCircle className="h-4 w-4 text-rose-600 animate-pulse" />
                         المتبقي للمصنع حالياً
                       </span>
-                      <div className="flex flex-col gap-2.5 mt-1">
+                      <div className="flex flex-col gap-2.5 mt-1 flex-1">
                         <div className="bg-white border border-rose-150 p-3 rounded-xl text-center">
                           <span className="text-[10px] block font-bold text-slate-500 mb-1">المبلغ المتبقي الملتزم سداده للمورد:</span>
                           <span className="text-xl font-black font-mono text-rose-600">
@@ -6716,29 +7490,68 @@ export default function FactoryTab({
                         <div className="bg-rose-50 border border-rose-100 p-2.5 rounded-xl text-center">
                           <span className="text-[10px] block font-bold text-rose-700">⚠️ لا يمكن الترحيل للأرشيف - يجب سداد كامل المبلغ أولاً</span>
                         </div>
-                        <button
-                          type="button"
-                          onClick={() => { setSettleRecipient(''); setSettleMethod(''); setShowSettleModal(true); }}
-                          className="w-full bg-[#10B981] hover:bg-[#059669] text-white active:scale-95 text-xs font-black py-2 rounded-xl transition-all text-center flex items-center justify-center gap-1.5 shadow-md cursor-pointer"
-                        >
-                          <CheckCircle2 className="h-4.5 w-4.5 text-emerald-100 shrink-0" />
-                          <span>تم السداد بالكامل</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => { setWaiveRecipient(''); setWaiveNotes(''); setWaiveReason(''); setShowWaiveModal(true); }}
-                          className="w-full bg-amber-500 hover:bg-amber-600 text-white active:scale-95 text-xs font-black py-2 rounded-xl transition-all text-center flex items-center justify-center gap-1.5 shadow-md cursor-pointer"
-                        >
-                          <span>سماح بالمبلغ المتبقي وترحيل</span>
-                        </button>
+                        <div className="flex flex-col gap-2 mt-auto pt-6">
+                          <button
+                            type="button"
+                            disabled={isSyncing}
+                            onClick={() => { setSettleRecipient(''); setSettleMethod(''); setSettlePaymentAmount(''); setSettleReason(''); setSettleReceiptLocation(''); setShowSettleModal(true); }}
+                            className={`w-full font-black py-3 rounded-xl transition-all text-center flex items-center justify-center gap-1.5 shadow-md text-sm ${isSyncing ? 'bg-slate-200 text-slate-400 cursor-not-allowed' : 'bg-amber-500 hover:bg-amber-600 text-white active:scale-95 cursor-pointer'}`}
+                          >
+                            <span>السداد وترحيل المتبقي</span>
+                          </button>
+                          <button
+                            type="button"
+                            disabled={isSyncing}
+                            onClick={() => { setArchiveConfirmRecipient(''); setArchiveConfirmNotes(''); setArchiveConfirmLocation(''); setShowArchiveConfirmModal(true); }}
+                            className={`w-full font-black py-3 rounded-xl transition-all text-center flex items-center justify-center gap-1.5 shadow-md text-sm ${isSyncing ? 'bg-slate-200 text-slate-400 cursor-not-allowed' : 'bg-emerald-600 hover:bg-emerald-700 text-white active:scale-95 cursor-pointer'}`}
+                          >
+                            <span>تم السداد بالكامل وأرشفة الدورة</span>
+                          </button>
+                        </div>
                       </div>
                     </div>
                   );
                 }
 
-                // Balance is zero or negative (credit)
+                // CASE 2: Zero balance (netRemaining === 0)
+                if (netRemaining === 0) {
+                   const canArchive = activeFilteredLoads.length > 0 || totalFactoryPayments.length > 0 || carriedOverDebt !== 0;
+                  return (
+                    <div className="bg-white border border-emerald-200 p-5 rounded-2xl shadow-sm flex flex-col h-full gap-3 animate-fade-in">
+                      <div className="flex items-center justify-center gap-2">
+                        <div className="h-10 w-10 bg-emerald-100 rounded-full flex items-center justify-center shrink-0">
+                          <CheckCircle2 className="h-6 w-6 text-emerald-600" />
+                        </div>
+                        <div className="text-right">
+                          <span className="text-xs font-extrabold text-emerald-950 block">الحساب المالي صفر ومصفّر</span>
+                          <p className="text-[10px] text-slate-500 font-bold">ليست هناك أي مبالغ أو استحقاقات متبقية معلقة لصالح المصنع حاليا.</p>
+                        </div>
+                      </div>
+
+                      {isManager && factoryDelegateFilter === 'all' ? (
+                        <div className="bg-amber-50 border border-amber-200 p-3 rounded-xl text-center text-xs font-bold text-amber-800">
+                          ⚠️ يرجى تحديد مندوب معين لتتمكن من ترحيل دورته الماليّة للأرشيف. لا يمكن ترحيل حسابات كل المناديب معاً.
+                        </div>
+                      ) : (
+                        canArchive && (
+                          <button
+                            type="button"
+                            disabled={isArchiving || isSyncing}
+                            onClick={() => { setArchiveConfirmRecipient(''); setArchiveConfirmNotes(''); setArchiveConfirmLocation(''); setShowArchiveConfirmModal(true); }}
+                            className={`mt-auto w-full text-xs font-black py-2.5 rounded-xl transition-all text-center flex items-center justify-center gap-1.5 shadow-md ${isArchiving || isSyncing ? 'bg-slate-200 text-slate-400 cursor-not-allowed' : 'bg-emerald-600 hover:bg-emerald-700 text-white active:scale-95 cursor-pointer animate-pulse'}`}
+                          >
+                            <CheckCircle2 className="h-4.5 w-4.5 text-emerald-100 shrink-0" />
+                            <span>تم السداد بالكامل وأرشفة الدورة</span>
+                          </button>
+                        )
+                      )}
+                    </div>
+                  );
+                }
+
+                // CASE 3: Credit balance (netRemaining < 0)
                 return (
-                  <div className="bg-emerald-50 border border-emerald-200 p-4.5 rounded-2xl shadow-sm flex flex-col gap-2 animate-fade-in">
+                  <div className="bg-white border border-emerald-200 p-5 rounded-2xl shadow-sm flex flex-col h-full gap-3 animate-fade-in">
                     <div className="flex items-center justify-center gap-2">
                       <div className="h-10 w-10 bg-emerald-100 rounded-full flex items-center justify-center shrink-0">
                         <CheckCircle2 className="h-6 w-6 text-emerald-600" />
@@ -6763,94 +7576,103 @@ export default function FactoryTab({
                         ⚠️ يرجى تحديد مندوب معين لتتمكن من ترحيل دورته الماليّة للأرشيف. لا يمكن ترحيل حسابات كل المناديب معاً.
                       </div>
                     ) : (
-                      isSettledAndCanArchive && (
-                        <button
-                          type="button"
-                          disabled={isArchiving}
-                          onClick={async () => {
-                            if (isArchiving) return;
-                            const credit = creditBalance;
-                            const confirmed = await confirmDialog(credit > 0
-                              ? `ترحيل الدورة للأرشيف:\n• سيتم حفظ جميع البيانات الحالية (حمولات + مبيعات + دفعات)\n• سيتم صفراء الشاشات للبدء بدورة جديدة\n• الفائض ${formatNum(credit)}ج.م سيُضاف كرصيد يخصم من الدورة التالية\n\nهل أنت متأكد؟`
-                              : `ترحيل الدورة للأرشيف:\n• سيتم حفظ جميع البيانات الحالية (حمولات + مبيعات + دفعات)\n• سيتم صفراء الشاشات للبدء بدورة جديدة\n\nهل أنت متأكد؟`
-                            );
-                            if (confirmed) {
-                              setIsArchiving(true);
-                              try {
-                                // Build archive snapshot from current data — use ALL loads and ALL payments
-                                const currentLoads = factoryLoads.filter(l => parseCairoTime(l.date) > lastArchiveTimestamp).map(l => {
-                                  const prod = products.find(p => String(p.id).trim() === String(l.productId).trim());
-                                  const weights = prod ? getProductWeightsFallback(prod) : [];
-                                  const weight = weights.find(w => String(w.id).trim() === String(l.weightId).trim());
-                                  const unitsPerCarton = weight?.unitsPerCarton || 12;
-                                  const cartons = l.cartonsCount !== undefined ? l.cartonsCount : Math.floor(l.quantity / unitsPerCarton);
-                                  const loose = l.looseUnitsCount !== undefined ? l.looseUnitsCount : (l.quantity % unitsPerCarton);
-                                  const cartonPrice = l.cartonPrice !== undefined ? Number(l.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) : 0) || 0);
-                                  const unitPrice = l.unitPrice !== undefined ? Number(l.unitPrice) : (Number(weight?.factoryPricePerUnit) || (prod ? Number(prod.price) : 0) || 0);
-                                  return {
-                                    date: l.date, productName: prod?.name || l.productName || 'غير معروف',
-                                    weightSize: weight?.size || (l as any).weightSize || '', cartons, loose,
-                                    cartonPrice, subtotal: (cartons * cartonPrice) + (loose * unitPrice),
-                                    advanceAmount: l.advanceAmount ?? 0, delegateName: l.delegateName || ''
-                                  };
-                                });
-                                const currentPayments = totalFactoryPayments.map(p => {
-                                  let parsed: any = {};
-                                  try { parsed = JSON.parse(p.description || '{}'); } catch {}
-                                  return {
-                                    id: p.id, amount: p.amount, date: p.date, notes: parsed.notes || '',
-                                    recipient: parsed.recipient || '', delegateName: p.delegateName || '',
-                                    delegatePhone: p.delegatePhone || '', appliedToCarriedDebt: parsed.appliedToCarriedDebt || 0
-                                  };
-                                });
-                                const rawSum = currentLoads.reduce((s, l) => s + l.subtotal, 0);
-                                const trueCredit = Math.max(0, totalFactoryBalanceDetails.totalAdvancePayments - totalFactoryBalanceDetails.totalWithdrawnValue - carriedOverDebt);
-                                const newCycle = {
-                                  id: Date.now().toString(),
-                                  settledAt: new Date().toLocaleDateString('ar-EG') + ' ' + new Date().toLocaleTimeString('ar-EG'),
-                                  loads: currentLoads,
-                                  payments: currentPayments,
-                                  rawLoadedValue: rawSum,
-                                  totalWithdrawnValue: totalFactoryBalanceDetails.totalWithdrawnValue,
-                                  totalAdvancePayments: totalFactoryBalanceDetails.totalAdvancePayments,
-                                  creditBalance: trueCredit,
-                                  carriedOverDebtAtTime: carriedOverDebt
+                      <button
+                        type="button"
+                        disabled={isArchiving || isSyncing}
+                        onClick={async () => {
+                          if (isArchiving || isSyncing) return;
+                          const credit = creditBalance;
+                          const confirmed = await confirmDialog(credit > 0
+                            ? `ترحيل الدورة للأرشيف:\n• سيتم حفظ جميع البيانات الحالية (حمولات + مبيعات + دفعات)\n• سيتم صفراء الشاشات للبدء بدورة جديدة\n• الفائض ${formatNum(credit)}ج.م سيُضاف كرصيد يخصم من الدورة التالية\n\nهل أنت متأكد؟`
+                            : `ترحيل الدورة للأرشيف:\n• سيتم حفظ جميع البيانات الحالية (حمولات + مبيعات + دفعات)\n• سيتم صفراء الشاشات للبدء بدورة جديدة\n\nهل أنت متأكد؟`
+                          );
+                          if (confirmed) {
+                            setIsArchiving(true);
+                            try {
+                              const finalPhone = selectedDelegatePhone || factoryDelegateFilter || currentUser?.phone || '';
+                              const finalName = selectedDelegatePhone ? (archiveDelegates.find(d => d.phone === selectedDelegatePhone)?.name || currentUser?.name || 'مجهول') : (factoryDelegateFilter ? (archiveDelegates.find(d => d.phone === factoryDelegateFilter || d.name === factoryDelegateFilter)?.name || 'مجهول') : 'مجهول');
+                              const t = getDelegateLastArchiveTimestamp(finalPhone, finalName);
+
+                              const currentLoads = activeFilteredLoads.map(l => {
+                                const prod = products.find(p => String(p.id).trim() === String(l.productId).trim());
+                                const weights = prod ? getProductWeightsFallback(prod) : [];
+                                const weight = weights.find(w => String(w.id).trim() === String(l.weightId).trim());
+                                const unitsPerCarton = weight?.unitsPerCarton || 12;
+                                const cartons = l.cartonsCount !== undefined ? l.cartonsCount : Math.floor(l.quantity / unitsPerCarton);
+                                const loose = l.looseUnitsCount !== undefined ? l.looseUnitsCount : (l.quantity % unitsPerCarton);
+                                const cartonPrice = l.cartonPrice !== undefined ? Number(l.cartonPrice) : (Number(weight?.cartonPriceFromFactory) || (prod ? Number(prod.price) : 0) || 0);
+                                const unitPrice = l.unitPrice !== undefined ? Number(l.unitPrice) : (Number(weight?.factoryPricePerUnit) || (prod ? Number(prod.price) : 0) || 0);
+                                return {
+                                  date: l.date, productName: prod?.name || l.productName || 'غير معروف',
+                                  weightSize: weight?.size || (l as any).weightSize || '', cartons, loose,
+                                  cartonPrice, subtotal: (cartons * cartonPrice) + (loose * unitPrice),
+                                  advanceAmount: l.advanceAmount ?? 0, delegateName: l.delegateName || ''
                                 };
-                                setArchiveCycles(prev => {
-                                  const next = [...prev, newCycle];
-                                  
-                                  return next;
-                                });
-                                setCarriedOverDebt(trueCredit > 0 ? -trueCredit : 0);
-                                setCarriedOverDebtDate('');
-                                
-                                if (onArchiveFactoryCycle) {
-                                  const finalPhone = selectedDelegatePhone || factoryDelegateFilter || currentUser?.phone || '';
-                                  const finalName = selectedDelegatePhone ? (archiveDelegates.find(d => d.phone === selectedDelegatePhone)?.name || currentUser?.name || 'مجهول') : (factoryDelegateFilter ? (archiveDelegates.find(d => d.phone === factoryDelegateFilter || d.name === factoryDelegateFilter)?.name || 'مجهول') : 'مجهول');
-                                  onArchiveFactoryCycle(finalPhone, finalName);
-                                } else {
-                                  // Mark all current factory loads as archived via parent handler (fallback)
-                                  const loadsToArchive = factoryLoads.filter(l => parseCairoTime(l.date) > lastArchiveTimestamp);
-                                  for (const load of loadsToArchive) { onDeleteLoad(load.id); }
-                                  const currentExpenses = expenses.filter(e =>
-                                    (e.category === 'سداد للمصنع' || e.type === 'factory_payment') && parseCairoTime(e.date) > lastArchiveTimestamp);
-                                  for (const exp of currentExpenses) { onDeleteExpense(exp.id); }
-                                }
-                                showToast("✓ تم أرشفة الدورة بنجاح! الشاشات جاهزة لدورة جديدة. يمكنك مراجعة الدورة في تبويب الأرشيف.");
-                              } catch (err) {
-                                console.error(err);
-                                showToast("❌ حدث خطأ أثناء الأرشفة!");
-                              } finally {
-                                setIsArchiving(false);
+                              });
+                              const currentPayments = totalFactoryPayments.map(p => {
+                                let parsed: any = {};
+                                try { parsed = JSON.parse(p.description || '{}'); } catch {}
+                                return {
+                                  id: p.id, amount: p.amount, date: p.date, notes: parsed.notes || '',
+                                  recipient: parsed.recipient || '', location: parsed.location || '', delegateName: p.delegateName || '',
+                                  delegatePhone: p.delegatePhone || '', appliedToCarriedDebt: parsed.appliedToCarriedDebt || 0
+                                };
+                              });
+                              const rawSum = currentLoads.reduce((s, l) => s + l.subtotal, 0);
+                              const trueCredit = Math.max(0, totalFactoryBalanceDetails.totalAdvancePayments - totalFactoryBalanceDetails.totalWithdrawnValue - carriedOverDebt);
+                              const cycleCollected = activeFilteredInvoices.reduce((sum: number, inv: any) => sum + (inv.paidAmount !== undefined ? inv.paidAmount : (inv.totalAfterDiscount || 0)), 0);
+                              const cycleTripsCollected = (trips || []).filter((t: any) => t.collected && parseCairoTime(t.date) > lastArchiveTimestamp).reduce((sum: number, t: any) => sum + (t.price || 0), 0);
+                              const cycleExtraRevenues = (expenses || []).filter((e: any) => e.type === 'revenue' && parseCairoTime(e.date) > lastArchiveTimestamp).reduce((sum: number, e: any) => sum + (e.amount || 0), 0);
+                              const cycleExpenses = (expenses || []).filter((e: any) => e.type !== 'revenue' && e.category !== 'سداد للمصنع' && e.type !== 'factory_payment' && parseCairoTime(e.date) > lastArchiveTimestamp).reduce((sum: number, e: any) => sum + (e.amount || 0), 0);
+                              const newCycle = {
+                                id: Date.now().toString(),
+                                settledAt: new Date().toLocaleDateString('ar-EG') + ' ' + new Date().toLocaleTimeString('ar-EG'),
+                                loads: currentLoads,
+                                payments: currentPayments,
+                                rawLoadedValue: rawSum,
+                                totalWithdrawnValue: totalFactoryBalanceDetails.totalWithdrawnValue,
+                                totalAdvancePayments: totalFactoryBalanceDetails.totalAdvancePayments,
+                                collectedAmount: cycleCollected,
+                                tripsCollected: cycleTripsCollected,
+                                extraRevenues: cycleExtraRevenues,
+                                cycleExpenses: cycleExpenses,
+                                creditBalance: trueCredit,
+                                carriedOverDebtAtTime: carriedOverDebt,
+                                settledFully: true,
+                                amountPaidInSettlement: totalFactoryBalanceDetails.totalAdvancePayments,
+                                amountCarriedOver: 0,
+                                settlementReason: trueCredit > 0 ? `ترحيل الرصيد الدائن ${formatNum(trueCredit)} ج.م للدورة القادمة` : 'تسوية — الحساب صفر',
+                                delegatePhone: finalPhone,
+                                delegateName: finalName
+                              };
+                              setArchiveCycles(prev => {
+                                const next = [...prev, newCycle];
+                                return next;
+                              });
+                              setCarriedOverDebt(trueCredit > 0 ? -trueCredit : 0);
+                              setCarriedOverDebtDate('');
+                              if (onArchiveFactoryCycle) {
+                                onArchiveFactoryCycle(finalPhone, finalName);
+                              } else {
+                                // لا نحذف الحمولات — تبقى ظاهرة كمرجع للمناديب
+                                const currentExpenses = expenses.filter(e =>
+                                  (e.category === 'سداد للمصنع' || e.type === 'factory_payment') && filterByFactoryDelegate(e) && parseCairoTime(e.date) > lastArchiveTimestamp && !(e.archived || e.isArchived || e.archivedAt));
+                                for (const exp of currentExpenses) { onDeleteExpense(exp.id); }
                               }
+                              showToast("✓ تم أرشفة الدورة بنجاح! الشاشات جاهزة لدورة جديدة. يمكنك مراجعة الدورة في تبويب الأرشيف.");
+                            } catch (err) {
+                              console.error(err);
+                              showToast("❌ حدث خطأ أثناء الأرشفة!");
+                            } finally {
+                              setIsArchiving(false);
                             }
-                          }}
-                          className="bg-[#8B5CF6] hover:bg-[#7C3AED] text-white active:scale-95 text-xs font-black py-2.5 rounded-xl cursor-pointer transition-all text-center flex items-center justify-center gap-1.5 shadow-md animate-pulse"
-                        >
-                          <Archive className="h-4 w-4 text-violet-200 shrink-0" />
-                          <span>ترحيل للأرشيف</span>
-                        </button>
-                      )
+                          }
+                        }}
+                        className="w-full bg-[#8B5CF6] hover:bg-[#7C3AED] text-white active:scale-95 text-xs font-black py-2.5 rounded-xl transition-all text-center flex items-center justify-center gap-1.5 shadow-md cursor-pointer"
+                      >
+                        <Archive className="h-4 w-4 text-violet-200 shrink-0" />
+                        <span>ترحيل للأرشيف</span>
+                      </button>
                     )}
                   </div>
                 );
@@ -6858,31 +7680,71 @@ export default function FactoryTab({
 
             </div>
 
-            {/* Settle Full Amount Modal */}
-            {showSettleModal && (
+            {/* Settlement Modal — السداد وترحيل المتبقي */}
+            {showSettleModal && (() => {
+              const netDue = totalFactoryBalanceDetails.netRemainingDueToFactory;
+              const isCredit = netDue < 0;
+              const paymentAmt = Math.max(0, Number(settlePaymentAmount) || 0);
+              const carryover = Math.round(netDue - paymentAmt);
+              const canConfirm = settleRecipient.trim() && settleReceiptLocation.trim() && settleMethod && paymentAmt > 0;
+              return (
               <div className="fixed inset-0 z-[100000] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-in fade-in duration-200" dir="rtl" onClick={() => setShowSettleModal(false)}>
                 <div className="bg-[#FFFFFF] rounded-2xl shadow-xl border border-slate-100 w-full max-w-sm overflow-hidden scale-in duration-200" onClick={(e) => e.stopPropagation()}>
-                  <div className="p-5 flex flex-col gap-3 bg-emerald-50">
+                  <div className="p-5 flex flex-col gap-3 bg-gradient-to-br from-emerald-50 to-teal-50 border-b border-emerald-100">
                     <div className="flex items-center gap-3 text-emerald-700">
                       <div className="bg-emerald-100 text-emerald-600 p-2 rounded-xl flex items-center justify-center">
                         <CheckCircle2 className="h-6 w-6" />
                       </div>
-                      <h3 className="font-extrabold text-lg">تم السداد بالكامل</h3>
+                      <h3 className="font-extrabold text-lg">السداد وترحيل المتبقي</h3>
                     </div>
                     <p className="text-[#1A365D] text-xs font-bold pr-9">
-                      سيتم تسجيل دفعة بقيمة <span className="text-emerald-700 font-mono font-black">{formatNum(totalFactoryBalanceDetails.netRemainingDueToFactory)} ج.م</span> وإقفال الدورة للأرشيف.
+                      أدخل المبلغ المدفوع حالياً وسيتم حساب المتبقي للترحيل تلقائياً
                     </p>
                   </div>
-                  <div className="p-5 flex flex-col gap-4">
+                  <div className="p-5 flex flex-col gap-3">
+                    <div className="bg-rose-50 border border-rose-200 rounded-xl p-3 text-center">
+                      <span className="text-[10px] block font-bold text-rose-600 mb-1">مديونية المصنع الحالية</span>
+                      <span className="text-xl font-black font-mono text-rose-600">{formatNum(Math.max(0, netDue))} <span className="text-xs">ج.م</span></span>
+                    </div>
+                    <div className="bg-white border border-slate-200 rounded-xl p-3 text-xs font-bold text-[#1A365D] flex flex-col gap-1 focus-within:ring-2 focus-within:ring-emerald-500/30 focus-within:border-emerald-400 transition-all">
+                      <span className="text-slate-500">المبلغ المدفوع حالياً (ج.م):</span>
+                      <input
+                        type="number"
+                        min="0"
+                        placeholder="أدخل المبلغ المسدد"
+                        value={settlePaymentAmount}
+                        onChange={(e) => setSettlePaymentAmount(e.target.value)}
+                        className="w-full bg-transparent outline-none text-lg font-black font-mono text-emerald-700"
+                        autoFocus
+                      />
+                    </div>
+                    <div className={`${carryover < 0 ? 'bg-indigo-50 border-indigo-200' : 'bg-amber-50 border-amber-200'} border rounded-xl p-3 text-center`}>
+                      <span className="text-[10px] block font-bold text-slate-700 mb-1">
+                        {carryover < 0 ? 'رصيد دائن للمصنع (فائض سداد يرحل لصالحنا)' : 'المتبقي للترحيل للدورة القادمة'}
+                      </span>
+                      <span className={`text-xl font-black font-mono ${carryover < 0 ? 'text-indigo-600' : 'text-amber-600'}`}>
+                        {formatNum(Math.abs(carryover))} <span className="text-xs">ج.م</span>
+                      </span>
+                      <span className="text-[9px] block text-slate-400 mt-0.5">المعادلة: {formatNum(Math.max(0, netDue))} - {formatNum(paymentAmt)} = {formatNum(carryover)}</span>
+                    </div>
                     <div className="bg-white border border-slate-200 rounded-xl p-3 text-xs font-bold text-[#1A365D] flex items-center gap-1 focus-within:ring-2 focus-within:ring-emerald-500/30 focus-within:border-emerald-400 transition-all">
                       <span className="text-slate-500 shrink-0">المستلم:</span>
                       <input
                         type="text"
-                        placeholder="اسم المستلم"
+                        placeholder=""
                         value={settleRecipient}
                         onChange={(e) => setSettleRecipient(e.target.value)}
                         className="flex-1 bg-transparent outline-none text-xs font-bold text-[#1A365D]"
-                        autoFocus
+                      />
+                    </div>
+                    <div className="bg-white border border-slate-200 rounded-xl p-3 text-xs font-bold text-[#1A365D] flex items-center gap-1 focus-within:ring-2 focus-within:ring-emerald-500/30 focus-within:border-emerald-400 transition-all">
+                      <span className="text-slate-500 shrink-0">📍 مكان الاستلام:</span>
+                      <input
+                        type="text"
+                        placeholder="الموقع الفعلي للاستلام"
+                        value={settleReceiptLocation}
+                        onChange={(e) => setSettleReceiptLocation(e.target.value)}
+                        className="flex-1 bg-transparent outline-none text-xs font-bold text-[#1A365D]"
                       />
                     </div>
                     <div className="bg-white border border-slate-200 rounded-xl p-3 text-xs font-bold text-[#1A365D] flex items-center gap-1 focus-within:ring-2 focus-within:ring-emerald-500/30 focus-within:border-emerald-400 transition-all">
@@ -6899,6 +7761,16 @@ export default function FactoryTab({
                         <option value="تحويل بنكي">تحويل بنكي</option>
                       </select>
                     </div>
+                    <div className="bg-white border border-slate-200 rounded-xl p-3 text-xs font-bold text-[#1A365D] flex flex-col gap-1 focus-within:ring-2 focus-within:ring-emerald-500/30 focus-within:border-emerald-400 transition-all">
+                      <span className="text-slate-500">سبب الترحيل والتسوية:</span>
+                      <textarea
+                        placeholder=""
+                        value={settleReason}
+                        onChange={(e) => setSettleReason(e.target.value)}
+                        className="w-full bg-transparent outline-none text-xs font-bold text-[#1A365D] resize-none"
+                        rows={2}
+                      />
+                    </div>
                   </div>
                   <div className="bg-slate-50 px-5 py-3 flex items-center justify-end gap-2 border-t border-slate-100">
                     <button
@@ -6908,31 +7780,51 @@ export default function FactoryTab({
                       إلغاء
                     </button>
                     <button
-                      disabled={!settleRecipient.trim() || !settleMethod}
+                      disabled={!canConfirm}
                       onClick={async () => {
-                        if (!settleRecipient.trim() || !settleMethod) return;
+                        if (!canConfirm) return;
                         setShowSettleModal(false);
                         setIsArchiving(true);
                         try {
-                          const remainingAmount = totalFactoryBalanceDetails.netRemainingDueToFactory;
+                          const paidAmount = paymentAmt;
+                          const isSettlementReason = settleReason && (
+                            settleReason.includes('فرق') || 
+                            settleReason.includes('سعر') || 
+                            settleReason.includes('مرتجع') || 
+                            settleReason.includes('تسوية') || 
+                            settleReason.includes('اهلاك') || 
+                            settleReason.includes('إهلاك') || 
+                            settleReason.includes('تصفية')
+                          );
 
-                          // 1️⃣ توثيق وحفظ الدفعة المالية المباشرة مع المستلم وطريقة السداد المحددة
-                          onAddExpense({
-                            amount: remainingAmount,
-                            category: 'سداد للمصنع',
-                            type: 'factory_payment',
-                            date: nowEgyptISO(),
-                            description: JSON.stringify({
-                              notes: `تصفية كاملة عبر ${settleMethod}`,
-                              appliedToCarriedDebt: 0,
-                              recipient: settleRecipient.trim()
-                            }),
-                            delegateName: selectedDelegatePhone ? (archiveDelegates.find(d => d.phone === selectedDelegatePhone)?.name || 'مجهول') : currentUser?.name || 'مجهول',
-                            delegatePhone: selectedDelegatePhone || currentUser?.phone || ''
-                          });
+                          const rawRemaining = Math.round(netDue - paidAmount);
+                          const isOverpayment = rawRemaining < 0;
 
-                          // 2️⃣ بناء نسخة كشف الحركات التفصيلية للأرشفة التلقائية الحالية
-                          const currentLoads = factoryLoads.filter(l => parseCairoTime(l.date) > lastArchiveTimestamp).map(l => {
+                          const finalCarriedOver = isSettlementReason ? 0 : rawRemaining;
+                          const finalWaived = isSettlementReason ? Math.max(0, rawRemaining) : 0;
+                          const finalCredit = isOverpayment ? Math.abs(rawRemaining) : 0;
+
+                          if (paidAmount > 0) {
+                            onAddExpense({
+                              amount: paidAmount,
+                              category: 'سداد للمصنع',
+                              type: 'factory_payment',
+                              date: nowEgyptISO(),
+                              description: JSON.stringify({
+                                notes: `سداد عبر ${settleMethod}${settleReason ? ' — ' + settleReason : ''}`,
+                                appliedToCarriedDebt: 0,
+                                recipient: settleRecipient.trim(),
+                                location: settleReceiptLocation.trim()
+                              }),
+                              delegateName: selectedDelegatePhone ? (archiveDelegates.find(d => d.phone === selectedDelegatePhone)?.name || 'مجهول') : currentUser?.name || 'مجهول',
+                              delegatePhone: selectedDelegatePhone || currentUser?.phone || ''
+                            });
+                          }
+
+                          const finalPhone = selectedDelegatePhone || factoryDelegateFilter || currentUser?.phone || '';
+                          const finalName = selectedDelegatePhone ? (archiveDelegates.find(d => d.phone === selectedDelegatePhone)?.name || currentUser?.name || 'مجهول') : (factoryDelegateFilter ? (archiveDelegates.find(d => d.phone === factoryDelegateFilter || d.name === factoryDelegateFilter)?.name || 'مجهول') : 'مجهول');
+
+                          const currentLoads = activeFilteredLoads.map(l => {
                             const prod = products.find(p => String(p.id).trim() === String(l.productId).trim());
                             const weights = prod ? getProductWeightsFallback(prod) : [];
                             const weight = weights.find(w => String(w.id).trim() === String(l.weightId).trim());
@@ -6949,24 +7841,23 @@ export default function FactoryTab({
                             };
                           });
 
-                          // 3️⃣ جلب الدفعات السابقة بالدورة مع دمج دفعة التصفية الحالية موثقة بالكامل
                           const existingPayments = totalFactoryPayments.map(p => {
                             let parsed: any = {};
                             try { parsed = JSON.parse(p.description || '{}'); } catch {}
                             return {
                               id: p.id, amount: p.amount, date: p.date, notes: parsed.notes || '',
-                              recipient: parsed.recipient || '', delegateName: p.delegateName || '',
+                              recipient: parsed.recipient || '', location: parsed.location || '', delegateName: p.delegateName || '',
                               delegatePhone: p.delegatePhone || '', appliedToCarriedDebt: parsed.appliedToCarriedDebt || 0
                             };
                           });
 
-                          // دفعة التصفية النهائية الموثقة باسم المستلم والبيان لإدراجها بالأرشيف
                           const settlePayment = {
                             id: 'settle_' + Date.now(),
-                            amount: remainingAmount,
+                            amount: paidAmount,
                             date: new Date().toLocaleDateString('ar-EG') + ' ' + new Date().toLocaleTimeString('ar-EG'),
-                            notes: `تصفية كاملة عبر ${settleMethod}`,
+                            notes: `سداد عبر ${settleMethod}${settleReason ? ' — ' + settleReason : ''}`,
                             recipient: settleRecipient.trim(),
+                            location: settleReceiptLocation.trim(),
                             delegateName: selectedDelegatePhone ? (archiveDelegates.find(d => d.phone === selectedDelegatePhone)?.name || 'مجهول') : currentUser?.name || 'مجهول',
                             delegatePhone: selectedDelegatePhone || currentUser?.phone || '',
                             appliedToCarriedDebt: 0
@@ -6974,9 +7865,13 @@ export default function FactoryTab({
 
                           const allPayments = [...existingPayments, settlePayment];
                           const rawSum = currentLoads.reduce((s, l) => s + l.subtotal, 0);
-                          const totalPaid = allPayments.reduce((s, p) => s + p.amount, 0);
+                          const currentAdvancesSum = currentLoads.reduce((s: number, l: any) => s + (l.advanceAmount ?? 0), 0);
+                          const totalPaid = currentAdvancesSum + allPayments.reduce((s, p) => s + (p.amount - (p.appliedToCarriedDebt || 0)), 0);
+                          const cycleCollected = activeFilteredInvoices.reduce((sum: number, inv: any) => sum + (inv.paidAmount !== undefined ? inv.paidAmount : (inv.totalAfterDiscount || 0)), 0);
+                          const cycleTripsCollected = (trips || []).filter((t: any) => t.collected && parseCairoTime(t.date) > lastArchiveTimestamp).reduce((sum: number, t: any) => sum + (t.price || 0), 0);
+                          const cycleExtraRevenues = (expenses || []).filter((e: any) => e.type === 'revenue' && parseCairoTime(e.date) > lastArchiveTimestamp).reduce((sum: number, e: any) => sum + (e.amount || 0), 0);
+                          const cycleExpenses = (expenses || []).filter((e: any) => e.type !== 'revenue' && e.category !== 'سداد للمصنع' && e.type !== 'factory_payment' && parseCairoTime(e.date) > lastArchiveTimestamp).reduce((sum: number, e: any) => sum + (e.amount || 0), 0);
 
-                          // 4️⃣ إنشاء كائن الدورة المؤرشفة وإرساله للمخزن التاريخي للسيستم
                           const newCycle = {
                             id: Date.now().toString(),
                             settledAt: new Date().toLocaleDateString('ar-EG') + ' ' + new Date().toLocaleTimeString('ar-EG'),
@@ -6985,27 +7880,59 @@ export default function FactoryTab({
                             rawLoadedValue: rawSum,
                             totalWithdrawnValue: totalFactoryBalanceDetails.totalWithdrawnValue,
                             totalAdvancePayments: totalPaid,
-                            creditBalance: 0,
+                            collectedAmount: cycleCollected,
+                            tripsCollected: cycleTripsCollected,
+                            extraRevenues: cycleExtraRevenues,
+                            cycleExpenses: cycleExpenses,
+                            creditBalance: finalCredit,
                             carriedOverDebtAtTime: carriedOverDebt,
-                            settledFully: true
+                            settledFully: rawRemaining === 0 || isOverpayment,
+                            amountPaidInSettlement: paidAmount,
+                            amountCarriedOver: finalCarriedOver,
+                            waivedAmount: finalWaived,
+                            settlementReason: settleReason || (isOverpayment ? `سداد زائد للمصنع وترحيل فائض ${formatNum(finalCredit)} ج.م` : `سداد جزئي عبر ${settleMethod} وترحيل المتبقي`),
+                            delegatePhone: finalPhone,
+                            delegateName: finalName
                           };
 
                           setArchiveCycles(prev => { const next = [...prev, newCycle]; return next; });
-                          setCarriedOverDebt(0);
+                          setCarriedOverDebt(finalCarriedOver);
                           setCarriedOverDebtDate('');
 
-                          // 5️⃣ تفريغ الشاشات الحالية ونقل البيانات بالكامل للأرشيف بنجاح
+                          // Set the receipt state for immediate printing
+                          setRecentlyArchivedReceipt({
+                            amount: paidAmount,
+                            method: settleMethod,
+                            recipient: settleRecipient.trim() || 'غير محدد',
+                            location: settleReceiptLocation.trim() || 'غير محدد',
+                            date: new Date().toLocaleDateString('ar-EG') + ' ' + new Date().toLocaleTimeString('ar-EG'),
+                            notes: settleReason || (isOverpayment ? `سداد زائد وتصفية` : `سداد جزئي وترحيل`),
+                            amountCarriedOver: finalCarriedOver,
+                            settlementReason: newCycle.settlementReason
+                          });
+
                           if (onArchiveFactoryCycle) {
-                            const finalPhone = selectedDelegatePhone || factoryDelegateFilter || currentUser?.phone || '';
-                            const finalName = selectedDelegatePhone ? (archiveDelegates.find(d => d.phone === selectedDelegatePhone)?.name || currentUser?.name || 'مجهول') : (factoryDelegateFilter ? (archiveDelegates.find(d => d.phone === factoryDelegateFilter || d.name === factoryDelegateFilter)?.name || 'مجهول') : 'مجهول');
                             onArchiveFactoryCycle(finalPhone, finalName);
                           } else {
-                            const loadsToArchive = factoryLoads.filter(l => parseCairoTime(l.date) > lastArchiveTimestamp);
-                            for (const load of loadsToArchive) { onDeleteLoad(load.id); }
-                            const currentExpenses = expenses.filter(e => (e.category === 'سداد للمصنع' || e.type === 'factory_payment') && parseCairoTime(e.date) > lastArchiveTimestamp);
+                            // لا نحذف الحمولات — تبقى ظاهرة كمرجع للمناديب
+                            const currentExpenses = expenses.filter(e => (e.category === 'سداد للمصنع' || e.type === 'factory_payment') && filterByFactoryDelegate(e) && parseCairoTime(e.date) > lastArchiveTimestamp && !(e.archived || e.isArchived || e.archivedAt));
                             for (const exp of currentExpenses) { onDeleteExpense(exp.id); }
                           }
-                          showToast("✓ تم تسجيل الدفعة النهائية وترحيل الدورة للأرشيف بنجاح!");
+                          showToast(remainingAmount > 0
+                            ? `✓ تم تسجيل دفعة ${formatNum(paidAmount)} ج.م وترحيل المتبقي ${formatNum(remainingAmount)} ج.م للدورة القادمة!`
+                            : `✓ تم السداد بالكامل (${formatNum(paidAmount)} ج.م) وترحيل الدورة!`);
+
+                          if (paidAmount > 0) {
+                            setReceiptData({
+                              amount: paidAmount,
+                              method: settleMethod,
+                              recipient: settleRecipient.trim() || 'غير محدد',
+                              location: settleReceiptLocation.trim() || 'غير محدد',
+                              date: new Date().toLocaleDateString('ar-EG') + ' ' + new Date().toLocaleTimeString('ar-EG'),
+                              notes: settleReason || `سداد عبر ${settleMethod}`
+                            });
+                            setShowReceiptModal(true);
+                          }
                         } catch (err) {
                           console.error(err);
                           showToast("❌ حدث خطأ أثناء الترحيل!");
@@ -7013,62 +7940,142 @@ export default function FactoryTab({
                           setIsArchiving(false);
                         }
                       }}
-                      className={`px-4 py-2 rounded-lg text-sm font-bold shadow-sm transition-all cursor-pointer ${(!settleRecipient.trim() || !settleMethod) ? 'bg-slate-200 text-slate-400 cursor-not-allowed' : 'bg-emerald-600 hover:bg-emerald-700 text-white'}`}
+                      className={`px-4 py-2 rounded-lg text-sm font-bold shadow-sm transition-all cursor-pointer ${!canConfirm ? 'bg-slate-200 text-slate-400 cursor-not-allowed' : 'bg-emerald-600 hover:bg-emerald-700 text-white'}`}
                     >
-                      تأكيد السداد
+                      تأكيد السداد والترحيل
+                    </button>
+                  </div>
+                </div>
+              </div>
+              );
+            })()}
+
+            {/* Receipt Modal */}
+            {showReceiptModal && receiptData && (
+              <div className="fixed inset-0 z-[100000] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm" dir="rtl" onClick={() => { setShowReceiptModal(false); setReceiptData(null); }}>
+                <div className="bg-white rounded-2xl shadow-xl border border-slate-100 w-full max-w-sm overflow-hidden" onClick={(e) => e.stopPropagation()}>
+                  <div className="p-5 bg-gradient-to-br from-[#1A365D] to-[#2D4A7A] text-white text-center">
+                    <CheckCircle2 className="h-12 w-12 mx-auto mb-2 opacity-90" />
+                    <h3 className="font-extrabold text-lg">إيصال سداد</h3>
+                    <p className="text-xs text-blue-100 mt-1">Factory Payment Receipt</p>
+                  </div>
+                  <div className="p-5 space-y-3" id="receipt-print-area">
+                    <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+                      <span className="text-xs text-slate-500 font-bold">المبلغ</span>
+                      <span className="text-sm font-black text-[#1A365D]">{formatNum(receiptData.amount)} ج.م</span>
+                    </div>
+                    <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+                      <span className="text-xs text-slate-500 font-bold">طريقة السداد</span>
+                      <span className="text-xs font-bold text-slate-700">{receiptData.method}</span>
+                    </div>
+                    <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+                      <span className="text-xs text-slate-500 font-bold">المستلم</span>
+                      <span className="text-xs font-bold text-slate-700">{receiptData.recipient}</span>
+                    </div>
+                    <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+                      <span className="text-xs text-slate-500 font-bold">مكان الاستلام</span>
+                      <span className="text-xs font-bold text-slate-700">{receiptData.location}</span>
+                    </div>
+                    <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+                      <span className="text-xs text-slate-500 font-bold">التاريخ والوقت</span>
+                      <span className="text-xs font-bold text-slate-700">{receiptData.date}</span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-xs text-slate-500 font-bold">الملاحظات</span>
+                      <span className="text-xs font-bold text-slate-700">{receiptData.notes}</span>
+                    </div>
+                  </div>
+                  <div className="p-4 border-t border-slate-100 flex gap-2">
+                    <button
+                      onClick={() => { setShowReceiptModal(false); setReceiptData(null); }}
+                      className="flex-1 py-2.5 rounded-xl text-xs font-bold bg-[#1A365D] text-white hover:bg-[#2D4A7A] transition-colors cursor-pointer"
+                    >
+                      إغلاق
+                    </button>
+                    <button
+                      onClick={() => {
+                        const el = document.getElementById('receipt-print-area');
+                        if (!el) return;
+                        const win = window.open('', '_blank', 'width=400,height=600');
+                        if (!win) return;
+                        win.document.write(`
+                          <html dir="rtl"><head><title>إيصال سداد</title>
+                          <style>body{font-family:sans-serif;padding:20px;direction:rtl;text-align:right;}
+                          .row{display:flex;justify-content:space-between;border-bottom:1px solid #eee;padding:8px 0;}
+                          .label{color:#666;font-size:12px;font-weight:bold;}.value{font-size:13px;font-weight:900;color:#1A365D;}
+                          h2{text-align:center;color:#1A365D;}</style></head><body>
+                          <h2>إيصال سداد</h2>
+                          <div class="row"><span class="label">المبلغ</span><span class="value">${formatNum(receiptData.amount)} ج.م</span></div>
+                          <div class="row"><span class="label">طريقة السداد</span><span class="value">${receiptData.method}</span></div>
+                          <div class="row"><span class="label">المستلم</span><span class="value">${receiptData.recipient}</span></div>
+                          <div class="row"><span class="label">مكان الاستلام</span><span class="value">${receiptData.location}</span></div>
+                          <div class="row"><span class="label">التاريخ</span><span class="value">${receiptData.date}</span></div>
+                          <div class="row"><span class="label">الملاحظات</span><span class="value">${receiptData.notes}</span></div>
+                          </body></html>`);
+                        win.document.close();
+                        win.print();
+                      }}
+                      className="flex-1 py-2.5 rounded-xl text-xs font-bold bg-white border border-[#1A365D] text-[#1A365D] hover:bg-slate-50 transition-colors cursor-pointer"
+                    >
+                      طباعة الإيصال
                     </button>
                   </div>
                 </div>
               </div>
             )}
 
-            {/* Waive Remaining Amount Modal */}
-            {showWaiveModal && (
-              <div className="fixed inset-0 z-[100000] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-in fade-in duration-200" dir="rtl" onClick={() => setShowWaiveModal(false)}>
+            {/* Archive Confirmation Modal — for green button: full payment & archive */}
+            {showArchiveConfirmModal && (() => {
+              const currentDebt = Math.max(0, totalFactoryBalanceDetails.netRemainingDueToFactory);
+              return (
+              <div className="fixed inset-0 z-[100000] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-in fade-in duration-200" dir="rtl" onClick={() => setShowArchiveConfirmModal(false)}>
                 <div className="bg-[#FFFFFF] rounded-2xl shadow-xl border border-slate-100 w-full max-w-sm overflow-hidden scale-in duration-200" onClick={(e) => e.stopPropagation()}>
-                  <div className="p-5 flex flex-col gap-3 bg-amber-50">
-                    <div className="flex items-center gap-3 text-amber-700">
-                      <div className="bg-amber-100 text-amber-600 p-2 rounded-xl flex items-center justify-center">
-                        <Scale className="h-6 w-6" />
+                  <div className="p-5 flex flex-col gap-3 bg-gradient-to-br from-emerald-50 to-teal-50 border-b border-emerald-100">
+                    <div className="flex items-center gap-3 text-emerald-700">
+                      <div className="bg-emerald-100 text-emerald-600 p-2 rounded-xl flex items-center justify-center">
+                        <CheckCircle2 className="h-6 w-6" />
                       </div>
-                      <h3 className="font-extrabold text-lg">سماح بالمبلغ المتبقي وترحيل</h3>
+                      <h3 className="font-extrabold text-lg">تم السداد بالكامل وأرشفة الدورة</h3>
                     </div>
-                    <p className="text-[#1A365D] text-xs font-bold pr-9">
-                      سيتم ترحيل الدورة الحالية مع إسقاط المبلغ المتبقي <span className="text-amber-700">{formatNum(totalFactoryBalanceDetails.netRemainingDueToFactory)}</span> ج.م من المديونية.
-                    </p>
+                    {currentDebt > 0 ? (
+                      <div className="bg-rose-50 border border-rose-200 rounded-xl p-3 text-center">
+                        <span className="text-[10px] block font-bold text-rose-700 mb-1">سيتم تسجيل سداد كامل المبلغ المتبقي وقدره:</span>
+                        <span className="text-lg font-black font-mono text-rose-600">{formatNum(currentDebt)} <span className="text-xs">ج.م</span></span>
+                      </div>
+                    ) : (
+                      <p className="text-[#1A365D] text-xs font-bold pr-9">
+                        يرجى توثيق بيانات الإغلاق النهائي للدورة قبل الترحيل للأرشيف.
+                      </p>
+                    )}
                   </div>
                   <div className="p-5 flex flex-col gap-4">
-                    <div className="bg-white border border-slate-200 rounded-xl p-3 text-xs font-bold text-[#1A365D] flex items-center gap-1 focus-within:ring-2 focus-within:ring-amber-500/30 focus-within:border-amber-400 transition-all">
-                      <span className="text-slate-500 shrink-0">المستلم:</span>
+                    <label className="text-sm font-bold text-slate-800">السيد المستلم</label>
+                    <div className="bg-white border border-slate-200 rounded-xl p-3 focus-within:ring-2 focus-within:ring-emerald-500/30 focus-within:border-emerald-400 transition-all">
                       <input
                         type="text"
-                        placeholder="اسم المستلم"
-                        value={waiveRecipient}
-                        onChange={(e) => setWaiveRecipient(e.target.value)}
-                        className="flex-1 bg-transparent outline-none text-xs font-bold text-[#1A365D]"
+                        placeholder=""
+                        value={archiveConfirmRecipient}
+                        onChange={(e) => setArchiveConfirmRecipient(e.target.value)}
+                        className="w-full bg-transparent outline-none text-xs font-bold text-[#1A365D]"
                         autoFocus
                       />
                     </div>
-                    <div className="bg-white border border-slate-200 rounded-xl p-3 text-xs font-bold text-[#1A365D] flex items-center gap-1 focus-within:ring-2 focus-within:ring-amber-500/30 focus-within:border-amber-400 transition-all">
-                      <span className="text-slate-500 shrink-0">طريقة السداد:</span>
-                      <select
-                        value={waiveNotes}
-                        onChange={(e) => setWaiveNotes(e.target.value)}
-                        className="flex-1 bg-transparent outline-none text-xs font-bold text-[#1A365D] cursor-pointer"
-                      >
-                        <option value="">اختر طريقة السداد</option>
-                        <option value="كاش">كاش</option>
-                        <option value="فودافون كاش">فودافون كاش</option>
-                        <option value="انستاباي">انستاباي</option>
-                        <option value="تحويل بنكي">تحويل بنكي</option>
-                      </select>
+                    <label className="text-sm font-bold text-slate-800 mt-1">📍 مكان الاستلام</label>
+                    <div className="bg-white border border-slate-200 rounded-xl p-3 focus-within:ring-2 focus-within:ring-emerald-500/30 focus-within:border-emerald-400 transition-all">
+                      <input
+                        type="text"
+                        placeholder="الموقع الفعلي للاستلام"
+                        value={archiveConfirmLocation}
+                        onChange={(e) => setArchiveConfirmLocation(e.target.value)}
+                        className="w-full bg-transparent outline-none text-xs font-bold text-[#1A365D]"
+                      />
                     </div>
-                    <div className="bg-white border border-slate-200 rounded-xl p-3 text-xs font-bold text-[#1A365D] flex flex-col gap-1 focus-within:ring-2 focus-within:ring-amber-500/30 focus-within:border-amber-400 transition-all">
-                      <span className="text-slate-500">سبب الترحيل والتسوية:</span>
+                    <label className="text-sm font-bold text-slate-800 mt-1">البيان والملاحظات الختامية وطريقة السداد</label>
+                    <div className="bg-white border border-slate-200 rounded-xl p-3 focus-within:ring-2 focus-within:ring-emerald-500/30 focus-within:border-emerald-400 transition-all">
                       <textarea
-                        placeholder="سبب السماح بالمبلغ المتبقي وتوثيق فرق السعر"
-                        value={waiveReason}
-                        onChange={(e) => setWaiveReason(e.target.value)}
+                        placeholder=""
+                        value={archiveConfirmNotes}
+                        onChange={(e) => setArchiveConfirmNotes(e.target.value)}
                         className="w-full bg-transparent outline-none text-xs font-bold text-[#1A365D] resize-none"
                         rows={2}
                       />
@@ -7076,19 +8083,42 @@ export default function FactoryTab({
                   </div>
                   <div className="bg-slate-50 px-5 py-3 flex items-center justify-end gap-2 border-t border-slate-100">
                     <button
-                      onClick={() => setShowWaiveModal(false)}
+                      onClick={() => setShowArchiveConfirmModal(false)}
                       className="px-4 py-2 rounded-lg text-sm font-bold text-slate-500 hover:text-[#1A365D] hover:bg-slate-200 transition-colors cursor-pointer"
                     >
                       إلغاء
                     </button>
                     <button
-                      disabled={!waiveRecipient.trim() || !waiveNotes.trim() || !waiveReason.trim()}
+                      disabled={!archiveConfirmRecipient.trim() || !archiveConfirmNotes.trim() || !archiveConfirmLocation.trim() || isArchiving || isSyncing}
                       onClick={async () => {
-                        if (!waiveRecipient.trim() || !waiveNotes.trim() || !waiveReason.trim()) return;
-                        setShowWaiveModal(false);
+                        if (!archiveConfirmRecipient.trim() || !archiveConfirmNotes.trim() || !archiveConfirmLocation.trim() || isArchiving || isSyncing) return;
+                        setShowArchiveConfirmModal(false);
                         setIsArchiving(true);
                         try {
-                          const currentLoads = factoryLoads.filter(l => parseCairoTime(l.date) > lastArchiveTimestamp).map(l => {
+                          const currentDebtVal = Math.max(0, totalFactoryBalanceDetails.netRemainingDueToFactory);
+
+                          // Record full payment if there's outstanding debt
+                          if (currentDebtVal > 0) {
+                            onAddExpense({
+                              amount: currentDebtVal,
+                              category: 'سداد للمصنع',
+                              type: 'factory_payment',
+                              date: nowEgyptISO(),
+                              description: JSON.stringify({
+                                notes: `سداد كامل عبر ${archiveConfirmNotes.trim()}`,
+                                appliedToCarriedDebt: 0,
+                                recipient: archiveConfirmRecipient.trim(),
+                                location: archiveConfirmLocation.trim()
+                              }),
+                              delegateName: selectedDelegatePhone ? (archiveDelegates.find(d => d.phone === selectedDelegatePhone)?.name || 'مجهول') : currentUser?.name || 'مجهول',
+                              delegatePhone: selectedDelegatePhone || currentUser?.phone || ''
+                            });
+                          }
+
+                          const finalPhone = selectedDelegatePhone || factoryDelegateFilter || currentUser?.phone || '';
+                          const finalName = selectedDelegatePhone ? (archiveDelegates.find(d => d.phone === selectedDelegatePhone)?.name || currentUser?.name || 'مجهول') : (factoryDelegateFilter ? (archiveDelegates.find(d => d.phone === factoryDelegateFilter || d.name === factoryDelegateFilter)?.name || 'مجهول') : 'مجهول');
+
+                          const currentLoads = activeFilteredLoads.map(l => {
                             const prod = products.find(p => String(p.id).trim() === String(l.productId).trim());
                             const weights = prod ? getProductWeightsFallback(prod) : [];
                             const weight = weights.find(w => String(w.id).trim() === String(l.weightId).trim());
@@ -7109,37 +8139,83 @@ export default function FactoryTab({
                             try { parsed = JSON.parse(p.description || '{}'); } catch {}
                             return {
                               id: p.id, amount: p.amount, date: p.date, notes: parsed.notes || '',
-                              recipient: parsed.recipient || '', delegateName: p.delegateName || '',
+                              recipient: parsed.recipient || '', location: parsed.location || '', delegateName: p.delegateName || '',
                               delegatePhone: p.delegatePhone || '', appliedToCarriedDebt: parsed.appliedToCarriedDebt || 0
                             };
                           });
                           const rawSum = currentLoads.reduce((s, l) => s + l.subtotal, 0);
+                          const currentAdvancesSum = currentLoads.reduce((s: number, l: any) => s + (l.advanceAmount ?? 0), 0);
+                          const totalPaidAuto = currentAdvancesSum + currentPayments.reduce((s, p) => s + (p.amount - ((p as any).appliedToCarriedDebt || 0)), 0) + currentDebtVal;
+                          const cycleCollected = activeFilteredInvoices.reduce((sum: number, inv: any) => sum + (inv.paidAmount !== undefined ? inv.paidAmount : (inv.totalAfterDiscount || 0)), 0);
+                          const cycleTripsCollected = (trips || []).filter((t: any) => t.collected && parseCairoTime(t.date) > lastArchiveTimestamp).reduce((sum: number, t: any) => sum + (t.price || 0), 0);
+                          const cycleExtraRevenues = (expenses || []).filter((e: any) => e.type === 'revenue' && parseCairoTime(e.date) > lastArchiveTimestamp).reduce((sum: number, e: any) => sum + (e.amount || 0), 0);
+                          const cycleExpenses = (expenses || []).filter((e: any) => e.type !== 'revenue' && e.category !== 'سداد للمصنع' && e.type !== 'factory_payment' && parseCairoTime(e.date) > lastArchiveTimestamp).reduce((sum: number, e: any) => sum + (e.amount || 0), 0);
                           const newCycle = {
                             id: Date.now().toString(),
                             settledAt: new Date().toLocaleDateString('ar-EG') + ' ' + new Date().toLocaleTimeString('ar-EG'),
                             loads: currentLoads,
-                            payments: currentPayments,
+                            payments: [...currentPayments, {
+                              id: 'settle_' + Date.now(),
+                              amount: currentDebtVal,
+                              date: new Date().toLocaleDateString('ar-EG') + ' ' + new Date().toLocaleTimeString('ar-EG'),
+                              notes: archiveConfirmNotes.trim(),
+                              recipient: archiveConfirmRecipient.trim(),
+                              location: archiveConfirmLocation.trim(),
+                              delegateName: selectedDelegatePhone ? (archiveDelegates.find(d => d.phone === selectedDelegatePhone)?.name || 'مجهول') : currentUser?.name || 'مجهول',
+                              delegatePhone: selectedDelegatePhone || currentUser?.phone || '',
+                              appliedToCarriedDebt: 0
+                            }],
                             rawLoadedValue: rawSum,
                             totalWithdrawnValue: totalFactoryBalanceDetails.totalWithdrawnValue,
-                            totalAdvancePayments: totalFactoryBalanceDetails.totalAdvancePayments,
+                            totalAdvancePayments: totalPaidAuto,
+                            collectedAmount: cycleCollected,
+                            tripsCollected: cycleTripsCollected,
+                            extraRevenues: cycleExtraRevenues,
+                            cycleExpenses: cycleExpenses,
                             creditBalance: 0,
                             carriedOverDebtAtTime: carriedOverDebt,
-                            waivedAmount: totalFactoryBalanceDetails.netRemainingDueToFactory
+                            settledFully: true,
+                            amountPaidInSettlement: totalPaidAuto,
+                            amountCarriedOver: 0,
+                            settlementReason: `تم سداد الدورة بالكامل واستلمها السيد: ${archiveConfirmRecipient.trim()} — بيان الإغلاق: ${archiveConfirmNotes.trim()}`,
+                            delegatePhone: finalPhone,
+                            delegateName: finalName
                           };
                           setArchiveCycles(prev => { const next = [...prev, newCycle]; return next; });
                           setCarriedOverDebt(0);
                           setCarriedOverDebtDate('');
-                          if (onArchiveFactoryCycle) {
-                            const finalPhone = selectedDelegatePhone || factoryDelegateFilter || currentUser?.phone || '';
-                            const finalName = selectedDelegatePhone ? (archiveDelegates.find(d => d.phone === selectedDelegatePhone)?.name || currentUser?.name || 'مجهول') : (factoryDelegateFilter ? (archiveDelegates.find(d => d.phone === factoryDelegateFilter || d.name === factoryDelegateFilter)?.name || 'مجهول') : 'مجهول');
+
+                          const newReceipt = {
+                            amount: currentDebtVal,
+                            method: 'كاش / سداد تصفية',
+                            recipient: archiveConfirmRecipient.trim() || 'غير محدد',
+                            location: archiveConfirmLocation.trim() || 'غير محدد',
+                            date: new Date().toLocaleDateString('ar-EG') + ' ' + new Date().toLocaleTimeString('ar-EG'),
+                            notes: archiveConfirmNotes.trim(),
+                            amountCarriedOver: 0,
+                            settlementReason: newCycle.settlementReason
+                          };
+                          setLastActiveReceipt(newReceipt);
+
+                          if (currentDebtVal > 0) {
+                            setReceiptData({
+                              amount: currentDebtVal,
+                              method: archiveConfirmNotes.trim() || 'سداد كامل وأرشفة',
+                              recipient: archiveConfirmRecipient.trim() || 'غير محدد',
+                              location: archiveConfirmLocation.trim() || 'غير محدد',
+                              date: new Date().toLocaleDateString('ar-EG') + ' ' + new Date().toLocaleTimeString('ar-EG'),
+                              notes: `سداد كامل للدورة عند الأرشفة: ${archiveConfirmNotes.trim()}`
+                            });
+                            setShowReceiptModal(true);
+                          }
+                            if (onArchiveFactoryCycle) {
                             onArchiveFactoryCycle(finalPhone, finalName);
                           } else {
-                            const loadsToArchive = factoryLoads.filter(l => parseCairoTime(l.date) > lastArchiveTimestamp);
-                            for (const load of loadsToArchive) { onDeleteLoad(load.id); }
-                            const currentExpenses = expenses.filter(e => (e.category === 'سداد للمصنع' || e.type === 'factory_payment') && parseCairoTime(e.date) > lastArchiveTimestamp);
+                            // لا نحذف الحمولات — تبقى ظاهرة كمرجع للمناديب
+                            const currentExpenses = expenses.filter(e => (e.category === 'سداد للمصنع' || e.type === 'factory_payment') && filterByFactoryDelegate(e) && parseCairoTime(e.date) > lastArchiveTimestamp && !(e.archived || e.isArchived || e.archivedAt));
                             for (const exp of currentExpenses) { onDeleteExpense(exp.id); }
                           }
-                          showToast("✓ تم ترحيل الدورة مع السماح بالمبلغ المتبقي!");
+                          showToast("✓ تم تسديد المبلغ بالكامل وأرشفة الدورة مع توثيق بيانات الاستلام!");
                         } catch (err) {
                           console.error(err);
                           showToast("❌ حدث خطأ أثناء الترحيل!");
@@ -7147,14 +8223,15 @@ export default function FactoryTab({
                           setIsArchiving(false);
                         }
                       }}
-                      className={`px-4 py-2 rounded-lg text-sm font-bold shadow-sm transition-all cursor-pointer ${(!waiveRecipient.trim() || !waiveNotes.trim() || !waiveReason.trim()) ? 'bg-slate-200 text-slate-400 cursor-not-allowed' : 'bg-amber-500 hover:bg-amber-600 text-white'}`}
+                      className={`px-4 py-2 rounded-lg text-sm font-bold shadow-sm transition-all cursor-pointer ${(!archiveConfirmRecipient.trim() || !archiveConfirmNotes.trim() || isArchiving || isSyncing) ? 'bg-slate-200 text-slate-400 cursor-not-allowed' : 'bg-emerald-600 hover:bg-emerald-700 text-white'}`}
                     >
-                      تأكيد الترحيل
+                      تأكيد الإغلاق النهائي
                     </button>
                   </div>
                 </div>
               </div>
-            )}
+              );
+            })()}
 
             {/* List of registered Payments to Factory direct */}
             {currentCycleExtraPayments.length > 0 && (
@@ -7415,7 +8492,9 @@ export default function FactoryTab({
                           <div className="flex gap-1">
                             <button
                               type="button"
-                              onClick={() => {
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
                                 setEditingPaymentId(pay.id);
                                 setEditingPaymentAmount(String(pay.amount));
                                 setEditingPaymentNotes(pay.notes || '');
@@ -7438,7 +8517,11 @@ export default function FactoryTab({
                             </button>
                             <button
                               type="button"
-                              onClick={() => onDeleteExpense(pay.id)}
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                onDeleteExpense(pay.id);
+                              }}
                               className="text-rose-500 hover:text-rose-700 bg-[#FFFFFF] hover:bg-rose-50 p-1.5 rounded-lg border border-slate-200 cursor-pointer transition-all active:scale-95"
                               title="حذف دفعة السداد"
                             >
@@ -7454,23 +8537,51 @@ export default function FactoryTab({
             )}
 
             {/* Print & share Buttons */}
-            <div className="flex flex-row gap-4 w-full mt-6">
-              <button
-                type="button"
-                onClick={exportFactoryLedgerAsPDF}
-                className="flex-1 bg-[#1e293b] hover:bg-[#334155] text-white py-3 rounded-xl text-sm font-bold flex items-center justify-center gap-2 active:scale-95 transition-all shadow-xs cursor-pointer"
-              >
-                <Printer className="h-5 w-5" />
-                <span>تنزيل كشف حساب المصنع (PDF)</span>
-              </button>
-              <button
-                type="button"
-                onClick={handleDownloadFactoryLedgerImage}
-                className="flex-1 bg-[#DD6B20] hover:bg-[#C05621] text-white py-3 rounded-xl text-sm font-bold flex items-center justify-center gap-2 active:scale-95 transition-all shadow-xs cursor-pointer"
-              >
-                <Image className="h-5 w-5" />
-                <span>تنزيل كشف حساب المصنع (صورة)</span>
-              </button>
+            <div className="flex flex-col gap-4 w-full mt-6">
+              <div className="flex flex-row gap-4 w-full">
+                <button
+                  type="button"
+                  onClick={exportFactoryLedgerAsPDF}
+                  className="flex-1 bg-[#1e293b] hover:bg-[#334155] text-white py-3 rounded-xl text-sm font-bold flex items-center justify-center gap-2 active:scale-95 transition-all shadow-xs cursor-pointer"
+                >
+                  <Printer className="h-5 w-5" />
+                  <span>تنزيل كشف حساب المصنع (PDF)</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDownloadFactoryLedgerImage}
+                  className="flex-1 bg-[#DD6B20] hover:bg-[#C05621] text-white py-3 rounded-xl text-sm font-bold flex items-center justify-center gap-2 active:scale-95 transition-all shadow-xs cursor-pointer"
+                >
+                  <Image className="h-5 w-5" />
+                  <span>تنزيل كشف حساب المصنع (صورة)</span>
+                </button>
+              </div>
+
+              {lastActiveReceipt && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 w-full mt-4 border-t border-dashed border-slate-200 pt-4">
+                  {/* 1. زر تنزيل إيصال التصفية كصورة - مطابق للزر البرتقالي الأيسر */}
+                  <button
+                    onClick={() => handleDownloadReceiptAsImage(lastActiveReceipt)}
+                    className="w-full bg-[#d96b27] hover:bg-[#c25e1a] text-white font-bold py-3.5 px-6 rounded-2xl flex items-center justify-center gap-2 shadow-md transition-all duration-200 hover:scale-[1.01] active:scale-[0.99] text-base md:text-lg cursor-pointer"
+                  >
+                    <span>تنزيل إيصال التصفية (صورة)</span>
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                    </svg>
+                  </button>
+
+                  {/* 2. زر تنزيل إيصال التصفية PDF - مطابق للزر الكحلي الأيمن */}
+                  <button
+                    onClick={() => handlePrintReceiptPDF(lastActiveReceipt)}
+                    className="w-full bg-[#1e293b] hover:bg-slate-800 text-white font-bold py-3.5 px-6 rounded-2xl flex items-center justify-center gap-2 shadow-md transition-all duration-200 hover:scale-[1.01] active:scale-[0.99] text-base md:text-lg cursor-pointer"
+                  >
+                    <span>تنزيل إيصال التصفية (PDF)</span>
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
+                    </svg>
+                  </button>
+                </div>
+              )}
             </div>
 
             {/* حركة البضاعة - فلتر مشترك + لوحتين */}
@@ -7561,24 +8672,28 @@ export default function FactoryTab({
                     {Object.keys(filteredSoldCounts).length === 0 ? (
                       <p className="text-center text-gray-400 py-6 text-xs font-medium">لا توجد مبيعات مسجلة في الفواتير حتى الآن.</p>
                     ) : (
-                      Object.entries(filteredSoldCounts).map(([weightId, val]) => {
+                      Object.entries(filteredSoldCounts).map(([compositeKey, val]) => {
+                        const sepIdx = compositeKey.indexOf('_');
+                        const pid = compositeKey.substring(0, sepIdx);
+                        const wid = compositeKey.substring(sepIdx + 1);
                         const info = val as { cartons: number; units: number; value: number; factoryValue: number };
                         let pName = 'منتج غير محدد';
                         let sizeStr = 'عبوة مجهولة';
                         let unitsPerC = 12;
 
-                        products.forEach(p => {
+                        const p = products.find(pp => String(pp.id).trim() === String(pid).trim());
+                        if (p) {
+                          pName = p.name;
                           const weights = getProductWeightsFallback(p);
-                          const weight = weights.find(w => w.id === weightId);
+                          const weight = weights.find(w => String(w.id).trim() === String(wid).trim());
                           if (weight) {
-                            pName = p.name;
                             sizeStr = weight.size;
                             unitsPerC = weight.unitsPerCarton || 12;
                           }
-                        });
+                        }
 
                         return (
-                          <div key={'sold_' + weightId} className="bg-emerald-50/40 border border-emerald-100 rounded-xl p-3.5 flex flex-col gap-2 text-xs">
+                          <div key={'sold_' + compositeKey} className="bg-emerald-50/40 border border-emerald-100 rounded-xl p-3.5 flex flex-col gap-2 text-xs">
                             <div className="font-bold text-emerald-950 text-[11px]">{pName} ({sizeStr})</div>
                             <div className="flex items-center gap-2 flex-wrap">
                               <span className="bg-emerald-100 text-emerald-800 border border-emerald-200 px-2 py-0.5 rounded-full text-[10px] font-bold">إجمالي المبيعات: {Math.floor(info.units / unitsPerC)} كرتونة</span>
@@ -7639,9 +8754,9 @@ export default function FactoryTab({
                   type="button"
                   onClick={() => {
                     const canvas = document.createElement('canvas');
+                    const W = 920;
                     const TARGET_W = 3840;
                     const dpr = Math.max(window.devicePixelRatio || 1, TARGET_W / W);
-                    const W = 920;
                     const padX = 30;
                     const tableW = W - padX * 2;
                     const rowH = 38;
@@ -7842,12 +8957,13 @@ export default function FactoryTab({
                 </button>
               </div>
 
-              {/* جدول الجرد بالكرتونة */}
-              <div className="overflow-x-auto">
+              {/* جدول الجرد بالكرتونة — individual product rows */}
+              <div className="w-full overflow-x-auto whitespace-nowrap scrollbar-thin">
                 <table className="w-full text-xs">
                   <thead>
                     <tr className="bg-[#2B6CB0] text-white">
-                      <th className="p-2 rounded-r-lg text-right">المنتج</th>
+                      <th className="p-2 rounded-r-lg text-center">م</th>
+                      <th className="p-2 text-right">المنتج</th>
                       <th className="p-2 text-center">الحجم</th>
                       <th className="p-2 text-center">التحميل (كرتونة)</th>
                       <th className="p-2 text-center">المبيع (كرتونة)</th>
@@ -7855,7 +8971,7 @@ export default function FactoryTab({
                     </tr>
                   </thead>
                   <tbody>
-                    {Object.entries(inventoryFilteredStocks).filter(([, stock]) => stock.remaining > 0).map(([key, stock]) => {
+                    {Object.entries(inventoryFilteredStocks).filter(([, stock]) => stock.loaded > 0 || stock.sold > 0).map(([key, stock], idx) => {
                       const sepIdx = key.indexOf('_');
                       const prodId = key.substring(0, sepIdx);
                       const weightId = key.substring(sepIdx + 1);
@@ -7869,15 +8985,15 @@ export default function FactoryTab({
                         if (!displayName) displayName = refLoad?.productName || prodId;
                         if (!displaySize) displaySize = refLoad?.weightSize || weightId;
                       }
-                      if (stock.loaded === 0 && stock.sold === 0) return null;
 
                       return (
-                        <tr key={key} className="border-b border-[#BEE3F8] hover:bg-[#EBF4FF]">
+                        <tr key={key} className={`border-b border-[#BEE3F8] hover:bg-[#EBF4FF] ${idx % 2 === 0 ? 'bg-white' : 'bg-slate-50/50'}`}>
+                          <td className="p-2 text-center text-slate-400 font-bold">{idx + 1}</td>
                           <td className="p-2 font-bold text-[#1A365D]">{displayName}</td>
-                          <td className="p-2 text-center text-[#2B6CB0]">{displaySize}</td>
-                          <td className="p-2 text-center font-bold">{stock.loaded}</td>
-                          <td className="p-2 text-center text-emerald-700 font-bold">{stock.sold}</td>
-                          <td className={`p-2 text-center font-black ${stock.remaining > 0 ? 'text-[#DD6B20]' : 'text-[#38A169]'}`}>
+                          <td className="p-2 text-center text-[#2B6CB0] font-bold">{displaySize}</td>
+                          <td className="p-2 text-center font-black text-[#1A365D]">{stock.loaded}</td>
+                          <td className="p-2 text-center text-emerald-700 font-black">{stock.sold}</td>
+                          <td className={`p-2 text-center font-black ${stock.remaining > 0 ? 'text-[#DD6B20]' : stock.remaining < 0 ? 'text-red-600' : 'text-[#38A169]'}`}>
                             {stock.remaining}
                           </td>
                         </tr>
@@ -7887,6 +9003,7 @@ export default function FactoryTab({
                   <tfoot>
                     <tr className="bg-[#0d7c5f] text-white font-black">
                       <td className="p-2 rounded-r-lg">الإجمالي</td>
+                      <td className="p-2 text-center"></td>
                       <td className="p-2 text-center"></td>
                       <td className="p-2 text-center">
                         {Object.values(inventoryFilteredStocks).reduce((sum, s) => sum + s.loaded, 0)}
@@ -7917,6 +9034,100 @@ export default function FactoryTab({
                   <div className="text-lg font-black text-[#DD6B20]">{Object.values(inventoryFilteredStocks).reduce((sum, s) => sum + s.remaining, 0)}</div>
                 </div>
               </div>
+
+              {/* ⭐ لوحة مراجعة تفاصيل الدورة النشطة — Audit Trail */}
+              {(() => {
+                const cycleLoads = [...activeFilteredLoads]
+                  .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+                const cycleInvoices = [...activeFilteredInvoices]
+                  .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+                if (cycleLoads.length === 0 && cycleInvoices.length === 0) return null;
+
+                return (
+                  <div className="mt-4 border-t border-[#BEE3F8] pt-4">
+                    <h5 className="text-xs font-black text-[#1A365D] mb-3 flex items-center gap-1.5">
+                      <ClipboardList className="h-4 w-4 text-[#2B6CB0]" />
+                      مراجعة تفاصيل الدورة النشطة
+                    </h5>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {/* الجانب الأيسر — الحمولات المسحوبة */}
+                      <div className="bg-white border border-indigo-100 rounded-xl p-3">
+                        <div className="flex items-center gap-1.5 mb-2 pb-1.5 border-b border-indigo-50">
+                          <Package className="h-3.5 w-3.5 text-indigo-500" />
+                          <span className="text-[11px] font-black text-indigo-800">الحمولات المسحوبة ({cycleLoads.length})</span>
+                        </div>
+                        <div className="max-h-48 overflow-y-auto custom-scroll flex flex-col gap-1.5">
+                          {cycleLoads.length === 0 ? (
+                            <p className="text-[10px] text-gray-400 text-center py-3">لا توجد حمولات في الدورة الحالية</p>
+                          ) : (
+                            cycleLoads.map(load => {
+                              const prod = products.find(p => String(p.id).trim() === String(load.productId).trim());
+                              const weights = prod ? getProductWeightsFallback(prod) : [];
+                              const weight = weights.find(w => String(w.id).trim() === String(load.weightId).trim()) || weights[0];
+                              const pName = prod?.name || (load as any).productName || '—';
+                              const wSize = weight?.size || (load as any).weightSize || '';
+                              const cartons = load.cartonsCount ?? Math.floor(load.quantity / (weight?.unitsPerCarton || 12));
+                              const loadDate = new Date(load.date);
+                              return (
+                                <div key={load.id} className="flex items-center justify-between bg-indigo-50/50 rounded-lg px-2.5 py-1.5 text-[10px]">
+                                  <div className="flex flex-col gap-0.5">
+                                    <span className="font-bold text-[#1A365D]">{pName} ({wSize})</span>
+                                    <span className="text-gray-400 font-mono">{loadDate.toLocaleDateString('ar-EG')} {loadDate.toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })}</span>
+                                  </div>
+                                  <span className="bg-indigo-100 text-indigo-800 px-2 py-0.5 rounded-full font-black">{cartons} ك</span>
+                                </div>
+                              );
+                            })
+                          )}
+                        </div>
+                      </div>
+
+                      {/* الجانب الأيمن — المبيعات الصادرة */}
+                      <div className="bg-white border border-emerald-100 rounded-xl p-3">
+                        <div className="flex items-center gap-1.5 mb-2 pb-1.5 border-b border-emerald-50">
+                          <Receipt className="h-3.5 w-3.5 text-emerald-500" />
+                          <span className="text-[11px] font-black text-emerald-800">المبيعات الصادرة ({cycleInvoices.length})</span>
+                        </div>
+                        <div className="max-h-48 overflow-y-auto custom-scroll flex flex-col gap-1.5">
+                          {cycleInvoices.length === 0 ? (
+                            <p className="text-[10px] text-gray-400 text-center py-3">لا توجد فواتير مبيعات في الدورة الحالية</p>
+                          ) : (
+                            cycleInvoices.map(inv => {
+                              // حساب إجمالي الكمية المباعة بالقطعة ثم تحويلها للكرتونة لكل صنف
+                              let totalCartons = 0;
+                              let totalUnits = 0;
+                              inv.items.forEach(item => {
+                                const prod = products.find(p => String(p.id).trim() === String(item.productId).trim());
+                                const weights = prod ? getProductWeightsFallback(prod) : [];
+                                const w = weights.find(ww => String(ww.id).trim() === String(item.weightId || '').trim());
+                                const upc = w?.unitsPerCarton || 12;
+                                totalUnits += item.quantity;
+                                totalCartons += Math.floor(item.quantity / upc);
+                              });
+                              const totalValue = inv.items.reduce((s, item) => s + (item.finalPrice * item.quantity), 0);
+                              const invDate = new Date(inv.date);
+                              return (
+                                <div key={inv.id} className="flex items-center justify-between bg-emerald-50/50 rounded-lg px-2.5 py-1.5 text-[10px]">
+                                  <div className="flex flex-col gap-0.5">
+                                    <span className="font-bold text-[#1A365D]">{inv.customerName || 'عميل غير محدد'}</span>
+                                    <span className="text-gray-400 font-mono">فاتورة #{inv.id?.slice(-6)} — {invDate.toLocaleDateString('ar-EG')} {invDate.toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })}</span>
+                                  </div>
+                                  <div className="flex flex-col items-end gap-0.5">
+                                    <span className="bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full font-black">{totalCartons} ك ({totalUnits} قطعة)</span>
+                                    <span className="text-[#DD6B20] font-bold font-mono">{formatNum(totalValue)} ج.م</span>
+                                  </div>
+                                </div>
+                              );
+                            })
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
           </div>
         )}
@@ -7977,7 +9188,8 @@ export default function FactoryTab({
                       type="button"
                       onClick={() => {
                         const rawSum = editData.loads.reduce((s: number, l: any) => s + l.subtotal, 0);
-                        const paySum = editData.payments.reduce((s: number, p: any) => s + p.amount, 0);
+                        const advancesSum = editData.loads.reduce((s: number, l: any) => s + (l.advanceAmount ?? 0), 0);
+                        const paySum = advancesSum + editData.payments.reduce((s: number, p: any) => s + (p.amount - ((p as any).appliedToCarriedDebt || 0)), 0);
                         const credit = Math.max(0, paySum - rawSum);
                         const updatedCycle = {
                           ...editData,
@@ -8041,6 +9253,7 @@ export default function FactoryTab({
           <div className="animate-fade-in">
             <SoftDeletedArchive
               items={softDeleted}
+              products={products}
               onRestore={(item) => onRestoreItem?.(item)}
               onPermanentDelete={(item) => onPermanentDelete?.(item)}
             />

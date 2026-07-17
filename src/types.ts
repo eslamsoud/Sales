@@ -44,6 +44,8 @@ export interface FactoryLoad {
   productName?: string; // لحفظ اسم الصنف وقت التحميل ومنع ظهوره كمجهول مستقبلاً
   weightSize?: string;  // لحفظ حجم العبوة وقت التحميل
   archivedAt?: string;  // تاريخ أرشفة الشحنة (يُحفظ عند الترحيل ولا يُحذف)
+  archived?: boolean;   // هل تمت أرشفتها ماليّاً
+  isArchived?: boolean; // هل الشحنة مؤرشفة بالكامل
 }
 
 export interface Customer {
@@ -86,8 +88,45 @@ export interface Invoice {
   delegateName?: string;  // اسم المندوب المسجل للعملية
   delegatePhone?: string; // رقم هاتف المندوب المسجل للعملية
   isDelivered?: boolean; // هل تم التسليم قيد الأرشفة
+  archivedAt?: string;   // تاريخ أرشفة الفاتورة — يُحفظ عند إقفال الدورة ولا يُحذف (جدار الحماية الأول)
+  archived?: boolean;   // هل تمت أرشفتها ماليّاً
+  isArchived?: boolean; // هل الفاتورة مؤرشفة بالكامل
   lat?: number;
   lng?: number;
+}
+
+export type ReturnMovementType = 'cash_refund' | 'credit_note' | 'exchange';
+
+export interface ReturnItem {
+  productId: string;
+  weightId?: string;
+  productName: string;
+  weightSize: string;
+  quantity: number;              // الكمية المرتجعة (دائماً بالعبوات)
+  unitType: 'carton' | 'piece'; // نوع الوحدة المختارة للإرجاع
+  unitPrice: number;             // سعر الوحدة بالفاتورة الأصلية
+  totalValue: number;            // إجمالي قيمة المرتجع
+}
+
+export interface Return {
+  id: string;
+  date: string;
+  invoiceId: string;
+  invoiceNumber: string;
+  customerId: string;
+  customerName: string;
+  delegatePhone: string;
+  delegateName: string;
+  items: ReturnItem[];
+  totalReturnValue: number;
+  movementType: ReturnMovementType;
+  exchangeProduct?: { productId: string; weightId?: string; productName: string; weightSize: string; cartonPrice?: number; unitPrice: number; quantity?: number; unitType?: string; totalValue?: number };
+  exchangeDifference?: number;
+  exchangeSettlementMethod?: 'cash' | 'credit';
+  notes?: string;
+  archivedAt?: string;
+  archived?: boolean;
+  isArchived?: boolean;
 }
 
 export interface Expense {
@@ -99,6 +138,9 @@ export interface Expense {
   type?: 'expense' | 'revenue'; // added type for revenues
   delegateName?: string;  // اسم المندوب المسجل للعملية
   delegatePhone?: string; // رقم هاتف المندوب المسجل للعملية
+  archivedAt?: string;   // تاريخ الأرشفة
+  archived?: boolean;   // هل تمت أرشفتها ماليّاً
+  isArchived?: boolean; // هل الدفعة مؤرشفة بالكامل
   lat?: number;
   lng?: number;
 }

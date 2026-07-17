@@ -194,7 +194,7 @@ export default function ExpensesTab({ expenses, onAddExpense, onDeleteExpense, o
                   <td><b style="color:#1e3a5f">${parseExpenseDescription(item.description) || '(بدون بيان)'}</b></td>
                   ${isExpense ? `<td><span class="bd-b">${item.category}</span></td>` : ''}
                   <td style="text-align:center;font-weight:800;color:#1e3a5f;font-family:'Tajawal',monospace">${item.amount.toLocaleString('ar-EG')}</td>
-                  <td style="font-size:9px">${new Date(item.date).toLocaleString('ar-EG')}</td>
+                  <td style="font-size:9px">${new Date(item.date).toLocaleDateString('ar-EG')}</td>
                 </tr>
               `).join('')}
             <tr class="ts">
@@ -466,7 +466,7 @@ export default function ExpensesTab({ expenses, onAddExpense, onDeleteExpense, o
       ctx.fillStyle = '#64748b';
       ctx.font = '500 10px Cairo, system-ui, sans-serif';
       ctx.textAlign = 'left';
-      ctx.fillText(new Date(item.date).toLocaleString('ar-EG'), colDate, y + 24);
+      ctx.fillText(new Date(item.date).toLocaleDateString('ar-EG'), colDate, y + 24);
       y += rowH;
     });
 

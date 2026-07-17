@@ -185,7 +185,7 @@ export default function LoadsArchiveSection({
                               </div>
                             </summary>
                             <div className="px-4 pb-4 pt-2 border-t border-slate-150/65 flex flex-col gap-3 bg-white">
-                              <div className="overflow-x-auto border border-slate-200 rounded-xl">
+                              <div className="w-full overflow-x-auto whitespace-nowrap scrollbar-thin border border-slate-200 rounded-xl">
                                 <table className="w-full text-[10px] font-bold text-slate-800">
                                   <thead className="bg-slate-100 sticky top-0 text-slate-600">
                                     <tr>
@@ -213,7 +213,7 @@ export default function LoadsArchiveSection({
                                       return (
                                         <tr key={load.id || i} className="border-t border-slate-100 hover:bg-slate-50/50">
                                           <td className="p-2 text-right text-[#1A365D]">
-                                            <div>{pName}</div>
+                                            <div>{pName} {(load.archived || load.isArchived || load.archivedAt) && <span className="text-emerald-600 text-[9px] font-bold">[مؤرشفة]</span>}</div>
                                             <div className="text-[9px] text-[#2B6CB0] font-medium">الوزن / الحجم: {wSize}</div>
                                           </td>
                                           <td className="p-2 text-center">{loadedCartons} {accountingUnitLabel}</td>

@@ -383,24 +383,34 @@ function doPost(e) {
       var existingRange = sheet.getDataRange();
       var existingData = existingRange.getValues();
       
-      var dataMap = {}; // الحل الجذري: قاموس المعرفات لمنع تداخل الصفوف تماماً
-      var order = []; // 🚨 الإصلاح الجذري: تعريف مصفوفة الترتيب المفقودة التي كانت تسبب الانهيار الصامت لجوجل
+      // 🛡️ الخطوة 1: بناء خريطة ID → بيانات من الصفوف الموجودة
+      var dataMap = {};
+      var order = [];
+      // سجل الصفوف المحذوفة (للمالك فقط) — سيتم حذفها بعد بناء الخريطة
+      var rowsToDelete = [];
       
       if (existingData.length > 1) {
         for (var k = 1; k < existingData.length; k++) {
           var r = existingData[k];
           
           // 🚨 تنظيف ذاتي أعمق وتجاهل كامل للأسطر التالفة والفارغة
-          if (!r || r.length === 0 || String(r[0]).trim() === '') continue; 
-          if (sheetName === 'الماليات' && (isNaN(Number(r[4])) || Number(r[4]) <= 0)) continue; 
-          if (sheetName === 'الفواتير' && (isNaN(Number(r[5])) || Number(r[5]) <= 0)) continue; 
-          if (sheetName === 'المصنع' && (isNaN(Number(r[7])) || Number(r[7]) <= 0)) continue; 
+          if (!r || r.length === 0 || String(r[0]).trim() === '') continue;
+          if (sheetName === 'الماليات' && (isNaN(Number(r[4])) || Number(r[4]) <= 0)) continue;
+          if (sheetName === 'الفواتير' && (isNaN(Number(r[5])) || Number(r[5]) <= 0)) continue;
+          if (sheetName === 'المصنع' && (isNaN(Number(r[7])) || Number(r[7]) <= 0)) continue;
           
           var rowId = String(r[0]).replace(/^'/, '').trim();
-          var altId = String(r[1]).replace(/^'/, '').trim(); // لالتقاط معرفات المنتجات والعملاء
+          var altId = String(r[1]).replace(/^'/, '').trim();
           if (rowId.length === 10 && rowId.indexOf('1') === 0) rowId = '0' + rowId;
           
-          if (delIds && (delIds.indexOf(rowId) !== -1 || delIds.indexOf(altId) !== -1)) continue; // تخطي وحذف السجلات المحذوفة محلياً للأبد
+          // 🔒 الحذف الشرطي الصارم: فقط المدير (Owner) يمكنه حذف السجلات
+          if (delIds && (delIds.indexOf(rowId) !== -1 || delIds.indexOf(altId) !== -1)) {
+            if (isOwner) {
+              rowsToDelete.push(k + 1); // 1-based row number
+            }
+            // غير المدير: يتم تجاهل المعرف ونترك الصف في مكانه
+            continue;
+          }
           
           // ضمان تساوي طول المصفوفة لحماية سيرفر جوجل من الانهيار (Jagged Array)
           var paddedRow = [];
@@ -408,19 +418,28 @@ function doPost(e) {
             paddedRow.push(r[c] !== undefined ? r[c] : '');
           }
           dataMap[rowId] = paddedRow;
-          order.push(rowId);
+          if (order.indexOf(rowId) === -1) order.push(rowId);
         }
       }
       
+      // 🛡️ حذف الصفوف المادية (للمالك فقط) — بترتيب تنازلي للحفاظ على الـ indices
+      if (rowsToDelete.length > 0) {
+        rowsToDelete.sort(function(a, b) { return b - a; });
+        for (var d = 0; d < rowsToDelete.length; d++) {
+          sheet.deleteRow(rowsToDelete[d]);
+        }
+      }
+      
+      // 🛡️ الخطوة 2: دمج البيانات الواردة
       if (dataRows && dataRows.length > 0) {
         for (var j = 0; j < dataRows.length; j++) {
           var row = dataRows[j];
           if (!row || row.length === 0 || String(row[0]).trim() === '') continue;
-  
-          var incomingId = String(row[0]).replace(/^'/, '').trim(); 
+          
+          var incomingId = String(row[0]).replace(/^'/, '').trim();
           if (incomingId.length === 10 && incomingId.indexOf('1') === 0) incomingId = '0' + incomingId;
           
-          if (delIds && delIds.indexOf(incomingId) !== -1) continue; // 🚨 حماية إضافية: منع إضافة السجل المحذوف حتى لو تم إرساله بالخطأ من الذاكرة المحلية
+          if (delIds && delIds.indexOf(incomingId) !== -1) continue;
           
           // توحيد طول الصف القادم من التطبيق لسد الثغرات
           var paddedNewRow = [];
@@ -428,30 +447,33 @@ function doPost(e) {
             paddedNewRow.push(row[col] !== undefined ? row[col] : '');
           }
           dataMap[incomingId] = paddedNewRow;
-          
-          // إضافة المعرف للترتيب إذا كان جديداً
-          if (order.indexOf(incomingId) === -1) {
-            order.push(incomingId);
-          }
+          if (order.indexOf(incomingId) === -1) order.push(incomingId);
         }
       }
       
+      // 🛡️ الخطوة 3: الكتابة الفوقية (Overwrite) دون مسح — آمنة وتراكمية
       var finalData = [headers];
       for (var i = 0; i < order.length; i++) {
         finalData.push(dataMap[order[i]]);
       }
-
+      
       if (sheet.getMaxColumns() < headers.length) {
         sheet.insertColumnsAfter(sheet.getMaxColumns(), headers.length - sheet.getMaxColumns());
       }
-
-      // 🚨 إضافة حماية لزيادة عدد الصفوف تلقائياً إذا تجاوزت البيانات حجم الشيت لتجنب انهيار السكربت
+      
+      // زيادة عدد الصفوف إذا كانت البيانات أكبر من حجم الشيت
       if (sheet.getMaxRows() < finalData.length) {
         sheet.insertRowsAfter(sheet.getMaxRows(), finalData.length - sheet.getMaxRows());
       }
-
-      sheet.clearContents();
+      
+      // 🚨 الكتابة المباشرة (Atomic Overwrite) — بدون clearContents نهائياً
       sheet.getRange(1, 1, finalData.length, headers.length).setValues(finalData);
+      
+      // إذا كانت البيانات الجديدة أقصر، نقوم بمسح الصفوف الزائدة فقط
+      if (existingData.length > finalData.length) {
+        sheet.getRange(finalData.length + 1, 1, existingData.length - finalData.length, headers.length).clearContent();
+      }
+      
       sheet.getRange(1, 1, 1, headers.length).setFontWeight("bold").setBackground(headerColor || "#cfe2f3");
       
       if (sheet.getFilter() === null) {
@@ -582,12 +604,17 @@ function doPost(e) {
       var summarySheet = ss.getSheetByName('الملخص');
       if (!summarySheet) {
         summarySheet = ss.insertSheet('الملخص');
+        summarySheet.getRange(1, 1, 2, 4).setValues([
+          ['تاريخ المزامنة', 'إجمالي المبيعات', 'المنصرف والمصروفات', 'صافي الأرباح'],
+          [data.metadata ? data.metadata.syncedAt : new Date().toISOString(), data.metadata ? (Number(data.metadata.totalSales) || 0) : 0, data.metadata ? (Number(data.metadata.totalExpenses) || 0) : 0, data.metadata ? (Number(data.metadata.netProfit) || 0) : 0]
+        ]);
+      } else {
+        // الكتابة فوق أول صفين دون مسح الشيت بالكامل
+        summarySheet.getRange(1, 1, 2, 4).setValues([
+          ['تاريخ المزامنة', 'إجمالي المبيعات', 'المنصرف والمصروفات', 'صافي الأرباح'],
+          [data.metadata ? data.metadata.syncedAt : new Date().toISOString(), data.metadata ? (Number(data.metadata.totalSales) || 0) : 0, data.metadata ? (Number(data.metadata.totalExpenses) || 0) : 0, data.metadata ? (Number(data.metadata.netProfit) || 0) : 0]
+        ]);
       }
-      summarySheet.clearContents();
-      summarySheet.getRange(1, 1, 2, 4).setValues([
-        ['تاريخ المزامنة', 'إجمالي المبيعات', 'المنصرف والمصروفات', 'صافي الأرباح'],
-        [data.metadata ? data.metadata.syncedAt : new Date().toISOString(), data.metadata ? (Number(data.metadata.totalSales) || 0) : 0, data.metadata ? (Number(data.metadata.totalExpenses) || 0) : 0, data.metadata ? (Number(data.metadata.netProfit) || 0) : 0]
-      ]);
       summarySheet.getRange(1, 1, 1, 4).setFontWeight("bold").setBackground("#d9ead3");
       
       return ContentService.createTextOutput(JSON.stringify({"status": "success"}))

@@ -4,15 +4,16 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef, useCallback } from 'react';
 import { Invoice, Expense, Product, Customer, Trip, AppSettings, formatNum, FactoryLoad, getProductWeightsFallback, UserAuth, InvoiceItem, getItemFactoryCost, getFactoryCartonPrice } from '../types';
-import { ArrowRight, FileSpreadsheet, Send, TrendingUp, TrendingDown, Clock, Search, Eye, Filter, Check, ShieldAlert, MapPin, Printer, ChevronDown, AlertCircle, Activity, Package, Wallet, UserCheck, HandCoins, CircleDollarSign } from 'lucide-react';
+import { ArrowRight, FileSpreadsheet, Send, TrendingUp, TrendingDown, Clock, Search, Eye, Filter, Check, ShieldAlert, MapPin, Printer, ChevronDown, AlertCircle, Activity, Package, Wallet, UserCheck, HandCoins, CircleDollarSign, RefreshCw } from 'lucide-react';
 import { showToast } from '../utils/toast';
 import { confirmDialog } from '../utils/confirm';
 import { COMPACT_PRO_CSS, printHTMLInNewWindow } from '../utils/reportStyles';
 import { ACTIVE_CUSTOMER_MSG, INACTIVE_CUSTOMER_MSG } from '../utils/messages';
 import SecurePhoneDisplay from './SecurePhoneDisplay';
 import { nowEgyptISO } from '../utils/storage';
+import html2canvas from 'html2canvas';
 
 // تطبيع الحروف العربية: ة → ه لتوحيد مقارنة أسماء المناطق
 const normalizeArabic = (s: string) => (s || '').replace(/ة/g, 'ه').replace(/ى/g, 'ي');
@@ -33,6 +34,8 @@ interface ReportsTabProps {
   permittedSubTabs?: string[];
   currentUser?: UserAuth | null;
   archiveCycles?: any[];
+  returns?: any[];
+  refreshKey?: number;
 }
 
 const formatCartonsAndPieces = (rawQty: number, unitsPerCarton: number): string => {
@@ -111,7 +114,9 @@ function ReportsTabComponent({
   onGoBack,
   permittedSubTabs,
   currentUser,
-  archiveCycles = []
+  archiveCycles = [],
+  returns = [],
+  refreshKey = 0
 }: ReportsTabProps) {
   // 🛡️ تنظيف وتأمين جميع قواعد البيانات من أي نصوص أو عناصر فارغة تالفة لمنع الشاشة البيضاء نهائياً
   const invoices = React.useMemo(() => (rawInvoices || []).filter(i => i && typeof i === 'object'), [rawInvoices]);
@@ -122,7 +127,7 @@ function ReportsTabComponent({
   const factoryLoads = React.useMemo(() => (rawFactoryLoads || []).filter(l => l && typeof l === 'object'), [rawFactoryLoads]);
   const isManager = currentUser?.role === 'owner';
 
-  const [activeSubTab, setActiveSubTab] = useState<'finance' | 'stats' | 'active_customers' | 'invoices' | 'inventory'>(() => {
+  const [activeSubTab, setActiveSubTab] = useState<'finance' | 'stats' | 'active_customers' | 'invoices' | 'inventory' | 'returns'>(() => {
     if (permittedSubTabs && permittedSubTabs.length > 0) {
       if (permittedSubTabs.includes('reports_finance')) return 'finance';
       if (permittedSubTabs.includes('reports_stats')) return 'stats';
@@ -171,6 +176,7 @@ function ReportsTabComponent({
   const [factoryReportFilter, setFactoryReportFilter] = useState<'all' | 'daily' | 'weekly' | 'monthly'>('all');
   const [factoryReportWeekDays, setFactoryReportWeekDays] = useState<number[]>([]);
   const [expandedFactoryCard, setExpandedFactoryCard] = useState<string | null>(null);
+  const [expandedProfitDetail, setExpandedProfitDetail] = useState(false);
 
   // Activity filter states
   const [custDateFilter, setCustDateFilter] = useState<'all' | 'week' | 'month' | 'custom'>('all');
@@ -233,10 +239,11 @@ function ReportsTabComponent({
     return item.delegatePhone === delegate.phone || (item.delegateName && item.delegateName.includes(cleanDelegateName));
   };
 
-  const delFilteredInvoices = React.useMemo(() => invoices.filter(filterItemByDelegate), [invoices, delegate, isManager]);
-  const delFilteredExpenses = React.useMemo(() => expenses.filter(filterItemByDelegate), [expenses, delegate, isManager]);
+  const delFilteredInvoices = React.useMemo(() => invoices.filter(i => filterItemByDelegate(i) && !(i.archived || i.isArchived || i.archivedAt)), [invoices, delegate, isManager]);
+  const delFilteredExpenses = React.useMemo(() => expenses.filter(e => filterItemByDelegate(e) && !(e.archived || e.isArchived || e.archivedAt)), [expenses, delegate, isManager]);
   const delFilteredTrips = React.useMemo(() => trips.filter(filterItemByDelegate), [trips, delegate, isManager]);
-  const delFilteredFactoryLoads = React.useMemo(() => factoryLoads.filter(filterItemByDelegate), [factoryLoads, delegate, isManager]);
+  const delFilteredFactoryLoads = React.useMemo(() => factoryLoads.filter(l => filterItemByDelegate(l) && !(l.archived || l.isArchived || l.archivedAt)), [factoryLoads, delegate, isManager]);
+  const delFilteredReturns = React.useMemo(() => returns.filter(r => filterItemByDelegate(r) && !(r.archived || r.isArchived || r.archivedAt)), [returns, delegate, isManager]);
 
   const currentFilteredData = React.useMemo(() => {
     const isWithinPeriod = (dateString: string) => {
@@ -283,7 +290,7 @@ function ReportsTabComponent({
     }
 
     const extraPayments = delFilteredExpenses
-      .filter(e => e.category === 'سداد للمصنع' || e.type === 'factory_payment')
+      .filter(e => (e.category === 'سداد للمصنع' || e.type === 'factory_payment') && !(e.archived || e.isArchived || e.archivedAt))
       .map(e => {
         let notes = e.description;
         let appliedToCarriedDebt = 0;
@@ -308,15 +315,32 @@ function ReportsTabComponent({
       expenses: delFilteredExpenses.filter(e => isWithinPeriod(e.date)),
       trips: delFilteredTrips.filter(t => isWithinPeriod(t.date || new Date().toISOString())),
       factoryLoads: delFilteredFactoryLoads.filter(fl => isWithinPeriod(fl.date)),
+      returns: delFilteredReturns.filter(r => isWithinPeriod(r.date)),
       extraPayments: (extraPayments || []).filter((ep: any) => ep && isWithinPeriod(ep.date)),
       allExtraPayments: extraPayments || [], // for cumulative calculation
       carriedOverDebt
     };
-  }, [delFilteredInvoices, delFilteredExpenses, delFilteredTrips, delFilteredFactoryLoads, periodFilter, delegateFilter, isManager, currentUser, selectedWeekDays, customStartDate, customEndDate, activeSubTab]);
+  }, [delFilteredInvoices, delFilteredExpenses, delFilteredTrips, delFilteredFactoryLoads, delFilteredReturns, periodFilter, delegateFilter, isManager, currentUser, selectedWeekDays, customStartDate, customEndDate, activeSubTab, refreshKey]);
 
   // 1. Calculations based on period filter
   const salesStats = React.useMemo(() => {
-    // True total sales collected
+    // Last archive timestamp — used to exclude archived cycle data from non-archived sources (loads, trips, returns)
+    const lastArchiveTs = (archiveCycles || []).length > 0
+      ? Math.max(...(archiveCycles || []).map((c: any) => Number(c.id)))
+      : 0;
+    const isAfterLastArchive = (dateString: string | undefined) => {
+      if (!lastArchiveTs) return true;
+      if (!dateString) return false;
+      const t = new Date(dateString).getTime();
+      return isNaN(t) || t > lastArchiveTs;
+    };
+
+    // Current cycle only trips (loads/trips/returns are never archived, so we must filter by lastArchiveTs)
+    const currentCycleTrips = currentFilteredData.trips.filter(t => t.collected && isAfterLastArchive(t.date || new Date().toISOString()));
+    const currentCycleReturns = (currentFilteredData.returns || []).filter(r => isAfterLastArchive(r.date));
+    const currentCycleLoads = currentFilteredData.factoryLoads.filter(fl => isAfterLastArchive(fl.date));
+
+    // True total sales collected (invoices ARE archived, so currentFilteredData.invoices is already current-only)
     const trueTotalSales = currentFilteredData.invoices.reduce((sum, inv) => sum + (inv.totalAfterDiscount || 0), 0);
     const totalCollected = currentFilteredData.invoices.reduce((sum, inv) => sum + (inv.paidAmount !== undefined ? inv.paidAmount : (inv.totalAfterDiscount || 0)), 0);
     const totalRemaining = currentFilteredData.invoices.reduce((sum, inv) => sum + ((inv.totalAfterDiscount || 0) - (inv.paidAmount !== undefined ? inv.paidAmount : (inv.totalAfterDiscount || 0))), 0);
@@ -336,9 +360,24 @@ function ReportsTabComponent({
       return sum + itemsProfit;
     }, 0);
 
+    // Expenses are archived, so currentFilteredData.expenses is already current-only
     const totalSpent = currentFilteredData.expenses.filter(e => e.type !== 'revenue' && e.category !== 'سداد للمصنع' && e.type !== 'factory_payment').reduce((sum, exp) => sum + (exp.amount || 0), 0);
     const extraRevenues = currentFilteredData.expenses.filter(e => e.type === 'revenue').reduce((sum, exp) => sum + (exp.amount || 0), 0);
-    const totalTripsCollectedProfit = currentFilteredData.trips.filter(t => t.collected).reduce((sum, t) => sum + (t.price || 0), 0);
+    const totalTripsCollectedProfit = currentCycleTrips.reduce((sum, t) => sum + (t.price || 0), 0);
+
+    // Deduct returns from sales and profit (current cycle only)
+    const totalReturnValue = currentCycleReturns.reduce((sum, ret) => sum + (ret.totalReturnValue || 0), 0);
+    const adjustedTotalSales = trueTotalSales - totalReturnValue;
+    const returnProfitDeduction = currentCycleReturns.reduce((sum, ret) => {
+      return sum + (ret.items || []).reduce((isum: number, ri: any) => {
+        const prod = products.find(p => String(p.id).trim() === String(ri.productId || '').trim());
+        const weights = prod ? getProductWeightsFallback(prod) : [];
+        const weight = weights.find(w => String(w.id).trim() === String(ri.weightId || '').trim()) || weights[0];
+        const fpPerUnit = getItemFactoryCost(ri, weight, prod);
+        return isum + (((ri.unitPrice || 0) - fpPerUnit) * (ri.quantity || 0));
+      }, 0);
+    }, 0);
+    const adjustedTotalProfit = totalProfit - returnProfitDeduction;
     
     // Cost of goods sold (after inventory/jarid) — lookup correct per-unit factory price from product weights
     const factorySoldCost = currentFilteredData.invoices.reduce((sum, inv) => {
@@ -366,8 +405,8 @@ function ReportsTabComponent({
       return sum + (cartons * cp) + (loose * up);
     }, 0);
 
-    // Factory stats calculations
-    const periodAdvances = currentFilteredData.factoryLoads.reduce((sum, fl) => sum + (fl.advanceAmount ?? 0), 0);
+    // Factory stats calculations — current cycle only (loads are never archived, so filter by lastArchiveTs)
+    const periodAdvances = currentCycleLoads.reduce((sum, fl) => sum + (fl.advanceAmount ?? 0), 0);
     const periodExtraPayments = currentFilteredData.extraPayments.reduce((sum, ep) => sum + ((ep.amount || 0) - (ep.appliedToCarriedDebt || 0)), 0);
     const totalPaidToFactoryInPeriod = periodAdvances + periodExtraPayments;
 
@@ -386,37 +425,47 @@ function ReportsTabComponent({
     });
 
     const totalWithdrawnValue = cumulativeLoadedValue;
-    const currentAdvancesTotal = delFilteredFactoryLoads.reduce((sum, fl) => sum + (fl.advanceAmount ?? 0), 0);
-    const manualPaymentsSumTotal = currentFilteredData.allExtraPayments.reduce((sum, p) => sum + ((p.amount || 0) - (p.appliedToCarriedDebt || 0)), 0);
-    const totalOverallPaidToFactory = currentAdvancesTotal + manualPaymentsSumTotal;
-    const remainingDebtToFactory = Math.max(0, totalWithdrawnValue - totalOverallPaidToFactory + currentFilteredData.carriedOverDebt);
+    const totalOverallPaidToFactory = (archiveCycles || []).reduce((sum, c) => sum + (c.totalAdvancePayments || 0), 0);
 
-    // صافي الربح = صافي ربح الفواتير + إيرادات + مشاوير - المصروفات التشغيلية
-    const operatingNetProfit = trueTotalSales + extraRevenues + totalTripsCollectedProfit - factorySoldCost - totalSpent;
-    const netProfit = totalProfit + extraRevenues + totalTripsCollectedProfit - totalSpent;
+    // الإجماليات الكلي (الدورات المؤرشفة فقط)
+    const totalLoadedAllTime = (archiveCycles || []).reduce((s, c) => s + (c.rawLoadedValue || c.totalWithdrawnValue || 0), 0);
+    const totalPaidAllTime = (archiveCycles || []).reduce((s, c) => s + (c.totalAdvancePayments || 0), 0);
+    const totalWaivedAllTime = (archiveCycles || []).reduce((s, c) => s + (c.waivedAmount || 0), 0);
+    const allCyclesSettled = (archiveCycles || []).length > 0 && (archiveCycles || []).every((c: any) => c.settledFully);
+    const remainingDebtToFactory = allCyclesSettled ? 0 : Math.max(0, totalLoadedAllTime - totalPaidAllTime - totalWaivedAllTime);
 
-    // صافي الربح التراكمي = صافي ربح الفواتير + المشاوير + الإيرادات - المصروفات التشغيلية (جميع الدورات)
-    const cumulativeProfit = delFilteredInvoices.reduce((sum, inv) => {
-      const itemsProfit = Array.isArray(inv.items) ? inv.items.reduce((isum, it) => {
-        if (!it) return isum;
-        const prod = products.find(p => String(p.id).trim() === String(it.productId).trim());
-        const weights = prod ? getProductWeightsFallback(prod) : [];
-        const weight = weights.find(w => String(w.id).trim() === String(it.weightId).trim()) || weights[0];
-        const fpPerUnit = getItemFactoryCost(it, weight, prod);
-        return isum + (((it.finalPrice || 0) - fpPerUnit) * (it.quantity || 0));
-      }, 0) : 0;
-      return sum + itemsProfit;
+    // صافي الربح التشغيلي = المحصل - المرتجعات + إيرادات + مشاوير - المسدد للمصنع في الفترة - المصروفات
+    const operatingNetProfit = totalCollected - totalReturnValue + extraRevenues + totalTripsCollectedProfit - totalPaidToFactoryInPeriod - totalSpent;
+
+    // صافي السيولة النقدية = (المحصل + المشاوير + الإيرادات) - (المسدد للمصنع في الدورات المؤرشفة + المصروفات)
+    const netCashFlow = totalCollected + totalTripsCollectedProfit + extraRevenues - totalOverallPaidToFactory - totalSpent;
+
+    const netProfit = adjustedTotalProfit + extraRevenues + totalTripsCollectedProfit - totalSpent;
+
+    // صافي الربح التراكمي = مجموع أرباح الدورات المؤرشفة + صافي الربح الحالي
+    const sortedArchive = [...(archiveCycles || [])].sort((a: any, b: any) => Number(a.id) - Number(b.id));
+    const archiveProfitsSum = sortedArchive.reduce((sum: number, cycle: any, idx: number) => {
+      const prevTs = idx === 0 ? 0 : Number(sortedArchive[idx - 1].id);
+      const currTs = Number(cycle.id);
+      const cycleReturns = delFilteredReturns.filter((r: any) => {
+        if (!r || !r.date) return false;
+        const t = new Date(r.date).getTime();
+        return t > prevTs && t <= currTs;
+      }).reduce((s: number, r: any) => s + (r.totalReturnValue || 0), 0);
+      const hasDetails = (cycle.collectedAmount || 0) > 0 || (cycle.extraRevenues || 0) > 0 || (cycle.tripsCollected || 0) > 0;
+      if (!hasDetails) return sum;
+      const income = (cycle.collectedAmount || 0) + (cycle.tripsCollected || 0) + (cycle.extraRevenues || 0);
+      const outgoing = (cycle.totalAdvancePayments || 0) + (cycle.cycleExpenses || 0) + cycleReturns;
+      return sum + (income - outgoing);
     }, 0);
-    const cumulativeExtraRev = delFilteredExpenses.filter(e => e.type === 'revenue').reduce((sum, e) => sum + (e.amount || 0), 0);
-    const cumulativeTripProfit = delFilteredTrips.filter(t => t.collected).reduce((sum, t) => sum + (t.price || 0), 0);
-    const cumulativeSpent = delFilteredExpenses.filter(e => e.type !== 'revenue' && e.category !== 'سداد للمصنع' && e.type !== 'factory_payment').reduce((sum, e) => sum + (e.amount || 0), 0);
-    const cumulativeNetProfit = cumulativeProfit + cumulativeTripProfit + cumulativeExtraRev - cumulativeSpent;
+    const cumulativeNetProfit = archiveProfitsSum + operatingNetProfit;
 
     return {
-      totalSales: trueTotalSales,
+      totalSales: adjustedTotalSales,
       totalCollected,
       totalRemaining,
-      totalProfit,
+      totalProfit: adjustedTotalProfit,
+      totalReturnValue,
       extraRevenues,
       totalDiscounts,
       totalSpent,
@@ -426,10 +475,17 @@ function ReportsTabComponent({
       netProfit,
       cumulativeNetProfit,
       operatingNetProfit,
+      netCashFlow,
       totalPaidToFactoryInPeriod,
-      remainingDebtToFactory
+      totalOverallPaidToFactory,
+      periodAdvances,
+      periodExtraPayments,
+      remainingDebtToFactory,
+      totalLoadedAllTime,
+      totalPaidAllTime,
+      totalWaivedAllTime,
     };
-  }, [currentFilteredData, products, factoryLoads, delFilteredInvoices, delFilteredExpenses, delFilteredTrips]);
+  }, [currentFilteredData, products, factoryLoads, delFilteredInvoices, delFilteredExpenses, delFilteredTrips, delFilteredReturns, delFilteredFactoryLoads, returns, archiveCycles, refreshKey]);
 
   // Period quick summary stats (follows selected time period, not just today)
   const periodStats = React.useMemo(() => {
@@ -465,6 +521,19 @@ function ReportsTabComponent({
       return sum + itemsProfit;
     }, 0);
 
+    // تكلفة البضاعة المباعة (COGS) للفترة الحالية
+    const factorySoldCost = periodInvoices.reduce((sum, inv) => {
+      const itemsCost = Array.isArray(inv.items) ? inv.items.reduce((isum, it) => {
+        if (!it) return isum;
+        const prod = products.find(p => String(p.id).trim() === String(it.productId).trim());
+        const weights = prod ? getProductWeightsFallback(prod) : [];
+        const weight = weights.find(w => String(w.id).trim() === String(it.weightId).trim()) || weights[0];
+        const fpPerUnit = getItemFactoryCost(it, weight, prod);
+        return isum + (fpPerUnit * (it.quantity || 0));
+      }, 0) : 0;
+      return sum + itemsCost;
+    }, 0);
+
     return {
       invoiceCount: periodInvoices.length,
       totalCollected: periodInvoices.reduce((s, inv) => s + (inv.paidAmount !== undefined ? inv.paidAmount : (inv.totalAfterDiscount || 0)), 0),
@@ -476,8 +545,9 @@ function ReportsTabComponent({
       extraRevenues: periodExtraRevenues,
       expensesTotal: periodExpenses.reduce((s, e) => s + (e.amount || 0), 0),
       periodProfit,
+      factorySoldCost,
     };
-  }, [currentFilteredData, products]);
+  }, [currentFilteredData, products, refreshKey]);
 
   // Calculate unpaid debt / debtor customers list (uses time-filtered invoices like salesStats)
   const debtorCustomers = React.useMemo(() => {
@@ -760,172 +830,243 @@ function ReportsTabComponent({
     return Object.entries(map).map(([name, val]) => ({ name, val })).sort((a,b) => b.val - a.val);
   }, [currentFilteredData]);
 
-  const exportComprehensiveReportAsPDF = () => {
+  const exportComprehensiveReportAsPDF = async () => {
     let periodLabel = periodFilter === 'all' ? 'جميع الفترات' : periodFilter === 'today' ? 'يومي (اليوم الحالي)' : periodFilter === 'week' ? 'أسبوعي (آخر 7 أيام)' : periodFilter === 'month' ? 'شهري (هذا الشهر)' : `مخصص (${customStartDate || '...'} → ${customEndDate || '...'})`;
+
+    const INV_CSS = `
+      <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800;900&family=Tajawal:wght@400;500;700;800;900&display=swap" rel="stylesheet">
+      <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        html, body { width: 100%; direction: rtl; text-align: right; font-family: 'Cairo', 'Tajawal', sans-serif; background: #fff; color: #0f172a; }
+        body { padding: 14px; }
+        .report-wrap { width: 100%; max-width: 100%; }
+        .header { background: linear-gradient(135deg, #0f172a 0%, #1e3a8a 100%); color: #fff; padding: 16px 20px; border-radius: 12px; margin-bottom: 14px; }
+        .header h1 { font-size: 16px; font-weight: 900; margin-bottom: 3px; }
+        .header .sub { font-size: 10px; color: #cbd5e1; font-weight: 700; }
+        .header .ref { margin-top: 8px; display: flex; gap: 16px; font-size: 9px; color: #cbd5e1; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 6px; }
+        .header .ref span { background: rgba(255,255,255,0.06); padding: 2px 8px; border-radius: 8px; color: #f1f5f9; }
+        .cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 14px; }
+        .card { border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 2px; border: 1px solid #e2e8f0; }
+        .card .label { font-size: 9px; font-weight: 800; color: #64748b; text-transform: uppercase; }
+        .card .value { font-size: 13px; font-weight: 900; font-family: monospace; line-height: 1.3; }
+        .card.green { background: linear-gradient(180deg, #f0fdf4, #dcfce7); border-color: #bbf7d0; }
+        .card.green .value { color: #14532d; }
+        .card.red { background: linear-gradient(180deg, #fef2f2, #fee2e2); border-color: #fecaca; }
+        .card.red .value { color: #7f1d1d; }
+        .card.blue { background: linear-gradient(180deg, #eff6ff, #dbeafe); border-color: #bfdbfe; }
+        .card.blue .value { color: #1e3a8a; }
+        .section-title { font-size: 11px; font-weight: 900; color: #0f172a; margin: 12px 0 6px; border-right: 4px solid #d97706; padding-right: 8px; }
+        .section-title .num { background: #d97706; color: #fff; width: 16px; height: 16px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 8px; font-weight: 900; margin-left: 4px; }
+        table { width: 100%; border-collapse: collapse; border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden; margin-bottom: 12px; table-layout: auto; }
+        th { background: linear-gradient(180deg, #1e3a8a, #1e40af); color: #fff; font-size: 10px; font-weight: 800; padding: 6px 8px; text-align: center; border-bottom: 2px solid #1d4ed8; white-space: nowrap; }
+        td { padding: 5px 8px; font-size: 10px; border-bottom: 1px solid #e2e8f0; border-left: 1px solid #e2e8f0; text-align: center; }
+        td:last-child { border-left: none; }
+        tbody tr:nth-child(even) { background: #f8fafc; }
+        .badge { padding: 2px 8px; border-radius: 4px; font-weight: 800; font-size: 9px; display: inline-block; white-space: nowrap; }
+        .badge.green { background: #dcfce7; color: #15803d; border: 1px solid #bbf7d0; }
+        .badge.red { background: #fee2e2; color: #b91c1c; border: 1px solid #fecaca; }
+        .badge.blue { background: #f1f5f9; color: #475569; border: 1px solid #e2e8f0; }
+        .footer { margin-top: 20px; display: flex; justify-content: space-between; padding-top: 10px; border-top: 1px dashed #cbd5e1; }
+        .sig-box { text-align: center; width: 45%; background: #f8fafc; border: 1px solid #e2e8f0; padding: 10px; border-radius: 10px; }
+        .sig-box .title { font-size: 9px; font-weight: 900; color: #0f172a; margin-bottom: 14px; }
+        .sig-box .line { border-top: 1px solid #94a3b8; margin: 0 10px; padding-top: 4px; font-size: 8px; font-weight: 700; color: #64748b; }
+      </style>`;
 
     const html = `
       <!DOCTYPE html>
       <html dir="rtl" lang="ar">
-      <head>${COMPACT_PRO_CSS}</head>
+      <head>${INV_CSS}</head>
       <body>
-        <div class="report-wrapper" style="padding: 12mm 14mm;">
-
-          <div class="rh">
+        <div class="report-wrap">
+          <div class="header">
             <h1>تقرير العمليات المالية الشامل</h1>
             <div class="sub">نظام التوزيع والمبيعات المعتمد</div>
             <div class="ref">
               <span>الفترة: ${periodLabel}</span>
-              <span>تاريخ الطباعة: ${new Date().toLocaleDateString('ar-EG')} ${new Date().toLocaleTimeString('ar-EG')}</span>
+              <span>تاريخ الطباعة: ${new Date().toLocaleDateString('ar-EG')}</span>
             </div>
           </div>
 
-          <div class="sg">
-            <div class="sb gr">
-              <div class="l">صافي الربح التشغيلي</div>
-              <div class="v">${salesStats.operatingNetProfit.toLocaleString('ar-EG')} <span style="font-size:10px">ج.م</span></div>
+          <div class="cards">
+            <div class="card green">
+              <div class="label">صافي الربح التشغيلي</div>
+              <div class="value">${salesStats.operatingNetProfit.toLocaleString('ar-EG')} ج.م</div>
             </div>
-            <div class="sb gr">
-              <div class="l">صافي التدفق النقدي</div>
-              <div class="v">${salesStats.netProfit.toLocaleString('ar-EG')} <span style="font-size:10px">ج.م</span></div>
+            <div class="card green">
+              <div class="label">صافي التدفق النقدي</div>
+              <div class="value">${salesStats.netProfit.toLocaleString('ar-EG')} ج.م</div>
             </div>
-            <div class="sb bl">
-              <div class="l">إجمالي المبيعات</div>
-              <div class="v">${salesStats.totalSales.toLocaleString('ar-EG')} <span style="font-size:10px">ج.م</span></div>
+            <div class="card blue">
+              <div class="label">إجمالي المبيعات</div>
+              <div class="value">${salesStats.totalSales.toLocaleString('ar-EG')} ج.م</div>
             </div>
-            <div class="sb gr">
-              <div class="l">المحصل كاش</div>
-              <div class="v">${salesStats.totalCollected.toLocaleString('ar-EG')} <span style="font-size:10px">ج.م</span></div>
+            <div class="card green">
+              <div class="label">المحصل كاش</div>
+              <div class="value">${salesStats.totalCollected.toLocaleString('ar-EG')} ج.م</div>
             </div>
-            <div class="sb rd">
-              <div class="l">باقي ديون العملاء</div>
-              <div class="v">${salesStats.totalRemaining.toLocaleString('ar-EG')} <span style="font-size:10px">ج.م</span></div>
+            <div class="card red">
+              <div class="label">باقي ديون العملاء</div>
+              <div class="value">${salesStats.totalRemaining.toLocaleString('ar-EG')} ج.م</div>
             </div>
-            <div class="sb bl">
-              <div class="l">المسدد للمصنع</div>
-              <div class="v">${salesStats.totalPaidToFactoryInPeriod.toLocaleString('ar-EG')} <span style="font-size:10px">ج.م</span></div>
+            <div class="card blue">
+              <div class="label">المسدد للمصنع (كل الفترات)</div>
+              <div class="value">${(salesStats.totalPaidToFactoryInPeriod + salesStats.totalOverallPaidToFactory).toLocaleString('ar-EG')} ج.م</div>
             </div>
-            <div class="sb bl">
-              <div class="l">المصروفات التشغيلية</div>
-              <div class="v">${salesStats.totalSpent.toLocaleString('ar-EG')} <span style="font-size:10px">ج.م</span></div>
+            <div class="card blue">
+              <div class="label">المصروفات التشغيلية</div>
+              <div class="value">${salesStats.totalSpent.toLocaleString('ar-EG')} ج.م</div>
             </div>
-            <div class="sb gr">
-              <div class="l">أرباح المشاوير</div>
-              <div class="v">${salesStats.totalTripsCollectedProfit.toLocaleString('ar-EG')} <span style="font-size:10px">ج.م</span></div>
+            <div class="card green">
+              <div class="label">أرباح المشاوير</div>
+              <div class="value">${salesStats.totalTripsCollectedProfit.toLocaleString('ar-EG')} ج.م</div>
             </div>
-            <div class="sb rd">
-              <div class="l">مديونية المصنع</div>
-              <div class="v">${salesStats.remainingDebtToFactory.toLocaleString('ar-EG')} <span style="font-size:10px">ج.م</span></div>
+            <div class="card red">
+              <div class="label">مديونية المصنع</div>
+              <div class="value">${salesStats.remainingDebtToFactory.toLocaleString('ar-EG')} ج.م</div>
             </div>
+            ${salesStats.totalReturnValue > 0 ? `
+            <div class="card red">
+              <div class="label">المرتجعات</div>
+              <div class="value">${salesStats.totalReturnValue.toLocaleString('ar-EG')} ج.م</div>
+            </div>` : ''}
           </div>
-        
-        <div class="st"><span class="i">1</span> قائمة فواتير مبيعات العملاء للفترة</div>
+
+        <div class="section-title"><span class="num">1</span> قائمة فواتير مبيعات العملاء للفترة</div>
         <table>
           <thead>
             <tr>
-              <th width="45">م</th>
-              <th>رقم الفاتورة</th>
+              <th style="width:30px">م</th>
+              <th style="width:80px">رقم الفاتورة</th>
               <th>العميل</th>
-              <th>المندوب</th>
-              <th>الإجمالي</th>
-              <th>المسدد</th>
-              <th>المتبقي</th>
+              <th style="width:80px">المندوب</th>
+              <th style="width:80px">الإجمالي</th>
+              <th style="width:70px">المسدد</th>
+              <th style="width:70px">المتبقي</th>
             </tr>
           </thead>
           <tbody>
-            ${!currentFilteredData.invoices || currentFilteredData.invoices.length === 0 ? '<tr><td colspan="7" style="text-align:center; color:#94a3b8; padding:16px;">لا توجد فواتير مبيعات في هذه الفترة.</td></tr>' :
+            ${!currentFilteredData.invoices || currentFilteredData.invoices.length === 0 ? '<tr><td colspan="7" style="text-align:center;color:#94a3b8;padding:16px;">لا توجد فواتير مبيعات في هذه الفترة.</td></tr>' :
               currentFilteredData.invoices.map((inv: any, idx: number) => {
                 const cust = (customers || []).find(c => c.id === inv.customerId);
                 const totalAfter = inv.totalAfterDiscount || 0;
                 const paid = inv.paidAmount !== undefined ? inv.paidAmount : totalAfter;
                 const remaining = totalAfter - paid;
-                return `
-                  <tr>
-                    <td style="text-align:center;font-weight:700;color:#94a3b8">${idx + 1}</td>
-                    <td style="font-weight:800;color:#1e3a5f">#${inv.invoiceNumber}</td>
-                    <td>${cust ? cust.name : 'غير مسجل'}</td>
-                    <td>${inv.delegateName?.replace(/ \(.*?\)/g, '').trim() || 'غير محدد'}</td>
-                    <td style="text-align:center;font-weight:700">${totalAfter.toLocaleString('ar-EG')}</td>
-                    <td style="text-align:center;color:#15803d;font-weight:700">${paid.toLocaleString('ar-EG')}</td>
-                    <td style="text-align:center;font-weight:800;color:${remaining > 0 ? '#dc2626' : '#94a3b8'}">${remaining.toLocaleString('ar-EG')}</td>
-                  </tr>
-                `;
+                return `<tr>
+                  <td style="text-align:center;font-weight:700;color:#94a3b8">${idx + 1}</td>
+                  <td style="font-weight:800;color:#1e3a5f">#${inv.invoiceNumber}</td>
+                  <td style="text-align:right">${cust ? cust.name : 'غير مسجل'}</td>
+                  <td>${inv.delegateName?.replace(/ \(.*?\)/g, '').trim() || 'غير محدد'}</td>
+                  <td style="text-align:center;font-weight:700">${totalAfter.toLocaleString('ar-EG')}</td>
+                  <td style="text-align:center;color:#15803d;font-weight:700">${paid.toLocaleString('ar-EG')}</td>
+                  <td style="text-align:center;font-weight:800;color:${remaining > 0 ? '#dc2626' : '#94a3b8'}">${remaining.toLocaleString('ar-EG')}</td>
+                </tr>`;
               }).join('')
             }
           </tbody>
         </table>
 
-        <div class="st"><span class="i">2</span> قائمة المصاريف التشغيلية والإيرادات</div>
+        <div class="section-title"><span class="num">2</span> قائمة المصاريف التشغيلية والإيرادات</div>
         <table>
           <thead>
             <tr>
-              <th width="45">م</th>
+              <th style="width:30px">م</th>
               <th>البيان والتفاصيل</th>
-              <th>الفئة</th>
-              <th>النوع</th>
-              <th>القيمة</th>
+              <th style="width:80px">الفئة</th>
+              <th style="width:55px">النوع</th>
+              <th style="width:80px">القيمة</th>
             </tr>
           </thead>
           <tbody>
-            ${currentFilteredData.expenses.filter(e => e.category !== 'سداد للمصنع' && e.type !== 'factory_payment').length === 0 ? '<tr><td colspan="5" style="text-align:center; color:#94a3b8; padding:16px;">لا توجد حركة مصروفات مسجلة في هذه الفترة.</td></tr>' :
+            ${currentFilteredData.expenses.filter(e => e.category !== 'سداد للمصنع' && e.type !== 'factory_payment').length === 0 ? '<tr><td colspan="5" style="text-align:center;color:#94a3b8;padding:16px;">لا توجد حركة مصروفات مسجلة في هذه الفترة.</td></tr>' :
               currentFilteredData.expenses.filter(e => e.category !== 'سداد للمصنع' && e.type !== 'factory_payment').map((exp, idx) => {
                 const isRev = exp.type === 'revenue';
-                return `
-                  <tr>
-                    <td style="text-align:center;font-weight:700;color:#94a3b8">${idx + 1}</td>
-                    <td>${exp.description || 'بدون بيان'}</td>
-                    <td><span class="bd-b">${exp.category || 'عام'}</span></td>
-                    <td><span class="bd-${isRev ? 'g' : 'r'}">${isRev ? 'إيراد' : 'مصروف'}</span></td>
-                    <td style="text-align:center;font-weight:800;color:${isRev ? '#15803d' : '#dc2626'};font-family:'Tajawal',monospace">${(exp.amount || 0).toLocaleString('ar-EG')}</td>
-                  </tr>
-                `;
+                return `<tr>
+                  <td style="text-align:center;font-weight:700;color:#94a3b8">${idx + 1}</td>
+                  <td style="text-align:right">${exp.description || 'بدون بيان'}</td>
+                  <td><span class="badge blue">${exp.category || 'عام'}</span></td>
+                  <td><span class="badge ${isRev ? 'green' : 'red'}">${isRev ? 'إيراد' : 'مصروف'}</span></td>
+                  <td style="text-align:center;font-weight:800;color:${isRev ? '#15803d' : '#dc2626'}">${(exp.amount || 0).toLocaleString('ar-EG')}</td>
+                </tr>`;
               }).join('')
             }
           </tbody>
         </table>
 
-        <div class="st"><span class="i">3</span> سجل مشاوير السيارة والنقل</div>
+        <div class="section-title"><span class="num">3</span> سجل مشاوير السيارة والنقل</div>
         <table>
           <thead>
             <tr>
-              <th width="45">م</th>
+              <th style="width:30px">م</th>
               <th>تفاصيل المشوار والوجهة</th>
-              <th>المندوب</th>
-              <th>المبلغ</th>
-              <th>الموقف</th>
+              <th style="width:80px">المندوب</th>
+              <th style="width:70px">المبلغ</th>
+              <th style="width:55px">الموقف</th>
             </tr>
           </thead>
           <tbody>
-            ${currentFilteredData.trips.length === 0 ? '<tr><td colspan="5" style="text-align:center; color:#94a3b8; padding:16px;">لا توجد مشاوير مسجلة للفترة.</td></tr>' :
+            ${currentFilteredData.trips.length === 0 ? '<tr><td colspan="5" style="text-align:center;color:#94a3b8;padding:16px;">لا توجد مشاوير مسجلة للفترة.</td></tr>' :
               currentFilteredData.trips.map((t, idx) => {
-                return `
-                  <tr>
-                    <td style="text-align:center;font-weight:700;color:#94a3b8">${idx + 1}</td>
-                    <td>${t.description}</td>
-                    <td>${t.delegateName || 'غير محدد'}</td>
-                    <td style="text-align:center;font-weight:800;font-family:'Tajawal',monospace">${t.price.toLocaleString('ar-EG')}</td>
-                    <td style="text-align:center"><span class="bd-${t.collected ? 'g' : 'b'}">${t.collected ? 'محصل' : 'معلق'}</span></td>
-                  </tr>
-                `;
+                return `<tr>
+                  <td style="text-align:center;font-weight:700;color:#94a3b8">${idx + 1}</td>
+                  <td style="text-align:right">${t.description}</td>
+                  <td>${t.delegateName || 'غير محدد'}</td>
+                  <td style="text-align:center;font-weight:800">${t.price.toLocaleString('ar-EG')}</td>
+                  <td style="text-align:center"><span class="badge ${t.collected ? 'green' : 'blue'}">${t.collected ? 'محصل' : 'معلق'}</span></td>
+                </tr>`;
               }).join('')
             }
           </tbody>
         </table>
 
-        <div class="fs">
-          <div class="sb2"><div class="ti">المسؤول الإداري</div><div class="ln">التوقيع</div></div>
-          <div class="sb2"><div class="ti">المندوب الميداني</div><div class="ln">التوقيع</div></div>
+        ${(currentFilteredData.returns || []).length > 0 ? `
+        <div class="section-title"><span class="num">4</span> سجل المرتجعات (${(currentFilteredData.returns || []).length})</div>
+        <table>
+          <thead>
+            <tr>
+              <th style="width:30px">م</th>
+              <th>العميل</th>
+              <th style="width:80px">المندوب</th>
+              <th style="width:70px">التاريخ</th>
+              <th>السبب</th>
+              <th style="width:80px">قيمة المرتجع</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${(currentFilteredData.returns || []).map((ret: any, idx: number) => {
+              const cust = (customers || []).find(c => c.id === ret.customerId);
+              return `<tr>
+                <td style="text-align:center;font-weight:700;color:#94a3b8">${idx + 1}</td>
+                <td style="text-align:right">${cust ? cust.name : ret.customerName || 'غير مسجل'}</td>
+                <td>${ret.delegateName || 'غير محدد'}</td>
+                <td style="text-align:center">${ret.date || '—'}</td>
+                <td style="text-align:right">${ret.reason || 'بدون سبب'}</td>
+                <td style="text-align:center;font-weight:800;color:#dc2626">${(ret.totalReturnValue || 0).toLocaleString('ar-EG')}</td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+        <div style="padding:10px 12px;border-radius:8px;display:flex;justify-content:space-between;font-weight:800;font-size:12px;background:#fef2f2;border:1px solid #fecaca;color:#dc2626;margin-bottom:14px">
+          <span>إجمالي المرتجعات</span>
+          <span>${salesStats.totalReturnValue.toLocaleString('ar-EG')} ج.م</span>
+        </div>
+        ` : ''}
+
+        <div class="footer">
+          <div class="sig-box"><div class="title">المسؤول الإداري</div><div class="line">التوقيع</div></div>
+          <div class="sig-box"><div class="title">المندوب الميداني</div><div class="line">التوقيع</div></div>
         </div>
 
         </div>
       </body>
       </html>
     `;
+
     printHTMLInNewWindow(html);
   };
 
   // Group invoices by month
   const monthlyBreakdown = React.useMemo(() => {
-    const months: Record<string, { sales: number; collected: number; cogs: number; expenses: number; revs: number; trips: number; count: number }> = {};
+    const months: Record<string, { sales: number; collected: number; cogs: number; expenses: number; revs: number; trips: number; returns: number; count: number }> = {};
 
     currentFilteredData.invoices.forEach(inv => {
       if (!inv || !inv.date) return;
@@ -933,7 +1074,7 @@ function ReportsTabComponent({
       if (parts.length < 2) return;
       const monthYear = parts[0] + '-' + parts[1];
       if (!months[monthYear]) {
-        months[monthYear] = { sales: 0, collected: 0, cogs: 0, expenses: 0, revs: 0, trips: 0, count: 0 };
+        months[monthYear] = { sales: 0, collected: 0, cogs: 0, expenses: 0, revs: 0, trips: 0, returns: 0, count: 0 };
       }
       months[monthYear].sales += (inv.totalAfterDiscount || 0);
       months[monthYear].collected += (inv.paidAmount !== undefined ? inv.paidAmount : (inv.totalAfterDiscount || 0));
@@ -958,7 +1099,7 @@ function ReportsTabComponent({
       if (parts.length < 2) return;
       const monthYear = parts[0] + '-' + parts[1];
       if (!months[monthYear]) {
-        months[monthYear] = { sales: 0, collected: 0, cogs: 0, expenses: 0, revs: 0, trips: 0, count: 0 };
+        months[monthYear] = { sales: 0, collected: 0, cogs: 0, expenses: 0, revs: 0, trips: 0, returns: 0, count: 0 };
       }
       months[monthYear].trips += (trip.price || 0);
     });
@@ -969,13 +1110,25 @@ function ReportsTabComponent({
       if (parts.length < 2) return;
       const monthYear = parts[0] + '-' + parts[1];
       if (!months[monthYear]) {
-        months[monthYear] = { sales: 0, collected: 0, cogs: 0, expenses: 0, revs: 0, trips: 0, count: 0 };
+        months[monthYear] = { sales: 0, collected: 0, cogs: 0, expenses: 0, revs: 0, trips: 0, returns: 0, count: 0 };
       }
       if (exp.type === 'revenue') {
         months[monthYear].revs += (exp.amount || 0);
       } else if (exp.category !== 'سداد للمصنع' && exp.type !== 'factory_payment') {
         months[monthYear].expenses += (exp.amount || 0);
       }
+    });
+
+    // خصم المرتجعات من كل شهر
+    (currentFilteredData.returns || []).forEach((ret: any) => {
+      if (!ret || !ret.date) return;
+      const parts = String(ret.date).split('-');
+      if (parts.length < 2) return;
+      const monthYear = parts[0] + '-' + parts[1];
+      if (!months[monthYear]) {
+        months[monthYear] = { sales: 0, collected: 0, cogs: 0, expenses: 0, revs: 0, trips: 0, returns: 0, count: 0 };
+      }
+      months[monthYear].returns += (ret.totalReturnValue || 0);
     });
 
     return Object.entries(months).map(([dateStr, d]) => {
@@ -987,9 +1140,9 @@ function ReportsTabComponent({
         }
       } catch (e) {}
 
-      // صافي الربح = صافي ربح الفواتير + المشاوير + الإيرادات الاضافية - المصروفات التشغيلية
+      // صافي الربح = صافي ربح الفواتير - المرتجعات + المشاوير + الإيرادات الاضافية - المصروفات التشغيلية
       const grossMargin = d.sales - d.cogs;
-      const trueProfit = grossMargin + d.trips + d.revs - d.expenses;
+      const trueProfit = grossMargin - d.returns + d.trips + d.revs - d.expenses;
 
       return {
         dateStr,
@@ -1000,11 +1153,12 @@ function ReportsTabComponent({
         revs: d.revs,
         expenses: d.expenses,
         trips: d.trips,
+        returns: d.returns,
         profit: trueProfit,
         count: d.count
       };
     }).sort((a, b) => b.dateStr.localeCompare(a.dateStr));
-  }, [currentFilteredData, products]);
+  }, [currentFilteredData, products, returns]);
 
   // Filter invoices for registry lookup
   const filteredInvoices = delFilteredInvoices.filter(inv => {
@@ -1057,7 +1211,115 @@ function ReportsTabComponent({
     }
   }, [permittedSubTabs, activeSubTab]);
 
-  const exportMonthlyReportAsPDF = (monthStr: string, displayDate: string, sales: number, collected: number, revenuesParam: number, expensesParam: number, profit: number) => {
+  const handlePrintInvoice = (inv: Invoice) => {
+    const customerObj = customers.find(c => c.id === inv.customerId);
+    const formattedDate = new Date(inv.date).toLocaleDateString('ar-EG', { dateStyle: 'medium' });
+    const storedSetStr = localStorage.getItem('app_settings_sys');
+    let invoiceAppName = 'سمن وزيت سوفانا الفاخر';
+    let invoiceRepName = inv.delegateName?.replace(/ \(.*?\)/g, '').trim() || currentUser?.name?.replace(/ \(.*?\)/g, '').trim() || '';
+    let invoiceRepPhone = inv.delegatePhone || currentUser?.phone || '';
+    if (storedSetStr) {
+      try {
+        const parsed = JSON.parse(storedSetStr);
+        if (parsed.appName) invoiceAppName = parsed.appName;
+        if (parsed.representativeName && !invoiceRepName) invoiceRepName = parsed.representativeName;
+        if (parsed.representativePhone) invoiceRepPhone = parsed.representativePhone;
+      } catch (e) { console.error(e); }
+    }
+
+    const itemsHtml = (inv.items || []).map((item: any, idx: number) => {
+      const prod = products.find((p: any) => String(p.id).trim() === String(item.productId).trim());
+      const ws = prod ? getProductWeightsFallback(prod) : [];
+      const weight = ws.find((w: any) => String(w.id).trim() === String(item.weightId).trim()) || ws[0];
+      const prodName = prod ? prod.name : 'صنف مبيعات';
+      const sizeLabel = weight ? weight.size : '';
+      const multiplier = weight ? (weight.unitsPerCarton || 12) : 12;
+      const cartons = Math.floor(item.quantity / multiplier);
+      const pieces = item.quantity % multiplier;
+      const qtyTextParts = [];
+      if (cartons > 0) qtyTextParts.push(`${cartons} كرتونة`);
+      if (pieces > 0) qtyTextParts.push(`${pieces} قطعة`);
+      const qtyLabel = qtyTextParts.join(' و ') || 'منتهي';
+      const cartonOriginalPrice = item.originalPrice * multiplier;
+      const singleItemTotal = item.finalPrice * item.quantity;
+      return `<tr>
+        <td style="text-align:center;font-weight:700;color:#94a3b8">${idx + 1}</td>
+        <td><b style="color:#1e3a5f">${prodName}</b> <span style="color:#64748b">${sizeLabel}</span></td>
+        <td style="font-weight:700">${qtyLabel}</td>
+        <td style="text-align:center">${cartonOriginalPrice.toLocaleString('ar-EG')}</td>
+        <td style="text-align:center;color:${item.discountPercent > 0 ? '#dc2626' : '#94a3b8'};font-weight:700">${item.discountPercent > 0 ? item.discountPercent + '%' : '—'}</td>
+        <td style="text-align:center;font-weight:800;color:#1e3a5f">${singleItemTotal.toLocaleString('ar-EG')}</td>
+      </tr>`;
+    }).join('');
+
+    const html = `
+      <!DOCTYPE html>
+      <html dir="rtl" lang="ar">
+      <head>${COMPACT_PRO_CSS}</head>
+      <body>
+        <div class="rh">
+          <h1>${invoiceAppName}</h1>
+          <div class="sub">حلول التوزيع ونظام مبيعات الغذاء الميداني المعتمد</div>
+          <div class="ref">
+            <span>فاتورة مبيعات معتمدة</span>
+            <span>رقم المستند: <b>${inv.invoiceNumber}</b></span>
+            <span>تاريخ الإصدار: <b>${formattedDate}</b></span>
+          </div>
+        </div>
+        <div class="sg" style="grid-template-columns:repeat(2,1fr)">
+          <div class="sb bl">
+            <div class="l">العميل المستلم</div>
+            <div class="v" style="font-size:13px;text-align:right">اسم المحل: <b>${customerObj?.name || 'غير معروف'}</b></div>
+            <div class="v" style="font-size:13px;text-align:right">المحافظة والمنطقة: <b>${customerObj?.governorate ? `${customerObj.governorate} - ` : ''}${customerObj?.area || 'المنطقة الافتراضية'}</b></div>
+            <div class="v" style="font-size:13px;text-align:right">الهاتف: <span style="font-family:monospace">${customerObj?.phone || 'غير متوفر'}</span></div>
+          </div>
+          <div class="sb gr">
+            <div class="l">المندوب المسؤول</div>
+            <div class="v" style="font-size:13px;text-align:right">اسم المندوب: <b>${invoiceRepName || 'شريك مبيعات معتمد'}</b></div>
+            <div class="v" style="font-size:13px;text-align:right">هاتف التواصل: <span style="font-family:monospace">${invoiceRepPhone || '—'}</span></div>
+            ${inv.notes ? `<div class="v" style="font-size:13px;text-align:right">ملاحظات: <span style="color:#d97706">${inv.notes}</span></div>` : ''}
+          </div>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th width="30">م</th>
+              <th>الصنف والحجم</th>
+              <th>الكمية</th>
+              <th>سعر الكرتونة</th>
+              <th>نسبة الخصم</th>
+              <th>القيمة الصافية</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${itemsHtml}
+          </tbody>
+        </table>
+        <table style="width:55%;margin-left:auto;margin-right:auto">
+          <thead>
+            <tr class="tt">
+              <td colspan="2" style="text-align:center;font-weight:900;font-size:12px">ملخص الفاتورة</td>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>الإجمالي قبل التخفيض:</td><td style="text-align:left;font-weight:700">${(inv.totalBeforeDiscount || 0).toLocaleString('ar-EG')} ج.م</td></tr>
+            <tr><td style="color:#dc2626">خصومات وتخفيضات:</td><td style="text-align:left;color:#dc2626;font-weight:700">-${((inv.totalBeforeDiscount || 0) - (inv.totalAfterDiscount || 0)).toLocaleString('ar-EG')} ج.م</td></tr>
+            <tr class="ts"><td style="font-weight:900">صافي الفاتورة:</td><td style="text-align:left">${(inv.totalAfterDiscount || 0).toLocaleString('ar-EG')} ج.م</td></tr>
+            <tr><td style="color:#15803d">المبلغ المسدد:</td><td style="text-align:left;color:#15803d;font-weight:800">${(inv.paidAmount || 0).toLocaleString('ar-EG')} ج.م</td></tr>
+            <tr><td style="color:#ea580c;font-weight:800">المتبقي (مديونية):</td><td style="text-align:left;color:#ea580c;font-weight:900;font-size:12px">${((inv.totalAfterDiscount || 0) - (inv.paidAmount || 0)).toLocaleString('ar-EG')} ج.م</td></tr>
+          </tbody>
+        </table>
+        <div class="fs">
+          <div class="sb2"><div class="ti">مستلم البضاعة (العميل)</div><div class="ln">التوقيع</div></div>
+          <div class="sb2"><div class="ti">المندوب المفوض</div><div class="ln">التوقيع</div></div>
+        </div>
+      </body>
+      </html>
+    `;
+    printHTMLInNewWindow(html);
+  };
+
+  const exportMonthlyReportAsPDF = (monthStr: string, displayDate: string, sales: number, collected: number, revenuesParam: number, expensesParam: number, profit: number, returnsParam: number = 0) => {
     const mInvoices = delFilteredInvoices.filter(inv => inv && typeof inv.date === 'string' && inv.date.startsWith(monthStr));
     const mExpenses = delFilteredExpenses.filter(exp => exp && typeof exp.date === 'string' && exp.date.startsWith(monthStr));
     
@@ -1088,6 +1350,11 @@ function ReportsTabComponent({
                 <div class="l">الخصم الممنوح</div>
                 <div class="v">${formatNum(mDisc)} ج.م</div>
               </div>
+              ${returnsParam > 0 ? `
+              <div class="sb rd">
+                <div class="l">المرتجعات</div>
+                <div class="v">${formatNum(returnsParam)} ج.م</div>
+              </div>` : ''}
               <div class="sb gr">
                 <div class="l">المحصل كاش</div>
                 <div class="v">${formatNum(collected)} ج.م</div>
@@ -1185,7 +1452,7 @@ function ReportsTabComponent({
   const filteredArchiveList = filteredInvoices.filter(inv => (inv.totalAfterDiscount || 0) <= (inv.paidAmount ?? (inv.totalAfterDiscount || 0)));
   const filteredDebtorsList = filteredInvoices.filter(inv => (inv.totalAfterDiscount || 0) > (inv.paidAmount ?? (inv.totalAfterDiscount || 0)));
 
-  const exportMonthlyReportAsPNG = (monthStr: string, displayDate: string, sales: number, collected: number, revenuesParam: number, expensesParam: number, profit: number) => {
+  const exportMonthlyReportAsPNG = (monthStr: string, displayDate: string, sales: number, collected: number, revenuesParam: number, expensesParam: number, profit: number, returnsParam: number = 0) => {
     const canvas = document.createElement('canvas');
     const rowHeight = 35;
     
@@ -1230,10 +1497,20 @@ function ReportsTabComponent({
     ctx.fillText(`إجمالي المبيعات: ${formatNum(sales)}ج.م`, canvas.width - 40, 160);
     ctx.fillText(`المحصل كاش: ${formatNum(collected)}ج.م`, canvas.width - 40, 185);
     ctx.fillText(`المتبقي (آجل): ${formatNum(sales - collected)}ج.م`, canvas.width - 40, 210);
-    ctx.fillText(`الإيرادات الإضافية: ${formatNum(revenuesParam)}ج.م`, canvas.width - 40, 235);
-    ctx.fillText(`المصروفات الدقيقة: ${formatNum(expensesParam)}ج.م`, canvas.width - 40, 260);
-    ctx.fillStyle = profit >= 0 ? '#047857' : '#be123c';
-    ctx.fillText(`صافي أرباح الشهر: ${formatNum(profit)}ج.م`, canvas.width - 40, 285);
+    if (returnsParam > 0) {
+      ctx.fillStyle = '#dc2626';
+      ctx.fillText(`المرتجعات: ${formatNum(returnsParam)}ج.م`, canvas.width - 40, 235);
+      ctx.fillStyle = '#1e293b';
+      ctx.fillText(`الإيرادات الإضافية: ${formatNum(revenuesParam)}ج.م`, canvas.width - 40, 260);
+      ctx.fillText(`المصروفات الدقيقة: ${formatNum(expensesParam)}ج.م`, canvas.width - 40, 285);
+      ctx.fillStyle = profit >= 0 ? '#047857' : '#be123c';
+      ctx.fillText(`صافي أرباح الشهر: ${formatNum(profit)}ج.م`, canvas.width - 40, 310);
+    } else {
+      ctx.fillText(`الإيرادات الإضافية: ${formatNum(revenuesParam)}ج.م`, canvas.width - 40, 235);
+      ctx.fillText(`المصروفات الدقيقة: ${formatNum(expensesParam)}ج.م`, canvas.width - 40, 260);
+      ctx.fillStyle = profit >= 0 ? '#047857' : '#be123c';
+      ctx.fillText(`صافي أرباح الشهر: ${formatNum(profit)}ج.م`, canvas.width - 40, 285);
+    }
 
     // Accounts section
     let y = 315;
@@ -1811,6 +2088,7 @@ function ReportsTabComponent({
           const showActiveCustomers = !permittedSubTabs || permittedSubTabs.length === 0 || permittedSubTabs.includes('reports_areas');
           const showInvoices = !permittedSubTabs || permittedSubTabs.length === 0 || permittedSubTabs.includes('reports_invoices');
           const showInventory = !permittedSubTabs || permittedSubTabs.length === 0 || permittedSubTabs.includes('reports_inventory');
+          const showReturns = !permittedSubTabs || permittedSubTabs.length === 0 || permittedSubTabs.includes('reports_invoices');
           return (
             <div className="flex flex-wrap bg-[#FFFFFF] p-2 rounded-2xl border border-slate-200 gap-1 sm:gap-2 shadow-sm text-center">
               {showFinance && (
@@ -1861,6 +2139,16 @@ function ReportsTabComponent({
                   }`}
                 >
                   مطابقة المخزون
+                </button>
+              )}
+              {showReturns && (
+                <button
+                  onClick={() => setActiveSubTab('returns')}
+                  className={`flex-1 py-1.5 px-1 rounded-xl font-black text-[11px] sm:text-[13px] transition-all cursor-pointer select-none ${
+                    activeSubTab === 'returns' ? 'bg-[#FFFFFF] text-[#1A365D] border-b-2 border-b-[#DD6B20] shadow-sm rounded-none' : 'text-[#9CA3AF] bg-transparent border-transparent'
+                  }`}
+                >
+                  المرتجعات
                 </button>
               )}
             </div>
@@ -2056,28 +2344,32 @@ function ReportsTabComponent({
                   'مخصص'
                 }
               </span>
-              <div className="grid grid-cols-3 gap-2 mt-1">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mt-1">
                 <div className="bg-white/10 rounded-xl p-2 text-center">
-                  <span className="text-[9px] text-blue-200 font-bold block">الفواتير</span>
+                  <span className="text-[9px] text-blue-200 font-bold block">عدد الفواتير الصادرة</span>
                   <span className="text-sm font-black">{periodStats.invoiceCount}</span>
                 </div>
                 <div className="bg-white/10 rounded-xl p-2 text-center">
-                  <span className="text-[9px] text-blue-200 font-bold block">المحصل</span>
+                  <span className="text-[9px] text-blue-200 font-bold block">إجمالي المبيعات</span>
+                  <span className="text-sm font-black">{formatNum(periodStats.totalSales)}</span>
+                </div>
+                <div className="bg-white/10 rounded-xl p-2 text-center">
+                  <span className="text-[9px] text-blue-200 font-bold block">المحصل فعلياً</span>
                   <span className="text-sm font-black">{formatNum(periodStats.totalCollected)}</span>
+                </div>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                <div
+                  onClick={() => setExpandedProfitDetail(!expandedProfitDetail)}
+                  className={`bg-white/10 rounded-xl p-2 text-center cursor-pointer transition-all ${expandedProfitDetail ? 'ring-1 ring-white/30' : 'hover:bg-white/15'}`}
+                >
+                  <span className="text-[9px] text-blue-200 font-bold block">صافي ربح الدورة</span>
+                  <span className="text-xs font-black">{formatNum(salesStats.operatingNetProfit)}</span>
+                  <span className="text-[8px] text-blue-300 block mt-0.5">{expandedProfitDetail ? '▼ إخفاء' : '▶ تفاصيل الدورات'}</span>
                 </div>
                 <div className="bg-white/10 rounded-xl p-2 text-center">
                   <span className="text-[9px] text-blue-200 font-bold block">المصروفات</span>
-                  <span className="text-sm font-black text-rose-300">{formatNum(periodStats.expensesTotal)}</span>
-                </div>
-              </div>
-              <div className="grid grid-cols-3 gap-2">
-                <div className="bg-white/10 rounded-xl p-2 text-center">
-                  <span className="text-[9px] text-blue-200 font-bold block">صافي الربح</span>
-                  <span className="text-xs font-black">{formatNum(periodStats.periodProfit + periodStats.tripsCollected + periodStats.extraRevenues - periodStats.expensesTotal)}</span>
-                </div>
-                <div className="bg-white/10 rounded-xl p-2 text-center">
-                  <span className="text-[9px] text-blue-200 font-bold block">المشاوير</span>
-                  <span className="text-xs font-black">{periodStats.tripsCount}</span>
+                  <span className="text-xs font-black text-rose-300">{formatNum(periodStats.expensesTotal)}</span>
                 </div>
                 <div className="bg-white/10 rounded-xl p-2 text-center">
                   <span className="text-[9px] text-blue-200 font-bold block">محصل المشاوير</span>
@@ -2086,60 +2378,194 @@ function ReportsTabComponent({
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
-              <div className="bg-emerald-50 rounded-2xl p-4 border border-emerald-100 flex flex-col gap-1 text-center justify-between">
-                <div>
-                  <span className="text-emerald-850 font-black text-xs block">إجمالي الإيرادات</span>
-                  <span className="text-emerald-600 font-bold text-[9px] block leading-tight mt-0.5">المحصل + إيرادات إضافية + أرباح المشاوير</span>
-                </div>
-                <span className="text-xl font-black text-emerald-800 my-1 block">
-                  {formatNum((salesStats.totalCollected + salesStats.extraRevenues + salesStats.totalTripsCollectedProfit) - salesStats.totalPaidToFactoryInPeriod - salesStats.totalSpent)}
-                  <span className="text-xs mr-0.5">ج.م</span>
-                </span>
-                <div className="border-t border-emerald-200/50 pt-1 mt-1 text-[8px] text-emerald-700/80 flex flex-col gap-0.5 text-right font-medium">
-                  <div className="flex justify-between">
-                    <span>المحصل من العملاء:</span>
-                    <span>{formatNum(salesStats.totalCollected)}ج</span>
-                  </div>
-                  {salesStats.extraRevenues > 0 && (
-                    <div className="flex justify-between">
-                      <span>إيرادات إضافية:</span>
-                      <span>{formatNum(salesStats.extraRevenues)}ج</span>
+            {expandedProfitDetail && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={() => setExpandedProfitDetail(false)}>
+                <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
+                <div className="relative bg-white rounded-3xl shadow-2xl w-full max-w-md max-h-[85vh] flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
+                  <div className="bg-gradient-to-r from-[#1A365D] to-[#2B6CB0] px-5 py-4 flex items-center justify-between shrink-0">
+                    <div className="flex flex-col gap-0.5">
+                      <span className="text-white font-black text-base">صافي ربح الدورة</span>
+                      <span className="text-blue-200 text-[10px] font-bold">تفاصيل كل دورة مؤرشفة</span>
                     </div>
-                  )}
-                  {salesStats.totalTripsCollectedProfit > 0 && (
-                    <div className="flex justify-between">
-                      <span>أرباح المشاوير:</span>
-                      <span>{formatNum(salesStats.totalTripsCollectedProfit)}ج</span>
-                    </div>
-                  )}
-                  <div className="flex justify-between text-rose-600 font-bold">
-                    <span>المسدد للمصنع:</span>
-                    <span>-{formatNum(salesStats.totalPaidToFactoryInPeriod)}ج</span>
+                    <button onClick={() => setExpandedProfitDetail(false)} className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center transition-colors cursor-pointer">
+                      <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" /></svg>
+                    </button>
                   </div>
-                  <div className="flex justify-between text-rose-600 font-bold">
-                    <span>المصروفات التشغيلية:</span>
-                    <span>-{formatNum(salesStats.totalSpent)}ج</span>
+                  <div className="flex-1 overflow-y-auto custom-scroll p-4 flex flex-col gap-3">
+                    {(() => {
+                      const sortedCycles = [...(archiveCycles || [])].sort((a: any, b: any) => Number(a.id) - Number(b.id));
+                      if (sortedCycles.length === 0) {
+                        return <p className="text-slate-400 text-center text-xs py-8 font-bold">لا توجد دورات مؤرشفة</p>;
+                      }
+                      return sortedCycles.map((cycle: any, idx: number) => {
+                        const prevTs = idx === 0 ? 0 : Number(sortedCycles[idx - 1].id);
+                        const currTs = Number(cycle.id);
+                        const cycleReturns = delFilteredReturns.filter((r: any) => {
+                          if (!r || !r.date) return false;
+                          const t = new Date(r.date).getTime();
+                          return t > prevTs && t <= currTs;
+                        }).reduce((sum: number, r: any) => sum + (r.totalReturnValue || 0), 0);
+                        const hasDetails = (cycle.collectedAmount || 0) > 0 || (cycle.extraRevenues || 0) > 0 || (cycle.tripsCollected || 0) > 0;
+                        const income = (cycle.collectedAmount || 0) + (cycle.tripsCollected || 0) + (cycle.extraRevenues || 0);
+                        const outgoing = (cycle.totalAdvancePayments || 0) + (cycle.cycleExpenses || 0) + cycleReturns;
+                        const profit = hasDetails ? (income - outgoing) : 0;
+                        const showCollected = (cycle.collectedAmount || 0) > 0;
+                        const showTrips = (cycle.tripsCollected || 0) > 0;
+                        const showRevenues = (cycle.extraRevenues || 0) > 0;
+                        const showPayments = (cycle.totalAdvancePayments || 0) > 0;
+                        const showExpenses = (cycle.cycleExpenses || 0) > 0;
+                        return (
+                          <div key={cycle.id} className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
+                            <div className="bg-slate-50 px-4 py-2.5 flex items-center justify-between border-b border-slate-100">
+                              <div className="flex items-center gap-2">
+                                <span className="bg-[#1A365D] text-white text-[10px] font-black px-3 py-1 rounded-full">دورة {idx + 1}</span>
+                                <span className="text-[8px] text-slate-400">{cycle.settledAt || ''}</span>
+                              </div>
+                              {hasDetails ? (
+                                <span className={`text-[11px] font-black px-3 py-1 rounded-full ${profit >= 0 ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>
+                                  صافي: {formatNum(profit)} ج.م
+                                </span>
+                              ) : (
+                                <span className="text-[9px] text-slate-400 font-bold bg-slate-100 px-2 py-0.5 rounded-full">الدورة القديمة</span>
+                              )}
+                            </div>
+                            <div className="grid grid-cols-2 divide-x divide-slate-100">
+                              <div className="p-3 flex flex-col gap-1.5">
+                                <div className="flex items-center gap-1.5 mb-1">
+                                  <div className="w-2 h-2 rounded-full bg-emerald-400" />
+                                  <span className="text-[10px] text-emerald-700 font-black">الداخل</span>
+                                </div>
+                                {showCollected && (
+                                  <div className="flex justify-between items-center text-[9px]">
+                                    <span className="text-slate-500">محصل عملاء</span>
+                                    <span className="font-black text-emerald-700">{formatNum(cycle.collectedAmount || 0)}</span>
+                                  </div>
+                                )}
+                                {showTrips && (
+                                  <div className="flex justify-between items-center text-[9px]">
+                                    <span className="text-slate-500">مشاوير</span>
+                                    <span className="font-black text-emerald-700">{formatNum(cycle.tripsCollected || 0)}</span>
+                                  </div>
+                                )}
+                                {showRevenues && (
+                                  <div className="flex justify-between items-center text-[9px]">
+                                    <span className="text-slate-500">إيرادات</span>
+                                    <span className="font-black text-emerald-700">{formatNum(cycle.extraRevenues || 0)}</span>
+                                  </div>
+                                )}
+                                {income > 0 && (
+                                  <div className="border-t border-emerald-100 flex justify-between items-center pt-1">
+                                    <span className="text-[9px] font-black text-emerald-800">الإجمالي</span>
+                                    <span className="text-[10px] font-black text-emerald-800">{formatNum(income)}</span>
+                                  </div>
+                                )}
+                              </div>
+                              <div className="p-3 flex flex-col gap-1.5">
+                                <div className="flex items-center gap-1.5 mb-1">
+                                  <div className="w-2 h-2 rounded-full bg-rose-400" />
+                                  <span className="text-[10px] text-rose-700 font-black">الخارج</span>
+                                </div>
+                                {showPayments && (
+                                  <div className="flex justify-between items-center text-[9px]">
+                                    <span className="text-slate-500">سداد مصنع</span>
+                                    <span className="font-black text-rose-700">{formatNum(cycle.totalAdvancePayments || 0)}</span>
+                                  </div>
+                                )}
+                                {showExpenses && (
+                                  <div className="flex justify-between items-center text-[9px]">
+                                    <span className="text-slate-500">مصروفات</span>
+                                    <span className="font-black text-rose-700">{formatNum(cycle.cycleExpenses || 0)}</span>
+                                  </div>
+                                )}
+                                {cycleReturns > 0 && (
+                                  <div className="flex justify-between items-center text-[9px]">
+                                    <span className="text-slate-500">مرتجعات</span>
+                                    <span className="font-black text-rose-700">{formatNum(cycleReturns)}</span>
+                                  </div>
+                                )}
+                                {outgoing > 0 && (
+                                  <div className="border-t border-rose-100 flex justify-between items-center pt-1">
+                                    <span className="text-[9px] font-black text-rose-800">الإجمالي</span>
+                                    <span className="text-[10px] font-black text-rose-800">{formatNum(outgoing)}</span>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      });
+                    })()}
+                  </div>
+                  <div className="border-t-2 border-slate-200 bg-gradient-to-r from-slate-50 to-white px-5 py-3.5 flex items-center justify-between shrink-0">
+                    <span className="text-xs font-black text-slate-700">صافي الربح الكلي</span>
+                    {(() => {
+                      const totalProfit = (archiveCycles || []).reduce((s: number, c: any) => {
+                        const inc = (c.collectedAmount || 0) + (c.tripsCollected || 0) + (c.extraRevenues || 0);
+                        const out = (c.totalAdvancePayments || 0) + (c.cycleExpenses || 0);
+                        const hasD = (c.collectedAmount || 0) > 0 || (c.extraRevenues || 0) > 0 || (c.tripsCollected || 0) > 0;
+                        return s + (hasD ? (inc - out) : 0);
+                      }, 0);
+                      return (
+                        <span className={`text-sm font-black ${totalProfit >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
+                          {formatNum(totalProfit)} ج.م
+                        </span>
+                      );
+                    })()}
                   </div>
                 </div>
               </div>
+            )}
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div className="bg-gradient-to-br from-emerald-50 to-teal-50 rounded-2xl p-4 border border-emerald-100 flex flex-col gap-2 shadow-sm hover:shadow-md transition-shadow">
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-xl bg-emerald-500/10 flex items-center justify-center">
+                    <svg className="w-4 h-4 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                  </div>
+                  <div className="flex flex-col">
+                    <span className="text-emerald-800 font-black text-xs">صافي السيولة النقدية</span>
+                    <span className="text-emerald-600 font-bold text-[8px]">(المحصل + المشاوير + الإيرادات) - (المسدد + المصروفات)</span>
+                  </div>
+                </div>
+                <span className="text-2xl font-black text-emerald-800">
+                  {formatNum(salesStats.netCashFlow)}
+                  <span className="text-xs mr-1 font-bold">ج.م</span>
+                </span>
+                <div className="bg-white/60 rounded-xl p-2.5 flex flex-col gap-1 text-[9px] text-right font-bold">
+                  <div className="flex justify-between items-center"><span className="text-slate-500">محصل من العملاء</span><span className="text-emerald-700 font-black">{formatNum(salesStats.totalCollected)} ج</span></div>
+                  <div className="flex justify-between items-center"><span className="text-slate-500">مشاوير محصلة</span><span className="text-emerald-700 font-black">{formatNum(salesStats.totalTripsCollectedProfit)} ج</span></div>
+                  <div className="flex justify-between items-center"><span className="text-slate-500">إيرادات إضافية</span><span className="text-emerald-700 font-black">{formatNum(salesStats.extraRevenues)} ج</span></div>
+                  <div className="border-t border-emerald-100 my-0.5" />
+                  <div className="flex justify-between items-center"><span className="text-rose-500">سداد للمصنع (مؤرشف)</span><span className="text-rose-600 font-black">-{formatNum(salesStats.totalOverallPaidToFactory)} ج</span></div>
+                  <div className="flex justify-between items-center"><span className="text-rose-500">مصروفات تشغيلية</span><span className="text-rose-600 font-black">-{formatNum(salesStats.totalSpent)} ج</span></div>
+                </div>
+              </div>
               <div 
-                className="bg-rose-50 rounded-2xl p-4 border border-rose-100 flex flex-col gap-1 text-center cursor-pointer hover:bg-rose-100 transition-colors active:scale-95 justify-between"
+                className="bg-gradient-to-br from-rose-50 to-pink-50 rounded-2xl p-4 border border-rose-100 flex flex-col gap-2 shadow-sm hover:shadow-md transition-shadow cursor-pointer active:scale-[0.98]"
                 onClick={() => setViewingExpenses(!viewingExpenses)}
               >
-                <div>
-                  <span className="text-rose-700 font-black text-xs flex items-center justify-center gap-1">إجمالي المصروفات <ChevronDown className={`h-3 w-3 transition-transform ${viewingExpenses ? 'rotate-180' : ''}`} /></span>
-                  <span className="text-rose-500 font-bold text-[9px] block mt-0.5">المصروفات النثرية والتشغيلية العامة</span>
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-xl bg-rose-500/10 flex items-center justify-center">
+                    <svg className="w-4 h-4 text-rose-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" /></svg>
+                  </div>
+                  <div className="flex flex-col flex-1">
+                    <span className="text-rose-800 font-black text-xs flex items-center gap-1">
+                      إجمالي المصروفات
+                      <ChevronDown className={`h-3 w-3 transition-transform ${viewingExpenses ? 'rotate-180' : ''}`} />
+                    </span>
+                    <span className="text-rose-500 font-bold text-[8px]">المصروفات النثرية والتشغيلية العامة</span>
+                  </div>
                 </div>
-                <span className="text-xl font-black text-rose-800 my-1 block">{formatNum(salesStats.totalSpent)}<span className="text-xs">ج.م</span></span>
+                <span className="text-2xl font-black text-rose-800">{formatNum(salesStats.totalSpent)}<span className="text-xs mr-1 font-bold">ج.م</span></span>
                 {salesStats.totalSales > 0 && (
-                  <span className="text-[9px] font-black text-rose-600 bg-rose-100 rounded-full px-2 py-0.5 inline-block">
-                    نسبة المصروفات: {(salesStats.totalSpent / salesStats.totalSales * 100).toFixed(1)}%
-                  </span>
+                  <div className="flex items-center gap-1.5">
+                    <div className="flex-1 h-1.5 bg-rose-100 rounded-full overflow-hidden">
+                      <div className="h-full bg-rose-400 rounded-full transition-all" style={{ width: `${Math.min((salesStats.totalSpent / salesStats.totalSales * 100), 100)}%` }} />
+                    </div>
+                    <span className="text-[9px] font-black text-rose-600">{(salesStats.totalSpent / salesStats.totalSales * 100).toFixed(1)}%</span>
+                  </div>
                 )}
-                <div className="border-t border-rose-200/50 pt-1 mt-1 text-[8px] text-rose-700/80 text-center font-bold">
-                  انقر لعرض تفاصيل المصروفات
-                </div>
+                <span className="text-[8px] text-rose-400 font-bold text-center">اضغط لعرض التفاصيل</span>
               </div>
             </div>
 
@@ -2149,10 +2575,29 @@ function ReportsTabComponent({
                   <AlertCircle className="h-4.5 w-4.5 text-amber-600 shrink-0" />
                   <span className="font-bold text-xs">تنبيه: دين متبقي للمصنع بذمة السيارة</span>
                 </div>
-                <div className="flex justify-between items-center mt-1 pt-1.5 border-t border-amber-200/40">
-                  <span className="text-[11px] text-amber-700 font-medium">إجمالي المديونية المستحقة للمصنع حالياً:</span>
-                  <span className="text-sm font-black text-rose-800">{formatNum(salesStats.remainingDebtToFactory)} ج.م</span>
+                <div className="grid grid-cols-3 gap-2 mt-1 pt-1.5 border-t border-amber-200/40 text-[10px]">
+                  <div className="flex flex-col bg-white/50 rounded-lg p-2">
+                    <span className="text-amber-700 font-bold">إجمالي المحمل</span>
+                    <span className="text-sm font-black text-slate-800">{formatNum(salesStats.totalLoadedAllTime)} ج.م</span>
+                  </div>
+                  <div className="flex flex-col bg-white/50 rounded-lg p-2">
+                    <span className="text-emerald-700 font-bold">إجمالي المسدد</span>
+                    <span className="text-sm font-black text-emerald-800">{formatNum(salesStats.totalPaidAllTime)} ج.م</span>
+                  </div>
+                  <div className="flex flex-col bg-white/50 rounded-lg p-2">
+                    <span className="text-rose-700 font-bold">المدين المتبقي</span>
+                    <span className="text-sm font-black text-rose-800">{formatNum(salesStats.remainingDebtToFactory)} ج.م</span>
+                  </div>
+                  {salesStats.totalWaivedAllTime > 0 && (
+                    <div className="flex flex-col bg-white/50 rounded-lg p-2">
+                      <span className="text-amber-700 font-bold">تنازلات</span>
+                      <span className="text-sm font-black text-amber-800">{formatNum(salesStats.totalWaivedAllTime)} ج.م</span>
+                    </div>
+                  )}
                 </div>
+                <p className="text-[8px] text-amber-600/80 font-medium pt-1 border-t border-amber-200/40">
+                  * يشمل إجمالي المحمل والمسدد كامل الفترات بما فيها الدورات المؤرشفة
+                </p>
               </div>
             )}
 
@@ -2190,53 +2635,148 @@ function ReportsTabComponent({
               </div>
             )}
 
-            {viewingExpenses && (
-              <div className="bg-[#FFFFFF] p-4 rounded-2xl border border-rose-100 shadow-sm flex flex-col gap-3 animate-fade-in">
-                <h3 className="font-bold text-rose-700 text-sm border-b border-slate-100 pb-2">سجل المصروفات للفترة</h3>
-                {/* Expense Category Breakdown */}
-                {(() => {
-                  const periodExpenses = currentFilteredData.expenses.filter(e => e.type !== 'revenue' && e.category !== 'سداد للمصنع' && e.type !== 'factory_payment');
-                  if (periodExpenses.length === 0) return null;
-                  const byCategory = periodExpenses.reduce((acc, e) => {
-                    const cat = parseExpenseDescription(e.description);
-                    acc[cat] = (acc[cat] || 0) + (e.amount || 0);
-                    return acc;
-                  }, {} as Record<string, number>);
-                  const sorted = Object.entries(byCategory).sort((a, b) => b[1] - a[1]);
-                  const colors = ['bg-rose-100 text-rose-800', 'bg-orange-100 text-orange-800', 'bg-amber-100 text-amber-800', 'bg-yellow-100 text-yellow-800', 'bg-lime-100 text-lime-800'];
-                  return (
-                    <div className="flex flex-col gap-1.5 mb-2">
-                      <span className="text-[10px] font-black text-gray-500">تفصيل حسب النوع:</span>
-                      <div className="flex flex-wrap gap-1.5">
-                        {sorted.map(([cat, amount], i) => (
-                          <span key={cat} className={`text-[9px] font-bold rounded-full px-2.5 py-1 flex items-center gap-1 ${colors[i % colors.length]}`}>
-                            {cat}: {formatNum(amount)}ج ({(amount / salesStats.totalSpent * 100).toFixed(1)}%)
-                          </span>
-                        ))}
+            {/* Customer Credits */}
+            {(() => {
+              const creditTransactions = (currentFilteredData.returns || []).filter(r => r.movementType === 'credit_note' || (r.movementType === 'exchange' && r.exchangeSettlementMethod === 'credit' && (r.exchangeDifference || 0) > 0));
+              const totalCreditIssued = creditTransactions.reduce((s, r) => s + (r.totalReturnValue || 0) + ((r.movementType === 'exchange' && (r.exchangeDifference || 0) > 0) ? (r.exchangeDifference || 0) : 0), 0);
+              if (totalCreditIssued <= 0 && !creditTransactions.length) return null;
+              return (
+              <div className="bg-blue-50 rounded-2xl p-4 border border-blue-200 flex flex-col gap-2 shadow-xs animate-fade-in text-right">
+                <div className="flex items-center gap-1.5 text-blue-800">
+                  <Wallet className="h-4.5 w-4.5 text-blue-600 shrink-0" />
+                  <span className="font-bold text-xs">أرصدة العملاء الدائنة (مرتجع رصيد)</span>
+                </div>
+                <div className="flex justify-between items-center pt-1.5 border-t border-blue-200/40">
+                  <span className="text-[11px] text-blue-700 font-medium">إجمالي الأرصدة المصدرة:</span>
+                  <span className="text-sm font-black text-blue-800">{formatNum(totalCreditIssued)} ج.م</span>
+                </div>
+                <div className="flex flex-col gap-1 mt-1 pt-1.5 border-t border-blue-200/30 max-h-[150px] overflow-y-auto">
+                  {creditTransactions.slice(0, 6).map((ct, idx) => {
+                    const cust = customers.find(c => c.id === ct.customerId);
+                    return (
+                      <div key={idx} className="flex justify-between items-center bg-white/60 rounded-lg px-2.5 py-1.5 text-[10px]">
+                        <span className="font-bold text-blue-900">{cust?.name || ct.customerName}</span>
+                        <div>
+                          <span className="font-black text-blue-700">{formatNum(ct.totalReturnValue)} ج.م</span>
+                          {ct.movementType === 'exchange' && ct.exchangeDifference > 0 && (
+                            <span className="font-bold text-blue-500 mr-1">+ {formatNum(ct.exchangeDifference)} ج.م</span>
+                          )}
+                        </div>
                       </div>
+                    );
+                  })}
+                </div>
+              </div>
+              );
+            })()}
+
+            {/* Cash Flow Statement */}
+            <div className="bg-[#FFFFFF] rounded-2xl p-4 border border-slate-200 shadow-sm flex flex-col gap-2 text-right">
+              <h3 className="font-bold text-[#1A365D] text-sm border-b border-slate-100 pb-2 flex items-center gap-1.5">
+                <Wallet className="h-4 w-4" />
+                كشف التدفق النقدي
+              </h3>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <div className="bg-emerald-50 rounded-xl p-3 border border-emerald-200">
+                  <div className="text-[9px] font-bold text-emerald-600 mb-1">💰 الداخل (إيرادات)</div>
+                  <div className="flex flex-col gap-0.5 text-[10px] font-medium text-slate-600">
+                    <div className="flex justify-between"><span>محصل من العملاء</span><span className="font-black text-emerald-700">{formatNum(salesStats.totalCollected)} ج.م</span></div>
+                    <div className="flex justify-between"><span>محصل مشاوير</span><span className="font-black text-emerald-700">{formatNum(salesStats.totalTripsCollectedProfit)} ج.م</span></div>
+                    <div className="flex justify-between"><span>إيرادات إضافية</span><span className="font-black text-emerald-700">{formatNum(salesStats.extraRevenues)} ج.م</span></div>
+                    <div className="border-t border-emerald-200 mt-1 pt-1 flex justify-between text-[11px]">
+                      <span className="font-black text-emerald-800">إجمالي الداخل</span>
+                      <span className="font-black text-emerald-800">{formatNum(salesStats.totalCollected + salesStats.totalTripsCollectedProfit + salesStats.extraRevenues)} ج.م</span>
                     </div>
-                  );
-                })()}
-                <div className="flex flex-col gap-2">
-                  {currentFilteredData.expenses
-                      .filter(e => e.type !== 'revenue' && e.category !== 'سداد للمصنع' && e.type !== 'factory_payment')
-                      .sort((a,b) => {
+                  </div>
+                </div>
+                <div className="bg-rose-50 rounded-xl p-3 border border-rose-200">
+                  <div className="text-[9px] font-bold text-rose-600 mb-1">💸 الخارج (مصروفات)</div>
+                  <div className="flex flex-col gap-0.5 text-[10px] font-medium text-slate-600">
+                    <div className="flex justify-between"><span>مصروفات تشغيلية</span><span className="font-black text-rose-700">-{formatNum(salesStats.totalSpent)} ج.م</span></div>
+                    <div className="flex justify-between"><span>سداد للمصنع (مؤرشف)</span><span className="font-black text-rose-700">-{formatNum(salesStats.totalOverallPaidToFactory)} ج.م</span></div>
+                    <div className="border-t border-rose-200 mt-1 pt-1 flex justify-between text-[11px]">
+                      <span className="font-black text-rose-800">إجمالي الخارج</span>
+                      <span className="font-black text-rose-800">-{formatNum(salesStats.totalSpent + salesStats.totalOverallPaidToFactory)} ج.م</span>
+                    </div>
+                  </div>
+                </div>
+                <div className="bg-slate-50 rounded-xl p-3 border border-slate-200">
+                  <div className="text-[9px] font-bold text-slate-600 mb-1">⚖️ الصافي</div>
+                  <div className="flex flex-col gap-0.5 text-[10px] font-medium text-slate-600">
+                    <div className="flex justify-between"><span>إجمالي الداخل</span><span className="font-black text-emerald-700">{formatNum(salesStats.totalCollected + salesStats.totalTripsCollectedProfit + salesStats.extraRevenues)} ج.م</span></div>
+                    <div className="flex justify-between"><span>إجمالي الخارج</span><span className="font-black text-rose-700">-{formatNum(salesStats.totalSpent + salesStats.totalOverallPaidToFactory)} ج.م</span></div>
+                    <div className="border-t border-slate-300 mt-1 pt-1 flex justify-between text-[11px]">
+                      <span className="font-black text-slate-800">صافي السيولة النقدية</span>
+                      <span className={`font-black ${salesStats.netCashFlow >= 0 ? 'text-emerald-800' : 'text-rose-800'}`}>
+                        {formatNum(salesStats.netCashFlow)} ج.م
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {viewingExpenses && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={() => setViewingExpenses(false)}>
+                <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
+                <div className="relative bg-white rounded-3xl shadow-2xl w-full max-w-md max-h-[85vh] flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
+                  <div className="bg-gradient-to-r from-rose-600 to-pink-600 px-5 py-4 flex items-center justify-between shrink-0">
+                    <div className="flex flex-col gap-0.5">
+                      <span className="text-white font-black text-base">سجل المصروفات للفترة</span>
+                      <span className="text-rose-100 text-[10px] font-bold">{currentFilteredData.expenses.filter(e => e.type !== 'revenue' && e.category !== 'سداد للمصنع' && e.type !== 'factory_payment').length} مصروف • الإجمالي: {formatNum(salesStats.totalSpent)} ج.م</span>
+                    </div>
+                    <button onClick={() => setViewingExpenses(false)} className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center transition-colors cursor-pointer">
+                      <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" /></svg>
+                    </button>
+                  </div>
+                  <div className="flex-1 overflow-y-auto custom-scroll p-4 flex flex-col gap-3">
+                    {(() => {
+                      const periodExpenses = currentFilteredData.expenses.filter(e => e.type !== 'revenue' && e.category !== 'سداد للمصنع' && e.type !== 'factory_payment');
+                      if (periodExpenses.length === 0) return <p className="text-slate-400 text-center text-xs py-8 font-bold">لا توجد مصروفات في هذه الفترة</p>;
+                      const byCategory = periodExpenses.reduce((acc, e) => {
+                        const cat = parseExpenseDescription(e.description);
+                        acc[cat] = (acc[cat] || 0) + (e.amount || 0);
+                        return acc;
+                      }, {} as Record<string, number>);
+                      const sorted = Object.entries(byCategory).sort((a, b) => b[1] - a[1]);
+                      const catColors = ['from-rose-500 to-pink-500', 'from-orange-500 to-amber-500', 'from-amber-500 to-yellow-500', 'from-emerald-500 to-teal-500', 'from-indigo-500 to-blue-500'];
+                      const sortedExpenses = [...periodExpenses].sort((a, b) => {
                         const timeA = a.date ? new Date(a.date).getTime() : 0;
                         const timeB = b.date ? new Date(b.date).getTime() : 0;
                         return (isNaN(timeB) ? 0 : timeB) - (isNaN(timeA) ? 0 : timeA);
-                      })
-                      .map((exp, idx) => (
-                        <div key={idx} className="flex justify-between items-center border border-slate-100 p-2.5 rounded-lg bg-[#F7FAFC]">
-                          <div className="flex flex-col gap-0.5">
-                            <span className="text-[11px] font-bold text-[#DD6B20]">{parseExpenseDescription(exp.description)}</span>
-                            <span className="text-[9px] text-gray-400 font-medium">{exp.date && !isNaN(new Date(exp.date).getTime()) ? new Date(exp.date).toLocaleString('ar-EG') : 'بدون تاريخ'}</span>
+                      });
+                      return (
+                        <>
+                          <div className="bg-slate-50 rounded-2xl p-3 border border-slate-100">
+                            <span className="text-[10px] font-black text-slate-500 block mb-2">تفصيل حسب النوع</span>
+                            <div className="flex flex-col gap-1.5">
+                              {sorted.map(([cat, amount], i) => (
+                                <div key={cat} className="flex items-center gap-2">
+                                  <div className={`w-2 h-2 rounded-full bg-gradient-to-r ${catColors[i % catColors.length]} shrink-0`} />
+                                  <span className="text-[10px] font-bold text-slate-700 flex-1">{cat}</span>
+                                  <span className="text-[10px] font-black text-slate-800">{formatNum(amount)} ج.م</span>
+                                  <span className="text-[9px] font-bold text-slate-400">({(amount / salesStats.totalSpent * 100).toFixed(1)}%)</span>
+                                </div>
+                              ))}
+                            </div>
                           </div>
-                          <span className="font-black text-xs text-rose-700">
-                            - {exp.amount.toLocaleString('ar-EG')}ج.م
-                          </span>
-                        </div>
-                      ))
-                  }
+                          <div className="flex flex-col gap-2">
+                            {sortedExpenses.map((exp, idx) => (
+                              <div key={idx} className="flex justify-between items-center border border-slate-100 p-3 rounded-xl bg-white shadow-sm">
+                                <div className="flex flex-col gap-0.5">
+                                  <span className="text-[11px] font-bold text-[#DD6B20]">{parseExpenseDescription(exp.description)}</span>
+                                  <span className="text-[9px] text-gray-400 font-medium">{exp.date && !isNaN(new Date(exp.date).getTime()) ? new Date(exp.date).toLocaleDateString('ar-EG') : 'بدون تاريخ'}</span>
+                                </div>
+                                <span className="font-black text-xs text-rose-700 bg-rose-50 px-2.5 py-1 rounded-lg">
+                                  - {exp.amount.toLocaleString('ar-EG')} ج.م
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        </>
+                      );
+                    })()}
+                  </div>
                 </div>
               </div>
             )}
@@ -2255,9 +2795,9 @@ function ReportsTabComponent({
                   <div className="flex flex-col gap-1 text-right flex-1">
                     <div className="flex items-center gap-1.5 justify-start">
                       <span className="text-[10px] font-black text-emerald-800 bg-emerald-50 border border-emerald-100 rounded-md px-1.5 py-0.5">المسدد</span>
-                      <span className="text-[10px] font-extrabold text-slate-500">للمصنع في الفترة</span>
+                      <span className="text-[10px] font-extrabold text-slate-500">للمصنع (كل الفترات)</span>
                     </div>
-                    <span className="text-lg font-black text-emerald-950 font-mono tracking-tight my-0.5" dir="rtl">{salesStats.totalPaidToFactoryInPeriod.toLocaleString('ar-EG')} <span className="text-[10px] font-bold text-emerald-700 mr-0.5">ج.م</span></span>
+                    <span className="text-lg font-black text-emerald-950 font-mono tracking-tight my-0.5" dir="rtl">{salesStats.totalOverallPaidToFactory.toLocaleString('ar-EG')} <span className="text-[10px] font-bold text-emerald-700 mr-0.5">ج.م</span></span>
                   </div>
                   <div className="bg-emerald-500/10 p-2.5 rounded-xl text-emerald-600 border border-emerald-500/10 ml-2">
                     <HandCoins className="w-5 h-5" />
@@ -2433,29 +2973,23 @@ function ReportsTabComponent({
                       {activeDetailCard === 'net' && (
                         <div className="flex flex-col gap-3">
                           <div className="flex flex-col gap-2 text-xs font-bold">
+                            {sortedArchive.length > 0 && (
+                              <div className="flex justify-between border-b border-dashed border-slate-200 pb-1.5">
+                                <span className="text-slate-500">أرباح الدورات المؤرشفة ({sortedArchive.length} دورة)</span>
+                                <span className="text-emerald-700" dir="rtl">{formatNum(archiveProfitsSum)} ج.م</span>
+                              </div>
+                            )}
                             <div className="flex justify-between border-b border-dashed border-slate-200 pb-1.5">
-                              <span className="text-slate-500">المحصل الفعلي من مبيعات العملاء (كاش)</span>
-                              <span className="text-slate-800" dir="rtl">{(salesStats.totalCollected).toLocaleString('ar-EG')} ج.م</span>
-                            </div>
-                            <div className="flex justify-between border-b border-dashed border-slate-200 pb-1.5">
-                              <span className="text-slate-500">يضاف: إيرادات إضافية وأرباح مشاوير محصلة</span>
-                              <span className="text-emerald-700" dir="rtl">+ {(salesStats.extraRevenues + salesStats.totalTripsCollectedProfit).toLocaleString('ar-EG')} ج.م</span>
-                            </div>
-                            <div className="flex justify-between border-b border-dashed border-slate-200 pb-1.5">
-                              <span className="text-slate-500">يخصم: تكلفة البضاعة المباعة (COGS)</span>
-                              <span className="text-rose-700" dir="rtl">- {(salesStats.factorySoldCost).toLocaleString('ar-EG')} ج.م</span>
-                            </div>
-                            <div className="flex justify-between border-b border-dashed border-slate-200 pb-1.5">
-                              <span className="text-slate-500">يخصم: إجمالي المصروفات الإدارية والتشغيلية المعتمدة</span>
-                              <span className="text-rose-700" dir="rtl">- {(salesStats.totalSpent).toLocaleString('ar-EG')} ج.م</span>
+                              <span className="text-slate-500">صافي الربح الحالي (الفترة)</span>
+                              <span className="text-emerald-700" dir="rtl">{formatNum(operatingNetProfit)} ج.م</span>
                             </div>
                             <div className="flex justify-between text-xs sm:text-sm font-black border-t border-slate-350 pt-2 text-[#1A365D]">
-                              <span>الصافي الفعلي النهائي للربح</span>
-                              <span className="text-emerald-800" dir="rtl">{(salesStats.cumulativeNetProfit).toLocaleString('ar-EG')} ج.م</span>
+                              <span>صافي ربح كل الدورات</span>
+                              <span className="text-emerald-800" dir="rtl">{formatNum(cumulativeNetProfit)} ج.م</span>
                             </div>
                           </div>
                           <p className="text-[10px] text-slate-500 leading-relaxed font-semibold border-t border-slate-100 pt-2">
-                            * يتم احتساب "الصافي" التراكمي = المحصل من العملاء + أرباح المشاوير + الإيرادات الاضافية - المصروفات التشغيلية.
+                            * صافي الربح الكلي = أرباح الدورات المؤرشفة + صافي الربح التشغيلي للفترة الحالية.
                           </p>
                         </div>
                       )}
@@ -2640,7 +3174,9 @@ function ReportsTabComponent({
                   return s + (cartons * cp) + (loose * up);
                 }, 0);
                 const totalPaid = filteredPayments.reduce((s, p) => s + (p.amount || 0) - (p.appliedToCarriedDebt || 0), 0);
-                const totalPaidAllTime = currentFilteredData.allExtraPayments.reduce((s, p) => s + (p.amount || 0) - (p.appliedToCarriedDebt || 0), 0);
+                const totalPaidAllTime = (archiveCycles || []).reduce((s, c) => s + (c.totalAdvancePayments || 0), 0);
+                const totalLoadedValueAllTime = (archiveCycles || []).reduce((s, c) => s + (c.rawLoadedValue || c.totalWithdrawnValue || 0), 0);
+                const totalWaivedAllTime = (archiveCycles || []).reduce((s, c) => s + (c.waivedAmount || 0), 0);
 
                 const factorySoldCostForPeriod = filteredInvoicesForFactory.reduce((sum, inv) => {
                   const itemsCost = Array.isArray(inv.items) ? inv.items.reduce((isum, it) => {
@@ -2736,16 +3272,16 @@ function ReportsTabComponent({
                           </div>
                         </div>
                         <div className="flex flex-col gap-1 z-10">
-                          <span className="text-[11px] text-slate-500 font-bold">إجمالي المسدد لكل الدورات</span>
+                          <span className="text-[11px] text-slate-500 font-bold">إجمالي المسدد لكل الدورات المؤرشفة</span>
                           <h3 className="text-xl font-black text-slate-800 font-mono tracking-tight" dir="rtl">
                             {totalPaidAllTime.toLocaleString('ar-EG')} <span className="text-xs font-black text-slate-500 mr-0.5">ج.م</span>
                           </h3>
-                          {totalLoadedValue > 0 ? (
+                          {totalLoadedValueAllTime > 0 ? (
                             <span className="text-[10px] text-emerald-600 font-extrabold">
-                              نسبة السداد: {((totalPaid / totalLoadedValue) * 100).toFixed(1)}%
+                              نسبة السداد: {((totalPaidAllTime / totalLoadedValueAllTime) * 100).toFixed(1)}%
                             </span>
                           ) : (
-                            <span className="text-[10px] text-slate-400 font-bold">لا يوجد تحميلات للفترة</span>
+                            <span className="text-[10px] text-slate-400 font-bold">لا يوجد دورات مؤرشفة</span>
                           )}
                         </div>
                       </div>
@@ -2856,7 +3392,7 @@ function ReportsTabComponent({
                         {expandedFactoryCard === 'paid' && (
                           <>
                             <h4 className="font-bold text-emerald-950 border-b border-slate-100 pb-2 text-sm flex items-center justify-between">
-                              <span>سجل الدفعات والمسدد لكل الدورات</span>
+                              <span>سجل الدفعات والمسدد لكل الدورات المؤرشفة</span>
                               <span className="text-xs bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full font-black">
                                 الإجمالي: {totalPaidAllTime.toLocaleString('ar-EG')} ج.م
                               </span>
@@ -2864,73 +3400,27 @@ function ReportsTabComponent({
                             <div className="flex flex-col gap-2 max-h-[300px] overflow-y-auto custom-scroll pr-1">
                               {(() => {
                                 const sortedCycles = [...archiveCycles].sort((a, b) => Number(a.id) - Number(b.id));
-                                const allPaymentsSorted = [...currentFilteredData.allExtraPayments].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
                                 
-                                const cycleGroups: { cycleId: number; cycleIndex: number; payments: typeof allPaymentsSorted; total: number }[] = [];
-                                
-                                sortedCycles.forEach((cycle, idx) => {
-                                  const cycleTime = Number(cycle.id);
-                                  const nextCycleTime = idx < sortedCycles.length - 1 ? Number(sortedCycles[idx + 1].id) : Infinity;
-                                  const cyclePayments = allPaymentsSorted.filter(p => {
-                                    const pTime = new Date(p.date).getTime();
-                                    return pTime >= cycleTime && pTime < nextCycleTime;
-                                  });
-                                  if (cyclePayments.length > 0) {
-                                    cycleGroups.push({
-                                      cycleId: cycleTime,
-                                      cycleIndex: idx + 1,
-                                      payments: cyclePayments,
-                                      total: cyclePayments.reduce((s, p) => s + (p.amount || 0) - (p.appliedToCarriedDebt || 0), 0)
-                                    });
-                                  }
-                                });
-                                
-                                const currentPayments = allPaymentsSorted.filter(p => {
-                                  const pTime = new Date(p.date).getTime();
-                                  const lastCycleTime = sortedCycles.length > 0 ? Number(sortedCycles[sortedCycles.length - 1].id) : 0;
-                                  return pTime >= lastCycleTime;
-                                });
-                                if (currentPayments.length > 0) {
-                                  cycleGroups.push({
-                                    cycleId: 0,
-                                    cycleIndex: sortedCycles.length + 1,
-                                    payments: currentPayments,
-                                    total: currentPayments.reduce((s, p) => s + (p.amount || 0) - (p.appliedToCarriedDebt || 0), 0)
-                                  });
-                                }
-                                
-                                return cycleGroups.length > 0 ? cycleGroups.map(group => (
-                                  <div key={group.cycleId} className="flex flex-col gap-1">
-                                    <div className="flex items-center justify-between bg-emerald-50 border border-emerald-100 rounded-xl px-3 py-1.5">
-                                      <span className="text-[10px] font-black text-emerald-800">دورة {group.cycleIndex}</span>
-                                      <span className="text-[10px] font-black text-emerald-700">الإجمالي: {formatNum(group.total)} ج.م</span>
-                                    </div>
-                                    {group.payments.map((p, i) => {
-                                      const notesParsed = (() => {
-                                        if (p.notes && p.notes.startsWith('{')) {
-                                          try { return JSON.parse(p.notes); } catch { return { notes: p.notes }; }
-                                        }
-                                        return { notes: p.notes };
-                                      })();
-                                      return (
-                                        <div key={`${group.cycleId}_${i}`} className="flex justify-between items-center text-xs text-slate-700 bg-slate-50 border border-slate-100 rounded-xl px-4 py-2.5 hover:bg-slate-100/50 transition-colors">
+                                return sortedCycles.length > 0 ? sortedCycles.map((cycle, idx) => {
+                                  const cyclePayments = cycle.payments || [];
+                                  return (
+                                    <div key={cycle.id} className="flex flex-col gap-1">
+                                      <div className="flex items-center justify-between bg-emerald-50 border border-emerald-100 rounded-xl px-3 py-1.5">
+                                        <span className="text-[10px] font-black text-emerald-800">دورة {idx + 1}</span>
+                                        <span className="text-[10px] font-black text-emerald-700">الإجمالي: {formatNum(cycle.totalAdvancePayments || 0)} ج.م</span>
+                                      </div>
+                                      {cyclePayments.map((p: any, i: number) => (
+                                        <div key={`${cycle.id}_${i}`} className="flex justify-between items-center text-xs text-slate-700 bg-slate-50 border border-slate-100 rounded-xl px-4 py-2.5">
                                           <div className="flex flex-col gap-0.5 flex-1">
-                                            <span className="font-bold">{notesParsed.notes || 'تسديد نقدي للمصنع'}</span>
-                                            <span className="text-[10px] text-slate-400">{p.date ? new Date(p.date).toLocaleDateString('ar-EG') : ''} {p.delegateName ? `— ${p.delegateName}` : ''}</span>
+                                            <span className="font-bold">{p.notes || 'تسديد نقدي للمصنع'}</span>
+                                            <span className="text-[10px] text-slate-400">{p.date || ''} {p.delegateName ? `— ${p.delegateName}` : ''}</span>
                                           </div>
-                                          <div className="flex items-center gap-2">
-                                            <span className="font-black text-emerald-700">{formatNum(p.amount)} ج.م</span>
-                                            {onDeleteExpense && (
-                                              <button onClick={(e) => { e.stopPropagation(); if (confirm('هل أنت متأكد من حذف هذا التسديد؟')) onDeleteExpense(String(p.id)); }} className="text-rose-400 hover:text-rose-600 transition-colors p-0.5" title="حذف">
-                                                <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
-                                              </button>
-                                            )}
-                                          </div>
+                                          <span className="font-black text-emerald-700">{formatNum(p.amount || 0)} ج.م</span>
                                         </div>
-                                      );
-                                    })}
-                                  </div>
-                                )) : <p className="text-slate-400 text-center text-xs py-4 font-bold">لا توجد دفعات مسجلة</p>;
+                                      ))}
+                                    </div>
+                                  );
+                                }) : <p className="text-slate-400 text-center text-xs py-4 font-bold">لا توجد دورات مؤرشفة</p>;
                               })()}
                             </div>
                           </>
@@ -2947,17 +3437,75 @@ function ReportsTabComponent({
                             <div className="flex flex-col gap-3 p-3 bg-rose-50/20 border border-rose-100 rounded-2xl text-xs font-bold text-slate-700">
                               <div className="flex justify-between items-center pb-2 border-b border-rose-100/40">
                                 <span>قيمة البضائع المحملة من المصنع (الدين الأساسي):</span>
-                                <span className="font-mono text-slate-800">{totalLoadedValue.toLocaleString('ar-EG')} ج.م</span>
+                                <span className="font-mono text-slate-800">{(totalLoadedValueAllTime + totalLoadedValue).toLocaleString('ar-EG')} ج.م</span>
                               </div>
                               <div className="flex justify-between items-center pb-2 border-b border-rose-100/40">
-                                <span>إجمالي المبالغ المسددة للمصنع في هذه الفترة:</span>
-                                <span className="font-mono text-emerald-600">- {totalPaid.toLocaleString('ar-EG')} ج.م</span>
+                                <span>إجمالي المبالغ المسددة للمصنع (كل الدورات):</span>
+                                <span className="font-mono text-emerald-600">- {(totalPaidAllTime + totalPaid).toLocaleString('ar-EG')} ج.م</span>
                               </div>
+                              {totalWaivedAllTime > 0 && (
+                                <div className="flex justify-between items-center pb-2 border-b border-rose-100/40">
+                                  <span>مبالغ تم التنازل عنها:</span>
+                                  <span className="font-mono text-amber-600">- {totalWaivedAllTime.toLocaleString('ar-EG')} ج.م</span>
+                                </div>
+                              )}
                               <div className="flex justify-between items-center text-sm font-black text-rose-700 pt-1">
-                                <span>صافي دين المصنع المتبقي لهذه الفترة:</span>
-                                <span className="font-mono">{(totalLoadedValue - totalPaid).toLocaleString('ar-EG')} ج.م</span>
+                                <span>صافي دين المصنع المتبقي:</span>
+                                <span className="font-mono">{Math.max(0, (totalLoadedValueAllTime + totalLoadedValue) - (totalPaidAllTime + totalPaid) - totalWaivedAllTime).toLocaleString('ar-EG')} ج.م</span>
                               </div>
                             </div>
+
+                            <h4 className="font-bold text-violet-900 border-b border-slate-100 pb-2 text-sm flex items-center justify-between mt-2">
+                              <span>تفاصيل ترحيل وتسوية الدورة</span>
+                              <span className="text-xs bg-violet-50 text-violet-700 px-2 py-0.5 rounded-full font-black">
+                                السداد والترحيل
+                              </span>
+                            </h4>
+                            {(() => {
+                              const sortedCycles = [...archiveCycles].sort((a, b) => Number(b.id) - Number(a.id));
+                              const latestCycle = sortedCycles[0];
+                              if (!latestCycle) return <p className="text-slate-400 text-center text-xs py-4 font-bold">لا توجد دورات مؤرشفة</p>;
+                              return (
+                                <div className="flex flex-col gap-2">
+                                  <div className="bg-violet-50/30 border border-violet-100 rounded-2xl p-3 text-xs font-bold text-slate-700 flex flex-col gap-2">
+                                    <div className="flex justify-between items-center pb-2 border-b border-violet-100/40">
+                                      <span className="text-violet-800 font-black">الدورة المؤرشفة الأخيرة</span>
+                                      <span className="text-[10px] text-violet-500">{latestCycle.settledAt}</span>
+                                    </div>
+                                    {latestCycle.amountPaidInSettlement !== undefined && (
+                                      <div className="flex justify-between items-center pb-1.5 border-b border-violet-100/30">
+                                        <span>المبلغ المسدد عند الإغلاق:</span>
+                                        <span className="font-mono text-emerald-700">{formatNum(latestCycle.amountPaidInSettlement)} ج.م</span>
+                                      </div>
+                                    )}
+                                    {latestCycle.amountCarriedOver !== undefined && latestCycle.amountCarriedOver > 0 && (
+                                      <div className="flex justify-between items-center pb-1.5 border-b border-violet-100/30">
+                                        <span>المبلغ المرحل للدورة القادمة:</span>
+                                        <span className="font-mono text-amber-600">{formatNum(latestCycle.amountCarriedOver)} ج.م</span>
+                                      </div>
+                                    )}
+                                    {latestCycle.creditBalance !== undefined && latestCycle.creditBalance > 0 && (
+                                      <div className="flex justify-between items-center pb-1.5 border-b border-violet-100/30">
+                                        <span>الرصيد الدائن المرحل:</span>
+                                        <span className="font-mono text-amber-600">{formatNum(latestCycle.creditBalance)} ج.م</span>
+                                      </div>
+                                    )}
+                                    {latestCycle.settlementReason && (
+                                      <div className="bg-white border border-violet-100 rounded-xl p-2 mt-1">
+                                        <span className="text-[10px] text-slate-500 block mb-0.5">سبب الترحيل:</span>
+                                        <span className="text-slate-700">{latestCycle.settlementReason}</span>
+                                      </div>
+                                    )}
+                                    {latestCycle.waivedAmount !== undefined && latestCycle.waivedAmount > 0 && (
+                                      <div className="flex justify-between items-center text-rose-600 pt-1">
+                                        <span>مبلغ تم التنازل عنه:</span>
+                                        <span className="font-mono font-black">{formatNum(latestCycle.waivedAmount)} ج.م</span>
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                              );
+                            })()}
                           </>
                         )}
 
@@ -3088,7 +3636,7 @@ function ReportsTabComponent({
                           <div className="flex items-center gap-2">
                             <span>{month.displayDate}</span>
                             <button
-                              onClick={() => exportMonthlyReportAsPNG(month.dateStr, month.displayDate, month.sales, month.collected, month.revs, month.expenses, month.profit)}
+                              onClick={() => exportMonthlyReportAsPNG(month.dateStr, month.displayDate, month.sales, month.collected, month.revs, month.expenses, month.profit, month.returns)}
                               className="bg-[#1A365D] text-white border-transparent hover:bg-[#1A365D] text-white border-transparent text-white rounded p-1 shadow-xs transition-colors cursor-pointer"
                               title="تنزيل كصورة"
                             >
@@ -3097,7 +3645,7 @@ function ReportsTabComponent({
                               </svg>
                             </button>
                             <button
-                              onClick={() => exportMonthlyReportAsPDF(month.dateStr, month.displayDate, month.sales, month.collected, month.revs, month.expenses, month.profit)}
+                              onClick={() => exportMonthlyReportAsPDF(month.dateStr, month.displayDate, month.sales, month.collected, month.revs, month.expenses, month.profit, month.returns)}
                               className="bg-[#DD6B20] text-white hover:bg-[#C05621] text-white rounded p-1 shadow-xs transition-colors cursor-pointer"
                               title="طباعة تقرير PDF للتحليل"
                             >
@@ -3125,6 +3673,14 @@ function ReportsTabComponent({
                             <strong className="font-black">{formatNum(month.profit)}</strong>
                           </div>
                         </div>
+                        {month.returns > 0 && (
+                        <div className="grid grid-cols-1 text-center gap-2">
+                          <div className="bg-rose-50 p-2 rounded-lg border border-rose-200">
+                            <span className="block text-[10px] text-rose-500 font-semibold mb-0.5">المرتجعات</span>
+                            <strong className="text-rose-700 font-black">{formatNum(month.returns)} ج.م</strong>
+                          </div>
+                        </div>
+                        )}
                         <div className="grid grid-cols-3 text-center gap-2">
                           <div className="bg-slate-50 p-2 rounded-lg border border-slate-100">
                             <span className="block text-[10px] text-slate-500 font-semibold mb-0.5">تكلفة البضاعة</span>
@@ -3169,7 +3725,7 @@ function ReportsTabComponent({
               const invoiceDate = selectedInvoice.date ? new Date(selectedInvoice.date) : new Date();
               
               return (
-              <div className="bg-[#FFFFFF] p-4 rounded-xl shadow-md border-r-4 border-r-[#DD6B20] mb-2 flex flex-col gap-3 relative animate-fade-in">
+              <div className="bg-[#FFFFFF] p-5 rounded-xl shadow-md border-r-4 border-r-[#DD6B20] mb-2 flex flex-col gap-3 relative animate-fade-in max-h-[500px] overflow-y-auto custom-scroll">
                 <button onClick={() => setSelectedInvoice(null)} className="absolute top-2 left-2 text-[#9CA3AF] hover:text-[#1A365D] bg-slate-100 rounded-full w-6 h-6 flex items-center justify-center cursor-pointer">✕</button>
                 
                 <div className="flex flex-col gap-1 border-b border-slate-100 pb-3">
@@ -3190,7 +3746,7 @@ function ReportsTabComponent({
                   </div>
                 </div>
 
-                <div className="flex flex-col gap-1 mt-1 border-slate-100 max-h-40 overflow-y-auto">
+                <div className="flex flex-col gap-1 mt-1 border-slate-100">
                   <span className="text-[10px] font-bold text-slate-400 mb-1">تفاصيل البضاعة المباعة:</span>
                   {itemsList.map((it, i) => {
                     const prod = products.find(p => String(p.id).trim() === String(it.productId).trim());
@@ -3211,34 +3767,73 @@ function ReportsTabComponent({
                   })}
                 </div>
 
-                <div className="flex gap-2.5 mt-3 border-t border-slate-100 pt-3">
-                  {isManager && (
-                  <button
-                    onClick={() => {
-                      setEditingInvoice(selectedInvoice);
-                      setEditItems([...itemsList]);
-                      setEditPaid(selectedInvoice.paidAmount !== undefined ? selectedInvoice.paidAmount : selectedInvoice.totalAfterDiscount);
-                    
-                    let safeDateStr = '';
-                    if (selectedInvoice.date) {
-                      const parsed = new Date(selectedInvoice.date);
-                      if (!isNaN(parsed.getTime())) {
-                        safeDateStr = parsed.toISOString().substring(0, 16);
+                {/* Returns for this invoice */}
+                {(() => {
+                  const invReturns = returns.filter(r => r.invoiceId === selectedInvoice.id);
+                  if (!invReturns.length) return null;
+                  return (
+                    <div className="mt-2 bg-rose-50 rounded-lg p-2.5 border border-rose-200">
+                      <span className="text-[10px] font-black text-rose-700 flex items-center gap-1 mb-1.5">
+                        <RefreshCw className="h-3 w-3" /> المرتجعات ({invReturns.length})
+                      </span>
+                      {invReturns.map((ret, idx) => (
+                        <div key={idx} className="flex flex-col gap-0.5 text-[9px] text-slate-600 bg-white rounded-lg p-1.5 mb-1 last:mb-0 border border-rose-100">
+                          <div className="flex justify-between font-bold">
+                            <span className={ret.movementType === 'cash_refund' ? 'text-amber-700' : ret.movementType === 'credit_note' ? 'text-blue-700' : 'text-emerald-700'}>
+                              {ret.movementType === 'cash_refund' ? '💵 مرتجع كاش' : ret.movementType === 'credit_note' ? '📝 مرتجع رصيد' : '🔄 استبدال'}
+                            </span>
+                            <span className="text-rose-700">{formatNum(ret.totalReturnValue)} ج.م</span>
+                          </div>
+                          <div className="text-slate-500">
+                            {ret.items?.map((ri, riIdx) => (
+                              <span key={riIdx}>{ri.productName} {ri.weightSize} × {ri.quantity} {ri.unitType === 'carton' ? 'كرتونة' : 'قطعة'}{riIdx < ret.items.length - 1 ? '، ' : ''}</span>
+                            ))}
+                          </div>
+                          {ret.movementType === 'exchange' && ret.exchangeProduct && (
+                            <div className="text-emerald-600 font-bold">← {ret.exchangeProduct.productName} - {ret.exchangeProduct.weightSize}</div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
+
+                <div className="flex flex-col gap-2 mt-3 border-t border-slate-100 pt-3">
+                  <div className="flex gap-2">
+                    {isManager && (
+                    <button
+                      onClick={() => {
+                        setEditingInvoice(selectedInvoice);
+                        setEditItems([...itemsList]);
+                        setEditPaid(selectedInvoice.paidAmount !== undefined ? selectedInvoice.paidAmount : selectedInvoice.totalAfterDiscount);
+                      
+                      let safeDateStr = '';
+                      if (selectedInvoice.date) {
+                        const parsed = new Date(selectedInvoice.date);
+                        if (!isNaN(parsed.getTime())) {
+                          safeDateStr = parsed.toISOString().substring(0, 16);
+                        }
                       }
-                    }
-                    setEditDate(safeDateStr);
-                      setEditNotes(selectedInvoice.notes || '');
-                    }}
-                    className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold py-2 px-3 rounded-lg text-xs transition-all active:scale-95 cursor-pointer text-center flex items-center justify-center gap-1 shadow-sm"
-                  >
-                    ✍️ تعديل الفاتورة المؤرشفة
-                  </button>
-                  )}
+                      setEditDate(safeDateStr);
+                        setEditNotes(selectedInvoice.notes || '');
+                      }}
+                      className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold py-2 px-3 rounded-lg text-xs transition-all active:scale-95 cursor-pointer text-center flex items-center justify-center gap-1 shadow-sm"
+                    >
+                      ✍️ تعديل الفاتورة
+                    </button>
+                    )}
+                    <button
+                      onClick={() => handlePrintInvoice(selectedInvoice)}
+                      className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold py-2 px-3 rounded-lg text-xs transition-all active:scale-95 cursor-pointer text-center flex items-center justify-center gap-1 shadow-sm"
+                    >
+                      🖨️ طباعة PDF
+                    </button>
+                  </div>
                   <button
                     onClick={() => setSelectedInvoice(null)}
-                    className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-extrabold py-2 px-3 rounded-lg text-xs transition-all cursor-pointer text-center"
+                    className="w-full bg-slate-100 hover:bg-slate-200 text-slate-700 font-extrabold py-2 px-3 rounded-lg text-xs transition-all cursor-pointer text-center flex items-center justify-center gap-1"
                   >
-                    إغلاق التفاصيل
+                    ✕ إغلاق التفاصيل
                   </button>
                 </div>
               </div>
@@ -3250,7 +3845,7 @@ function ReportsTabComponent({
               {currentFilteredData.invoices.length === 0 ? (
                 <p className="text-center text-gray-400 py-6 text-sm">لا توجد فواتير لهذه الفترة.</p>
               ) : (
-                <div className="overflow-x-auto">
+                <div className="w-full overflow-x-auto whitespace-nowrap scrollbar-thin">
                   <table className="w-full min-w-[700px] border-collapse bg-[#FFFFFF] shadow-sm text-xs rounded-xl overflow-hidden">
                     <thead>
                       <tr className="bg-[#1A365D] text-white">
@@ -3697,9 +4292,132 @@ function ReportsTabComponent({
           </div>
         )}
 
+        {/* Returns Tab */}
+        {activeSubTab === 'returns' && (
+          <div className="flex flex-col gap-4 animate-fade-in text-right" dir="rtl">
+            <div className="bg-[#FFFFFF] p-5 rounded-2xl border border-rose-200 shadow-sm">
+              <div className="flex items-center justify-between border-b border-rose-100 pb-3 mb-3">
+                <div className="flex items-center gap-2">
+                  <RefreshCw className="h-5 w-5 text-rose-600" />
+                  <h3 className="font-black text-[#1A365D] text-sm">سجل المرتجعات والاستبدالات</h3>
+                </div>
+                {((currentFilteredData.returns || []).length > 0) && (
+                  <button
+                    onClick={async () => {
+                      const el = document.getElementById('returns-section-print');
+                      if (!el) return;
+                      await document.fonts.ready;
+                      const canvas = await html2canvas(el, { scale: 2, useCORS: true, allowTaint: true, backgroundColor: '#ffffff', logging: false });
+                      canvas.toBlob((blob) => {
+                        if (blob) {
+                          const url = URL.createObjectURL(blob);
+                          const a = document.createElement('a');
+                          a.href = url;
+                          a.download = `سجل_المرتجعات_${new Date().toLocaleDateString('ar-EG')}.png`;
+                          a.click();
+                          URL.revokeObjectURL(url);
+                        }
+                      }, 'image/png');
+                    }}
+                    className="bg-rose-100 hover:bg-rose-200 text-rose-700 font-bold py-1.5 px-3 rounded-lg text-[11px] transition-all cursor-pointer flex items-center gap-1"
+                  >
+                    <Printer className="h-3.5 w-3.5" /> طباعة PDF
+                  </button>
+                )}
+              </div>
+              <div id="returns-section-print" className="bg-white p-2 rounded-lg">
+              {((currentFilteredData.returns || []).length === 0) ? (
+                <p className="text-center text-gray-400 py-10 text-xs">لا توجد مرتجعات مسجلة.</p>
+              ) : (() => {
+                const cashReturns = (currentFilteredData.returns || []).filter(r => r.movementType === 'cash_refund');
+                const creditReturns = (currentFilteredData.returns || []).filter(r => r.movementType === 'credit_note');
+                const exchangeReturns = (currentFilteredData.returns || []).filter(r => r.movementType === 'exchange');
+                const totalCash = cashReturns.reduce((s, r) => s + (r.totalReturnValue || 0), 0);
+                const totalCredit = creditReturns.reduce((s, r) => s + (r.totalReturnValue || 0), 0);
+                const totalExchange = exchangeReturns.reduce((s, r) => s + (r.totalReturnValue || 0), 0);
+                const grandTotal = (currentFilteredData.returns || []).reduce((s, r) => s + (r.totalReturnValue || 0), 0);
+                const sortedReturns = [...(currentFilteredData.returns || [])].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+                return (
+                  <>
+                    <div className="grid grid-cols-4 gap-2 mb-4">
+                      <div className="bg-rose-50 rounded-xl p-3 border border-rose-200 text-center">
+                        <div className="text-[18px] font-black text-rose-700">{(currentFilteredData.returns || []).length}</div>
+                        <div className="text-[9px] font-bold text-rose-500">إجمالي المرتجعات</div>
+                      </div>
+                      <div className="bg-amber-50 rounded-xl p-3 border border-amber-200 text-center">
+                        <div className="text-[18px] font-black text-amber-700">{cashReturns.length}</div>
+                        <div className="text-[9px] font-bold text-amber-500">مرتجع كاش</div>
+                        <div className="text-[9px] font-black text-amber-600">{formatNum(totalCash)} ج.م</div>
+                      </div>
+                      <div className="bg-blue-50 rounded-xl p-3 border border-blue-200 text-center">
+                        <div className="text-[18px] font-black text-blue-700">{creditReturns.length}</div>
+                        <div className="text-[9px] font-bold text-blue-500">مرتجع رصيد</div>
+                        <div className="text-[9px] font-black text-blue-600">{formatNum(totalCredit)} ج.م</div>
+                      </div>
+                      <div className="bg-emerald-50 rounded-xl p-3 border border-emerald-200 text-center">
+                        <div className="text-[18px] font-black text-emerald-700">{exchangeReturns.length}</div>
+                        <div className="text-[9px] font-bold text-emerald-500">استبدال</div>
+                        <div className="text-[9px] font-black text-emerald-600">{formatNum(totalExchange)} ج.م</div>
+                      </div>
+                    </div>
+                    <div className="bg-slate-50 rounded-xl p-2 border border-slate-200 mb-4 text-[10px] font-black text-slate-700 flex justify-between">
+                      <span>إجمالي قيمة المرتجعات</span>
+                      <span className="text-rose-700">{formatNum(grandTotal)} ج.م</span>
+                    </div>
+                    <div className="flex flex-col gap-2">
+                      {sortedReturns.map((ret, idx) => {
+                        const cust = customers.find(c => c.id === ret.customerId);
+                        const dateStr = ret.date && !isNaN(new Date(ret.date).getTime()) ? new Date(ret.date).toLocaleDateString('ar-EG') : '';
+                        const typeLabel = ret.movementType === 'cash_refund' ? '💵 مرتجع كاش' : ret.movementType === 'credit_note' ? '📝 مرتجع رصيد' : '🔄 استبدال';
+                        return (
+                          <div key={ret.id} className="bg-white border border-slate-200 rounded-xl p-3 flex flex-col gap-1.5 text-[10px]">
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-2">
+                                <span className="font-black text-slate-800">{cust?.name || ret.customerName}</span>
+                                <span className="text-slate-400">|</span>
+                                <span className="font-bold text-slate-500">فاتورة #{ret.invoiceNumber}</span>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <span className="text-slate-400">{dateStr}</span>
+                                <span className="bg-rose-100 text-rose-700 px-1.5 py-0.5 rounded-lg font-black text-[9px]">{typeLabel}</span>
+                              </div>
+                            </div>
+                            <div className="text-slate-500">
+                              {ret.items?.map((ri, riIdx) => (
+                                <span key={riIdx}>{ri.productName} {ri.weightSize} × {ri.quantity} {ri.unitType === 'carton' ? 'كرتونة' : 'قطعة'}{riIdx < ret.items.length - 1 ? '، ' : ''}</span>
+                              ))}
+                            </div>
+                            <div className="flex items-center justify-between pt-1 border-t border-slate-100">
+                              <span className="font-black text-rose-700">{formatNum(ret.totalReturnValue)} ج.م</span>
+                              {ret.movementType === 'exchange' && ret.exchangeProduct && (
+                                <span className="text-emerald-700 font-bold">
+                                  ↔ {ret.exchangeProduct.productName} - {ret.exchangeProduct.weightSize}
+                                  {ret.exchangeDifference !== undefined && ret.exchangeDifference !== 0 && (
+                                    <span className={ret.exchangeDifference > 0 ? 'text-amber-600 mr-1' : 'text-sky-600 mr-1'}>
+                                      ({ret.exchangeDifference > 0 ? 'رصيد' : 'مطلوب'}: {formatNum(Math.abs(ret.exchangeDifference))} ج.م)
+                                    </span>
+                                  )}
+                                </span>
+                              )}
+                              {ret.movementType === 'exchange' && ret.exchangeSettlementMethod && (
+                                <span className={`text-[9px] font-bold ${ret.exchangeSettlementMethod === 'cash' ? 'text-amber-600' : 'text-blue-600'}`}>
+                                  | تسوية: {ret.exchangeSettlementMethod === 'cash' ? 'نقداً' : 'رصيد'}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </>
+                );
+              })()}
+              </div>
+            </div>
+          </div>
+        )}
 
-
-      </div>
+        </div>
 
       {/* Debtor Customers Modal */}
       {showDebtorsModal && (

@@ -7,13 +7,16 @@ import { confirmDialog, duaConfirmDialog } from '../utils/confirm';
  */
 
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { Customer, Product, ProductWeight, Invoice, InvoiceItem, FactoryLoad, getProductWeightsFallback, formatNum, getItemFactoryCost } from '../types';
-import { Receipt, Plus, Trash2, ArrowRight, Save, User, MapPin, Percent, HelpCircle, Package, AlertTriangle, Scale, Eye, Search, Check, Loader2, Download, Share2, FileText, Printer, ScanLine, Copy } from 'lucide-react';
+import ReactDOMServer from 'react-dom/server';
+import html2canvas from 'html2canvas';
+import { Customer, Product, ProductWeight, Invoice, InvoiceItem, FactoryLoad, getProductWeightsFallback, formatNum, getItemFactoryCost, Return, ReturnItem, ReturnMovementType } from '../types';
+import { Receipt, Plus, Trash2, ArrowRight, Save, User, MapPin, Percent, HelpCircle, Package, AlertTriangle, Scale, Eye, Search, Check, Loader2, Download, Share2, FileText, Printer, ScanLine, Copy, RefreshCw } from 'lucide-react';
 import { showToast } from '../utils/toast';
 import { nowEgyptISO, todayEgyptISO } from '../utils/storage';
 import SecurePhoneDisplay from './SecurePhoneDisplay';
 import { jsPDF } from 'jspdf';
 import BarcodeScanner from './BarcodeScanner';
+import InvoiceTemplate from './InvoiceTab/InvoiceTemplate';
 
 interface InvoiceTabProps {
   customers: Customer[];
@@ -29,6 +32,10 @@ interface InvoiceTabProps {
   usersList?: any[];
   initialSubTab?: 'create' | 'archive' | 'debtors';
   lastArchiveTimestamp?: number;
+  returns?: Return[];
+  onAddReturn?: (ret: Omit<Return, 'id'>) => void;
+  customerCredits?: Record<string, number>;
+  onUseCustomerCredit?: (customerId: string, amount: number) => void;
 }
 
 const formatCartonsAndPieces = (rawQty: number, unitsPerCarton: number): string => {
@@ -58,7 +65,11 @@ export default function InvoiceTab({
   currentUser,
   usersList,
   initialSubTab,
-  lastArchiveTimestamp = 0
+  lastArchiveTimestamp = 0,
+  returns = [],
+  onAddReturn,
+  customerCredits = {},
+  onUseCustomerCredit
 }: InvoiceTabProps) {
   const [activeSubTab, setActiveSubTab] = useState<'create' | 'archive' | 'debtors'>(() => {
     if (initialSubTab) return initialSubTab;
@@ -85,7 +96,39 @@ export default function InvoiceTab({
   const [selectedInvoiceArea, setSelectedInvoiceArea] = useState('all');
   const [selectedInvoiceCustomer, setSelectedInvoiceCustomer] = useState('all');
   const [selectedInvoiceDelegate, setSelectedInvoiceDelegate] = useState('all');
+  const [expandedMonth, setExpandedMonth] = useState<string | null>(null);
+
+  // Debtors separate filters
+  const [debtorGov, setDebtorGov] = useState('all');
+  const [debtorArea, setDebtorArea] = useState('all');
+  const [debtorCustomer, setDebtorCustomer] = useState('all');
+  const [debtorDelegate, setDebtorDelegate] = useState('all');
   
+  const [returnModal, setReturnModal] = useState<{
+    isOpen: boolean;
+    invoice: Invoice | null;
+  }>({ isOpen: false, invoice: null });
+  
+  const [returnForm, setReturnForm] = useState<{
+    items: Array<{ productId: string; weightId: string; quantity: string; unitType: 'carton' | 'piece' }>;
+    movementType: ReturnMovementType;
+    exchangeProductId: string;
+    exchangeWeightId: string;
+    exchangeQty: string;
+    exchangeUnitType: 'carton' | 'piece';
+    exchangeSettlementMethod: 'cash' | 'credit';
+    notes: string;
+  }>({
+    items: [],
+    movementType: 'cash_refund',
+    exchangeProductId: '',
+    exchangeWeightId: '',
+    exchangeQty: '0',
+    exchangeUnitType: 'piece',
+    exchangeSettlementMethod: 'cash',
+    notes: ''
+  });
+
   const [paymentModal, setPaymentModal] = useState<{
     isOpen: boolean;
     invoice: Invoice | null;
@@ -114,6 +157,7 @@ export default function InvoiceTab({
   const [dateFilter, setDateFilter] = useState<'all' | 'today' | 'week' | 'month'>('all');
   const [weekDayFilter, setWeekDayFilter] = useState<string[]>([]);
   const [selectedInvoice, setSelectedInvoice] = useState<Invoice | null>(null);
+  const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
   const [filterGovernorateList, setFilterGovernorateList] = useState('');
   const [filterAreaList, setFilterAreaList] = useState('');
   // Filter products and their weights matching active non-zero price condition
@@ -171,6 +215,7 @@ export default function InvoiceTab({
   const [extraDiscountAmount, setExtraDiscountAmount] = useState(() => localStorage.getItem('invoice_draft_extraDiscountAmount') || '');
   const [extraDiscountReason, setExtraDiscountReason] = useState(() => localStorage.getItem('invoice_draft_extraDiscountReason') || '');
   const [customPaidAmount, setCustomPaidAmount] = useState(() => localStorage.getItem('invoice_draft_customPaidAmount') || '');
+  const [appliedCreditAmount, setAppliedCreditAmount] = useState(0);
   const [isScanningBarcode, setIsScanningBarcode] = useState(false);
   const [isDuplicating, setIsDuplicating] = useState(false);
   const [isPrinting, setIsPrinting] = useState(false);
@@ -271,6 +316,16 @@ export default function InvoiceTab({
             }
           });
         });
+        // Subtract returned quantities (returns go back to inventory)
+        let returned = 0;
+        returns.forEach(ret => {
+          (ret.items || []).forEach((ri: any) => {
+            if (String(ri.productId || '').trim() === String(p.id).trim() && String(ri.weightId || '').trim() === String(w.id).trim()) {
+              returned += Number(ri.quantity || 0);
+            }
+          });
+        });
+        const effectiveSold = sold - returned;
 
         // 3. Draft items currently on screen
         const drafted = billItems
@@ -279,19 +334,78 @@ export default function InvoiceTab({
 
         stocks[key] = {
           loaded,
-          sold,
-          remaining: loaded - sold - drafted
+          sold: effectiveSold,
+          remaining: loaded - effectiveSold - drafted
         };
       });
     });
 
     return stocks;
-  }, [products, factoryLoads, invoices, billItems, editingInvoiceId, lastArchiveTimestamp]);
+  }, [products, factoryLoads, invoices, returns, billItems, editingInvoiceId, lastArchiveTimestamp]);
 
   // Selected customer information
   const selectedCustomer = useMemo(() => {
     return customers.find(c => c.id === selectedCustomerId);
   }, [selectedCustomerId, customers]);
+
+  // Customer returns (for deduction from new invoice)
+  const customerReturns = useMemo(() => {
+    if (!selectedCustomerId) return [];
+    return returns.filter(ret => ret.customerId === selectedCustomerId);
+  }, [returns, selectedCustomerId]);
+
+  const [showCustomerInvoices, setShowCustomerInvoices] = useState(false);
+  const [selectedReturnInvoice, setSelectedReturnInvoice] = useState<Invoice | null>(null);
+  const [invoiceReturnItems, setInvoiceReturnItems] = useState<Array<{
+    productId: string;
+    weightId: string;
+    productName: string;
+    weightSize: string;
+    finalPrice: number;
+    quantity: string;
+    unitType: 'carton' | 'piece';
+    unitsPerCarton: number;
+    effectiveCartonPrice: number;
+  }>>([]);
+
+  // Generate preview image when selectedInvoice changes
+  useEffect(() => {
+    if (!selectedInvoice) {
+      setPreviewImageUrl(null);
+      return;
+    }
+    let cancelled = false;
+    exportInvoiceAsPNG(selectedInvoice, false, true).then(url => {
+      if (!cancelled && url) setPreviewImageUrl(url as string);
+    });
+    return () => { cancelled = true; };
+  }, [selectedInvoice]);
+
+  // Utility: calculate effective unit prices after distributing extra discount
+  const getEffectivePrices = (inv: Invoice) => {
+    const items = inv.items || [];
+    const extraDiscount = (inv as any).extraDiscountAmount || 0;
+    const totalAfterBasic = items.reduce((sum, it) => sum + ((it.finalPrice || 0) * (it.quantity || 0)), 0);
+    return items.map(it => {
+      const prod = products.find(p => String(p.id).trim() === String(it.productId).trim());
+      const weights = prod ? getProductWeightsFallback(prod) : [];
+      const w = weights.find(ww => String(ww.id).trim() === String(it.weightId).trim()) || weights[0];
+      const upc = w?.unitsPerCarton || 12;
+      const itemTotal = (it.finalPrice || 0) * (it.quantity || 0);
+      let effectiveCartonPrice = it.finalPrice || 0;
+      if (extraDiscount > 0 && totalAfterBasic > 0) {
+        const share = (itemTotal / totalAfterBasic) * extraDiscount;
+        effectiveCartonPrice = (itemTotal - share) / (it.quantity || 1);
+      }
+      return {
+        ...it,
+        productName: prod?.name || '',
+        weightSize: w?.size || '',
+        unitsPerCarton: upc,
+        effectiveCartonPrice
+      };
+    });
+  };
 
   // تطبيع الحروف العربية: ة → ه لتوحيد مقارنة أسماء المناطق
   const normalizeArabic = (s: string) => (s || '').replace(/ة/g, 'ه').replace(/ى/g, 'ي');
@@ -636,6 +750,12 @@ export default function InvoiceTab({
         onAddInvoice(invoiceData);
       }
 
+      // Deduct used credit
+      if (appliedCreditAmount > 0 && selectedCustomerId && onUseCustomerCredit) {
+        onUseCustomerCredit(selectedCustomerId, appliedCreditAmount);
+        setAppliedCreditAmount(0);
+      }
+
       // Save of popup sharing
       setJustSavedInvoice({
         ...invoiceData,
@@ -676,491 +796,125 @@ export default function InvoiceTab({
     }
   };
 
-  const exportInvoiceAsPNG = (inv: any, shareDirectly = false, returnDataUrl = false) => {
+  const exportInvoiceAsPNG = async (inv: any, shareDirectly = false, returnDataUrl = false) => {
     const customerObj = inv.customer || customers.find((c: any) => c.id === inv.customerId);
     if (!customerObj) return null;
 
-    ensureFontsLoaded();
+    await ensureFontsLoaded();
 
     const storedSetStr = localStorage.getItem('app_settings_sys');
-    let invoiceAppName = 'فاتورة مبيعات معتمدة';
-    let invoiceRepName = inv.delegateName?.replace(/ \(.*?\)/g, '').trim() || currentUser?.name?.replace(/ \(.*?\)/g, '').trim() || '';
-    let invoiceRepPhone = inv.delegatePhone || currentUser?.phone || '';
+    let settings = { appName: 'فاتورة مبيعات معتمدة', representativeName: '', representativePhone: '' };
     if (storedSetStr) {
       try {
         const parsed = JSON.parse(storedSetStr);
-        if (parsed.appName && parsed.appName !== 'الاخوه EAGS لخدمات التوزيع') {
-          invoiceAppName = parsed.appName;
-        }
-        if (!invoiceRepName && parsed.representativeName) invoiceRepName = parsed.representativeName;
-        if (!invoiceRepPhone && parsed.representativePhone) invoiceRepPhone = parsed.representativePhone;
+        if (parsed.appName && parsed.appName !== 'الاخوه EAGS لخدمات التوزيع') settings.appName = parsed.appName;
+        settings.representativeName = inv.delegateName?.replace(/ \(.*?\)/g, '').trim() || parsed.representativeName || currentUser?.name?.replace(/ \(.*?\)/g, '').trim() || '';
+        settings.representativePhone = inv.delegatePhone || parsed.representativePhone || currentUser?.phone || '';
       } catch {}
     }
-    const formattedDate = new Date(inv.date).toLocaleString('ar-EG');
 
-    const W = 1600;
-    const padX = 50;
-    const tableW = W - padX * 2;
-    const rowH = 72;
-    const headerH = 200;
-    const customerBoxH = 130;
-    const tableHeaderH = 52;
-    const tableRowsH = inv.items.length * rowH;
-    const summaryH = (inv._debtPaid || inv._partialPayment !== undefined ? 260 : 220);
-    const footerH = 110;
-    const totalH = headerH + 16 + customerBoxH + 24 + tableHeaderH + tableRowsH + 24 + summaryH + footerH + 40;
+    // Create hidden container, render InvoiceTemplate, capture with html2canvas
+    const container = document.createElement('div');
+    container.style.position = 'fixed';
+    container.style.left = '-9999px';
+    container.style.top = '0';
+    container.style.width = '800px';
+    container.style.background = '#ffffff';
+    container.style.zIndex = '-1';
+    document.body.appendChild(container);
 
-    const canvas = document.createElement('canvas');
-    const TARGET_W = 3840;
-    const dpr = Math.max(window.devicePixelRatio || 1, TARGET_W / W);
-    canvas.width = W * dpr;
-    canvas.height = totalH * dpr;
-    canvas.style.width = W + 'px';
-    canvas.style.height = totalH + 'px';
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    ctx.scale(dpr, dpr);
-    ctx.direction = 'rtl';
+    const htmlString = ReactDOMServer.renderToStaticMarkup(
+      <InvoiceTemplate invoice={inv} customer={customerObj} products={products} settings={settings} />
+    );
+    container.innerHTML = htmlString;
 
-    const rr = (x: number, y: number, w: number, h: number, r: number) => {
-      ctx.beginPath(); ctx.moveTo(x+r, y); ctx.lineTo(x+w-r, y);
-      ctx.quadraticCurveTo(x+w, y, x+w, y+r); ctx.lineTo(x+w, y+h-r);
-      ctx.quadraticCurveTo(x+w, y+h, x+w-r, y+h); ctx.lineTo(x+r, y+h);
-      ctx.quadraticCurveTo(x, y+h, x, y+h-r); ctx.lineTo(x, y+r);
-      ctx.quadraticCurveTo(x, y, x+r, y); ctx.closePath();
-    };
+    // Wait for fonts and images to load
+    await document.fonts.ready;
+    await new Promise(r => setTimeout(r, 300));
 
-    ctx.fillStyle = '#faf8f5';
-    ctx.fillRect(0, 0, W, totalH);
+    try {
+      const canvas = await html2canvas(container, {
+        scale: 2.4,
+        useCORS: true,
+        allowTaint: true,
+        backgroundColor: '#ffffff',
+        logging: false
+      });
 
-    // ── Header ──
-    const headerGrad = ctx.createLinearGradient(0, 0, W, 0);
-    headerGrad.addColorStop(0, '#0f172a');
-    headerGrad.addColorStop(0.5, '#1e3a5f');
-    headerGrad.addColorStop(1, '#1e40af');
-    ctx.fillStyle = headerGrad;
-    rr(12, 12, W - 24, headerH, 10);
-    ctx.fill();
-    ctx.fillStyle = '#d4a843';
-    ctx.fillRect(12, 12 + headerH - 4, W - 24, 4);
+      document.body.removeChild(container);
 
-    ctx.fillStyle = '#ffffff';
-    ctx.textAlign = 'center';
-    ctx.font = '900 36px Cairo, system-ui, sans-serif';
-    ctx.fillText('فاتورة مبيعات معتمدة', W / 2, 72);
-    ctx.font = '600 20px Cairo, system-ui, sans-serif';
-    ctx.fillStyle = '#94a3b8';
-    ctx.fillText(invoiceAppName, W / 2, 104);
+      if (returnDataUrl) {
+        return canvas.toDataURL('image/png');
+      }
 
-    // Badges - positioned from edges to prevent overlap
-    const badgesY = 128;
-    const invBadgeText = `رقم: ${inv.invoiceNumber}`;
-    const invBadgeW = ctx.measureText(invBadgeText).width + 40;
-    ctx.fillStyle = '#1e40af';
-    rr(W - padX - invBadgeW, badgesY, invBadgeW, 34, 17);
-    ctx.fill();
-    ctx.fillStyle = '#ffffff';
-    ctx.font = '700 16px Cairo, system-ui, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText(invBadgeText, W - padX - invBadgeW / 2, badgesY + 22);
-
-    const dateBadgeText = formattedDate;
-    const dateBadgeW = ctx.measureText(dateBadgeText).width + 40;
-    ctx.fillStyle = '#059669';
-    rr(padX, badgesY, dateBadgeW, 34, 17);
-    ctx.fill();
-    ctx.fillStyle = '#ffffff';
-    ctx.fillText(dateBadgeText, padX + dateBadgeW / 2, badgesY + 22);
-
-    ctx.fillStyle = '#cbd5e1';
-    ctx.font = '500 16px Cairo, system-ui, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText('فاتورة مبيعات', W / 2, badgesY + 22);
-
-    let y = 12 + headerH + 16;
-
-    // ── Customer Box ──
-    ctx.fillStyle = '#f0f9ff';
-    rr(padX, y, tableW, customerBoxH, 12);
-    ctx.fill();
-    ctx.strokeStyle = '#bae6fd';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(padX + 14, y);
-    ctx.lineTo(padX + tableW - 14, y);
-    ctx.stroke();
-
-    ctx.fillStyle = '#1e293b';
-    ctx.font = '800 22px Cairo, system-ui, sans-serif';
-    ctx.textAlign = 'right';
-    ctx.fillText(`العميل: ${customerObj.name}`, padX + tableW - 30, y + 44);
-
-    ctx.fillStyle = '#475569';
-    ctx.font = '600 18px Cairo, system-ui, sans-serif';
-    ctx.fillText(`المحافظة: ${customerObj.governorate || '—'} - ${customerObj.area || '—'}   |   الهاتف: ${customerObj.phone}`, padX + tableW - 30, y + 82);
-
-    y += customerBoxH + 20;
-
-    // ── Table Header ──
-    const thGrad = ctx.createLinearGradient(0, y, 0, y + tableHeaderH);
-    thGrad.addColorStop(0, '#1e3a5f');
-    thGrad.addColorStop(1, '#0f172a');
-    ctx.fillStyle = thGrad;
-    rr(padX, y, tableW, tableHeaderH, 10);
-    ctx.fill();
-
-    ctx.fillStyle = '#ffffff';
-    ctx.font = '700 18px Cairo, system-ui, sans-serif';
-    const colNum = padX + tableW - 50;
-    const colProduct = padX + tableW - 250;
-    const colQty = padX + tableW - 500;
-    const colPrice = padX + tableW - 700;
-    const colDiscount = padX + tableW - 900;
-    const colTotal = padX + 100;
-    ctx.textAlign = 'center';
-    ctx.fillText('م', colNum, y + 34);
-    ctx.textAlign = 'right';
-    ctx.fillText('المنتج والحجم', colProduct, y + 34);
-    ctx.textAlign = 'center';
-    ctx.fillText('الكمية', colQty, y + 34);
-    ctx.fillText('السعر', colPrice, y + 34);
-    ctx.fillText('الخصم', colDiscount, y + 34);
-    ctx.textAlign = 'left';
-    ctx.fillText('الصافي', colTotal, y + 34);
-    y += tableHeaderH;
-
-    // ── Table Rows ──
-    inv.items.forEach((item: InvoiceItem, idx: number) => {
-      const prod = products.find(p => String(p.id).trim() === String(item.productId).trim());
-      const ws = prod ? getProductWeightsFallback(prod) : [];
-      const weight = ws.find(w => String(w.id).trim() === String(item.weightId).trim()) || ws[0];
-      const prodName = prod ? prod.name : 'منتج';
-      const sizeLabel = weight ? weight.size : '';
-      const multiplier = weight ? (weight.unitsPerCarton || 12) : 12;
-      const qtyLabel = formatCartonsAndPieces(item.quantity, multiplier);
-      const cartonOriginalPrice = item.originalPrice * multiplier;
-      const singleItemTotal = item.finalPrice * item.quantity;
-
-      ctx.fillStyle = idx % 2 === 0 ? '#ffffff' : '#f1f5f9';
-      ctx.fillRect(padX, y, tableW, rowH);
-      ctx.strokeStyle = '#e2e8f0';
-      ctx.lineWidth = 0.5;
-      ctx.beginPath();
-      ctx.moveTo(padX, y + rowH);
-      ctx.lineTo(padX + tableW, y + rowH);
-      ctx.stroke();
-
-      ctx.fillStyle = '#94a3b8';
-      ctx.font = '700 18px Cairo, system-ui, sans-serif';
-      ctx.textAlign = 'center';
-      ctx.fillText(String(idx + 1), colNum, y + 42);
-      ctx.textAlign = 'right';
-      ctx.fillStyle = '#1e3a5f';
-      ctx.font = '700 18px Cairo, system-ui, sans-serif';
-      const maxNameLen = 22;
-      const truncName = prodName.length > maxNameLen ? prodName.substring(0, maxNameLen) + '..' : prodName;
-      ctx.fillText(`${truncName} (${sizeLabel})`, colProduct, y + 42);
-      ctx.textAlign = 'center';
-      ctx.fillStyle = '#0f172a';
-      ctx.font = '600 18px Cairo, system-ui, sans-serif';
-      ctx.fillText(qtyLabel, colQty, y + 42);
-      ctx.fillStyle = '#475569';
-      ctx.font = '700 18px Tajawal, system-ui, sans-serif';
-      ctx.fillText(`${cartonOriginalPrice.toLocaleString('ar-EG')} ج.م`, colPrice, y + 42);
-      ctx.fillStyle = item.discountPercent > 0 ? '#dc2626' : '#94a3b8';
-      ctx.fillText(item.discountPercent > 0 ? `${item.discountPercent}%` : '—', colDiscount, y + 42);
-      ctx.textAlign = 'left';
-      ctx.fillStyle = '#1e3a5f';
-      ctx.font = '800 20px Tajawal, system-ui, sans-serif';
-      ctx.fillText(`${singleItemTotal.toLocaleString('ar-EG')} ج.م`, colTotal, y + 42);
-      y += rowH;
-    });
-
-    y += 16;
-
-    // ── Summary Card ──
-    const isPartialOrPaid = inv._debtPaid || inv._partialPayment !== undefined;
-    const sumCardH = isPartialOrPaid ? 240 : 200;
-    ctx.fillStyle = '#eff6ff';
-    rr(padX, y, tableW * 0.55, sumCardH, 12);
-    ctx.fill();
-    ctx.strokeStyle = '#bfdbfe';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(padX + tableW * 0.55 - 14, y);
-    ctx.lineTo(padX + 14, y);
-    ctx.stroke();
-
-    ctx.textAlign = 'right';
-    let sumY = y + 32;
-    const drawLine = (label: string, value: string, color: string, bold = false) => {
-      ctx.fillStyle = '#1e3a8a';
-      ctx.font = '700 19px Cairo, system-ui, sans-serif';
-      ctx.textAlign = 'right';
-      ctx.fillText(label, padX + tableW * 0.55 - 20, sumY);
-      ctx.textAlign = 'left';
-      ctx.fillStyle = color;
-      ctx.font = bold ? '900 22px Tajawal, system-ui, sans-serif' : '700 19px Tajawal, system-ui, sans-serif';
-      ctx.fillText(value, padX + 20, sumY);
-      sumY += 36;
-    };
-
-    drawLine('الإجمالي قبل الخصم:', `${inv.totalBeforeDiscount.toLocaleString('ar-EG')} ج.م`, '#475569');
-    drawLine('إجمالي الخصومات:', `-${(inv.totalBeforeDiscount - inv.totalAfterDiscount).toLocaleString('ar-EG')} ج.م`, '#dc2626');
-    drawLine('الصافي المطلوب:', `${inv.totalAfterDiscount.toLocaleString('ar-EG')} ج.م`, '#1e40af', true);
-
-    if (isPartialOrPaid) {
-      const prev = inv._previousPaid || 0;
-      const currentPay = inv._debtPaid ? (inv.totalAfterDiscount - prev) : inv._partialPayment;
-      const remainingNow = inv.totalAfterDiscount - (prev + currentPay);
-      drawLine('المسدد من قبل:', `${prev.toLocaleString('ar-EG')} ج.م`, '#475569');
-      drawLine('المسدد الآن:', `${currentPay.toLocaleString('ar-EG')} ج.م`, '#16a34a', true);
-      drawLine(inv._debtPaid ? 'حالة الفاتورة:' : 'المتبقي:', inv._debtPaid ? 'خالصة' : `${remainingNow.toLocaleString('ar-EG')} ج.م`, inv._debtPaid ? '#10b981' : '#ea580c', true);
-    } else {
-      drawLine('المسدد:', `${inv.paidAmount.toLocaleString('ar-EG')} ج.م`, '#16a34a', true);
-      drawLine('المتبقي (مديونية):', `${(inv.totalAfterDiscount - inv.paidAmount).toLocaleString('ar-EG')} ج.م`, '#ea580c', true);
-    }
-
-    y += sumCardH + 20;
-
-    // ── Footer ──
-    ctx.strokeStyle = '#d5d0c8';
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    ctx.moveTo(padX, y);
-    ctx.lineTo(W - padX, y);
-    ctx.stroke();
-    y += 16;
-
-    const sigW = (tableW - 30) / 2;
-    const sigH = 72;
-    rr(padX, y, sigW, sigH, 8);
-    ctx.fillStyle = '#ffffff';
-    ctx.fill();
-    ctx.strokeStyle = '#cbd5e1';
-    ctx.lineWidth = 1.5;
-    ctx.stroke();
-    ctx.fillStyle = '#1e293b';
-    ctx.font = '700 18px Cairo, system-ui, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText('مستلم البضاعة (العميل)', padX + sigW / 2, y + 30);
-    ctx.fillStyle = '#94a3b8';
-    ctx.font = '500 16px Cairo, system-ui, sans-serif';
-    ctx.fillText('التوقيع', padX + sigW / 2, y + 56);
-
-    rr(padX + sigW + 30, y, sigW, sigH, 8);
-    ctx.fillStyle = '#ffffff';
-    ctx.fill();
-    ctx.strokeStyle = '#cbd5e1';
-    ctx.lineWidth = 1.5;
-    ctx.stroke();
-    ctx.fillStyle = '#1e293b';
-    ctx.font = '700 18px Cairo, system-ui, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText('المندوب المفوض', padX + sigW + 30 + sigW / 2, y + 30);
-    ctx.fillStyle = '#94a3b8';
-    ctx.font = '500 16px Cairo, system-ui, sans-serif';
-    ctx.fillText('التوقيع', padX + sigW + 30 + sigW / 2, y + 56);
-
-    y += sigH + 16;
-
-    // Rep info
-    ctx.fillStyle = '#1e3a8a';
-    ctx.textAlign = 'right';
-    ctx.font = '600 16px Cairo, system-ui, sans-serif';
-    if (invoiceRepName) {
-      ctx.fillText(`المندوب المفوض: ${invoiceRepName}  |  هاتف التواصل: ${invoiceRepPhone}`, W - padX, y);
-    } else {
-      ctx.fillText('إدارة المبيعات والتوزيع المعتمدة  |  هاتف التواصل: 01228466613', W - padX, y);
-    }
-
-    ctx.textAlign = 'left';
-    ctx.fillStyle = '#10b981';
-    ctx.font = '700 16px Cairo, system-ui, sans-serif';
-    ctx.fillText('صحيح ومعتمد', padX, y);
-
-    y += 24;
-    ctx.fillStyle = '#94a3b8';
-    ctx.textAlign = 'center';
-    ctx.font = '500 14px Cairo, system-ui, sans-serif';
-    ctx.fillText(`نظام المبيعات الذكي  —  ${formattedDate}`, W / 2, y);
-
-    if (returnDataUrl) {
-      return canvas.toDataURL('image/png');
-    }
-
-    if (shareDirectly && navigator.share) {
-      canvas.toBlob((blob) => {
-        if (blob) {
-          const file = new File([blob], `فاتورة_${customerObj.name}_${inv.invoiceNumber}.png`, { type: 'image/png' });
-          navigator.share({
-            title: `فاتورة ${inv.invoiceNumber}`,
-            text: `الفاتورة الخاصة بالعميل ${customerObj.name}`,
-            files: [file]
-          }).catch(console.error);
-        }
-      }, 'image/png');
-    } else {
-      const downloadLink = document.createElement('a');
-      downloadLink.href = canvas.toDataURL('image/png');
-      downloadLink.download = `فاتورة_${customerObj.name}_${inv.invoiceNumber}.png`;
-      downloadLink.click();
+      if (shareDirectly && navigator.share) {
+        canvas.toBlob((blob) => {
+          if (blob) {
+            const file = new File([blob], `فاتورة_${customerObj.name}_${inv.invoiceNumber}.png`, { type: 'image/png' });
+            navigator.share({
+              title: `فاتورة ${inv.invoiceNumber}`,
+              text: `الفاتورة الخاصة بالعميل ${customerObj.name}`,
+              files: [file]
+            }).catch(console.error);
+          }
+        }, 'image/png');
+      } else {
+        const downloadLink = document.createElement('a');
+        downloadLink.href = canvas.toDataURL('image/png');
+        downloadLink.download = `فاتورة_${customerObj.name}_${inv.invoiceNumber}.png`;
+        downloadLink.click();
+      }
+    } catch (err) {
+      document.body.removeChild(container);
+      console.error('html2canvas error:', err);
     }
   };
 
-  const exportInvoiceAsPDF = (inv: any) => {
-    const dataUrl = exportInvoiceAsPNG(inv, false, true);
+  const exportInvoiceAsPDF = async (inv: any) => {
+    const dataUrl = await exportInvoiceAsPNG(inv, false, true);
     if (!dataUrl) return;
 
     const customerObj = inv.customer || customers.find((c: any) => c.id === inv.customerId);
+    const img = new Image();
+    img.src = dataUrl;
+    await new Promise(r => { img.onload = r; });
+
+    const pxToMm = 0.264583;
+    const pdfW = img.width * pxToMm;
+    const pdfH = img.height * pxToMm;
+
     const pdf = new jsPDF({
       orientation: 'portrait',
-      unit: 'px',
-      format: [650, 650 + (inv.items.length * 45)]
+      unit: 'mm',
+      format: [pdfW, pdfH]
     });
-    
-    // We add the image to the PDF
-    pdf.addImage(dataUrl as string, 'PNG', 0, 0, 650, 650 + (inv.items.length * 45));
-    pdf.save(`فاتورة_مبيعات_${customerObj?.name || ''}_${inv.invoiceNumber}.pdf`);
+    pdf.addImage(dataUrl, 'PNG', 0, 0, pdfW, pdfH);
+    pdf.save(`فاتورة_${customerObj?.name || ''}_${inv.invoiceNumber}.pdf`);
   };
 
-  const printInvoiceHTMLDirectly = (inv: any) => {
-    if (isPrintingRef.current) return;
-    isPrintingRef.current = true;
-    setIsPrinting(true);
-
+  const getInvoiceHTML = (inv: any): string => {
     const customerObj = inv.customer || customers.find((c: any) => c.id === inv.customerId);
-    const formattedDate = new Date(inv.date).toLocaleString('ar-EG', { dateStyle: 'medium', timeStyle: 'short' });
-
     const storedSetStr = localStorage.getItem('app_settings_sys');
-    let invoiceAppName = 'سمن وزيت سوفانا الفاخر';
-    let invoiceRepName = inv.delegateName?.replace(/ \(.*?\)/g, '').trim() || currentUser?.name?.replace(/ \(.*?\)/g, '').trim() || '';
-    let invoiceRepPhone = inv.delegatePhone || currentUser?.phone || '';
+    let settings = { appName: 'سمن وزيت سوفانا الفاخر', representativeName: '', representativePhone: '' };
     if (storedSetStr) {
       try {
         const parsed = JSON.parse(storedSetStr);
-        if (parsed.appName) invoiceAppName = parsed.appName;
-        if (parsed.representativeName && !invoiceRepName) invoiceRepName = parsed.representativeName;
-        if (parsed.representativePhone) invoiceRepPhone = parsed.representativePhone;
-      } catch (e) {
-        console.error(e);
-      }
+        if (parsed.appName) settings.appName = parsed.appName;
+        settings.representativeName = inv.delegateName?.replace(/ \(.*?\)/g, '').trim() || parsed.representativeName || '';
+        settings.representativePhone = inv.delegatePhone || parsed.representativePhone || '';
+      } catch {}
     }
+    const htmlString = ReactDOMServer.renderToStaticMarkup(
+      <InvoiceTemplate invoice={inv} customer={customerObj} products={products} settings={settings} />
+    );
+    return `<!DOCTYPE html><html dir="rtl" lang="ar"><head>${COMPACT_PRO_CSS}</head><body style="margin:0;padding:0;background:#fff">${htmlString}</body></html>`;
+  };
 
-    const html = `
-      <!DOCTYPE html>
-      <html dir="rtl" lang="ar">
-      <head>${COMPACT_PRO_CSS}</head>
-      <body>
-        <div class="rh">
-          <h1>${invoiceAppName}</h1>
-          <div class="sub">حلول التوزيع ونظام مبيعات الغذاء الميداني المعتمد</div>
-          <div class="ref">
-            <span>فاتورة مبيعات معتمدة</span>
-            <span>رقم المستند: <b>${inv.invoiceNumber}</b></span>
-            <span>تاريخ الإصدار: <b>${formattedDate}</b></span>
-          </div>
-        </div>
-        
-        <div class="sg" style="grid-template-columns:repeat(2,1fr)">
-          <div class="sb bl">
-            <div class="l">العميل المستلم</div>
-            <div class="v" style="font-size:13px;text-align:right">اسم المحل: <b>${customerObj?.name || 'غير معروف'}</b></div>
-            <div class="v" style="font-size:13px;text-align:right">المحافظة والمنطقة: <b>${customerObj?.governorate ? `${customerObj.governorate} - ` : ''}${customerObj?.area || 'المنطقة الافتراضية'}</b></div>
-            <div class="v" style="font-size:13px;text-align:right">الهاتف: <span style="font-family:monospace">${customerObj?.phone || 'غير متوفر'}</span></div>
-          </div>
-          <div class="sb gr">
-            <div class="l">المندوب المسؤول</div>
-            <div class="v" style="font-size:13px;text-align:right">اسم المندوب: <b>${invoiceRepName || 'شريك مبيعات معتمد'}</b></div>
-            <div class="v" style="font-size:13px;text-align:right">هاتف التواصل: <span style="font-family:monospace">${invoiceRepPhone || '—'}</span></div>
-            ${inv.notes ? `<div class="v" style="font-size:13px;text-align:right">ملاحظات: <span style="color:#d97706">${inv.notes}</span></div>` : ''}
-          </div>
-        </div>
-        
-        <table>
-          <thead>
-            <tr>
-              <th width="30">م</th>
-              <th>الصنف والحجم</th>
-              <th>الكمية</th>
-              <th>سعر الكرتونة</th>
-              <th>نسبة الخصم</th>
-              <th>القيمة الصافية</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${inv.items.map((item: any, idx: number) => {
-              const prod = products.find((p: any) => String(p.id).trim() === String(item.productId).trim());
-              const ws = prod ? getProductWeightsFallback(prod) : [];
-              const weight = ws.find((w: any) => String(w.id).trim() === String(item.weightId).trim()) || ws[0];
-              const prodName = prod ? prod.name : 'صنف مبيعات';
-              const sizeLabel = weight ? weight.size : '';
-              const multiplier = weight ? (weight.unitsPerCarton || 12) : 12;
-              const cartons = Math.floor(item.quantity / multiplier);
-              const pieces = item.quantity % multiplier;
-              const qtyTextParts = [];
-              if (cartons > 0) qtyTextParts.push(`${cartons} كرتونة`);
-              if (pieces > 0) qtyTextParts.push(`${pieces} قطعة`);
-              const qtyLabel = qtyTextParts.join(' و ') || 'منتهي';
-              const cartonOriginalPrice = item.originalPrice * multiplier;
-              const singleItemTotal = item.finalPrice * item.quantity;
-              return `
-                <tr>
-                  <td style="text-align:center;font-weight:700;color:#94a3b8">${idx + 1}</td>
-                  <td><b style="color:#1e3a5f">${prodName}</b> <span style="color:#64748b">${sizeLabel}</span></td>
-                  <td style="font-weight:700">${qtyLabel}</td>
-                  <td style="text-align:center">${cartonOriginalPrice.toLocaleString('ar-EG')}</td>
-                  <td style="text-align:center;color:${item.discountPercent > 0 ? '#dc2626' : '#94a3b8'};font-weight:700">${item.discountPercent > 0 ? item.discountPercent + '%' : '—'}</td>
-                  <td style="text-align:center;font-weight:800;color:#1e3a5f">${singleItemTotal.toLocaleString('ar-EG')}</td>
-                </tr>
-              `;
-            }).join('')}
-          </tbody>
-        </table>
-        
-        <table style="width:55%;margin-left:0;margin-right:auto">
-          <thead>
-            <tr class="tt">
-              <td colspan="2" style="text-align:center;font-weight:900;font-size:12px">ملخص الفاتورة</td>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td>الإجمالي قبل التخفيض:</td>
-              <td style="text-align:left;font-weight:700">${inv.totalBeforeDiscount.toLocaleString('ar-EG')} ج.م</td>
-            </tr>
-            <tr>
-              <td style="color:#dc2626">خصومات وتخفيضات:</td>
-              <td style="text-align:left;color:#dc2626;font-weight:700">-${(inv.totalBeforeDiscount - inv.totalAfterDiscount).toLocaleString('ar-EG')} ج.م</td>
-            </tr>
-            <tr class="ts">
-              <td style="font-weight:900">صافي الفاتورة:</td>
-              <td style="text-align:left">${inv.totalAfterDiscount.toLocaleString('ar-EG')} ج.م</td>
-            </tr>
-            <tr>
-              <td style="color:#15803d">المبلغ المسدد:</td>
-              <td style="text-align:left;color:#15803d;font-weight:800">${inv.paidAmount.toLocaleString('ar-EG')} ج.م</td>
-            </tr>
-            <tr>
-              <td style="color:#ea580c;font-weight:800">المتبقي (مديونية):</td>
-              <td style="text-align:left;color:#ea580c;font-weight:900;font-size:12px">${(inv.totalAfterDiscount - inv.paidAmount).toLocaleString('ar-EG')} ج.م</td>
-            </tr>
-          </tbody>
-        </table>
-        
-        <div class="fs">
-          <div class="sb2">
-            <div class="ti">مستلم البضاعة (العميل)</div>
-            <div class="ln">التوقيع</div>
-          </div>
-          <div class="sb2">
-            <div class="ti">المندوب المفوض</div>
-            <div class="ln">التوقيع</div>
-          </div>
-        </div>
-      </body>
-      </html>
-    `;
+  const printInvoiceHTMLDirectly = async (inv: any) => {
+    if (isPrintingRef.current) return;
+    isPrintingRef.current = true;
+    setIsPrinting(true);
+    const html = getInvoiceHTML(inv);
     printHTMLInNewWindow(html);
     setTimeout(() => {
       isPrintingRef.current = false;
@@ -1230,7 +984,62 @@ export default function InvoiceTab({
     return Array.from(new Set(govs)).sort();
   }, [invoices, customers]);
 
-  // Available areas in the invoices list (مطبّع)
+  // Available areas filtered by selected governorate
+  const listAreasFiltered = useMemo(() => {
+    const govFilter = selectedInvoiceGov !== 'all' ? selectedInvoiceGov : '';
+    const filteredInvs = govFilter
+      ? invoices.filter(inv => {
+          const cust = customers.find(c => c.id === inv.customerId);
+          return normalizeArabic(cust?.governorate || '') === govFilter;
+        })
+      : invoices;
+    const areas = filteredInvs.map(inv => {
+      const cust = customers.find(c => c.id === inv.customerId);
+      return normalizeArabic(cust?.area || inv.customerArea || '');
+    }).filter(Boolean);
+    return Array.from(new Set(areas)).sort();
+  }, [invoices, customers, selectedInvoiceGov]);
+
+  // Available customers filtered by selected governorate + area
+  const listCustomersFiltered = useMemo(() => {
+    let result = customers;
+    if (selectedInvoiceGov !== 'all') {
+      result = result.filter(c => normalizeArabic(c.governorate || '') === selectedInvoiceGov);
+    }
+    if (selectedInvoiceArea !== 'all') {
+      result = result.filter(c => normalizeArabic(c.area || '') === selectedInvoiceArea);
+    }
+    return result;
+  }, [customers, selectedInvoiceGov, selectedInvoiceArea]);
+
+  // Debtors separate filtered lists
+  const debtorListAreasFiltered = useMemo(() => {
+    const govFilter = debtorGov !== 'all' ? debtorGov : '';
+    const filteredInvs = govFilter
+      ? invoices.filter(inv => {
+          const cust = customers.find(c => c.id === inv.customerId);
+          return normalizeArabic(cust?.governorate || '') === govFilter;
+        })
+      : invoices;
+    const areas = filteredInvs.map(inv => {
+      const cust = customers.find(c => c.id === inv.customerId);
+      return normalizeArabic(cust?.area || inv.customerArea || '');
+    }).filter(Boolean);
+    return Array.from(new Set(areas)).sort();
+  }, [invoices, customers, debtorGov]);
+
+  const debtorListCustomersFiltered = useMemo(() => {
+    let result = customers;
+    if (debtorGov !== 'all') {
+      result = result.filter(c => normalizeArabic(c.governorate || '') === debtorGov);
+    }
+    if (debtorArea !== 'all') {
+      result = result.filter(c => normalizeArabic(c.area || '') === debtorArea);
+    }
+    return result;
+  }, [customers, debtorGov, debtorArea]);
+
+  // Available areas for the old filter (kept for compatibility)
   const listAreas = useMemo(() => {
     const filteredInvs = filterGovernorateList
       ? invoices.filter(inv => {
@@ -1254,12 +1063,30 @@ export default function InvoiceTab({
 
     const cust = customers.find(c => c.id === inv.customerId);
     
-    // Filter by Governorate in the list (مطبّع)
+    // Filter by Governorate (from archive filter panel)
+    if (selectedInvoiceGov !== 'all') {
+      if (!cust || normalizeArabic(cust.governorate || '') !== selectedInvoiceGov) return false;
+    }
+    
+    // Filter by Area (from archive filter panel)
+    if (selectedInvoiceArea !== 'all') {
+      if (!cust || normalizeArabic(cust.area || '') !== selectedInvoiceArea) return false;
+    }
+
+    // Filter by Customer (from archive filter panel)
+    if (selectedInvoiceCustomer !== 'all') {
+      if (inv.customerId !== selectedInvoiceCustomer) return false;
+    }
+
+    // Filter by Delegate (from archive filter panel)
+    if (selectedInvoiceDelegate !== 'all') {
+      if (inv.delegatePhone !== selectedInvoiceDelegate) return false;
+    }
+
+    // Legacy filter fallback
     if (filterGovernorateList) {
       if (!cust || normalizeArabic(cust.governorate || '') !== filterGovernorateList) return false;
     }
-    
-    // Filter by Area in the list (مطبّع)
     if (filterAreaList) {
       if (!cust || normalizeArabic(cust.area || '') !== filterAreaList) return false;
     }
@@ -1317,7 +1144,78 @@ export default function InvoiceTab({
     const dateB = new Date(b.date).getTime();
     return dateB - dateA;
   });
-  const filteredDebtorsList = filteredInvoices.filter(inv => ((inv.totalAfterDiscount || 0) - (inv.paidAmount ?? (inv.totalAfterDiscount || 0))) > 0.05);
+
+  const MONTH_COLORS: Record<string, { bg: string; border: string; text: string; badge: string; headerBg: string; headerBorder: string }> = {
+    '01': { bg: 'bg-blue-50', border: 'border-blue-200', text: 'text-blue-800', badge: 'bg-blue-600', headerBg: 'bg-gradient-to-l from-blue-50 to-blue-100/60', headerBorder: 'border-blue-300' },
+    '02': { bg: 'bg-violet-50', border: 'border-violet-200', text: 'text-violet-800', badge: 'bg-violet-600', headerBg: 'bg-gradient-to-l from-violet-50 to-violet-100/60', headerBorder: 'border-violet-300' },
+    '03': { bg: 'bg-emerald-50', border: 'border-emerald-200', text: 'text-emerald-800', badge: 'bg-emerald-600', headerBg: 'bg-gradient-to-l from-emerald-50 to-emerald-100/60', headerBorder: 'border-emerald-300' },
+    '04': { bg: 'bg-amber-50', border: 'border-amber-200', text: 'text-amber-800', badge: 'bg-amber-600', headerBg: 'bg-gradient-to-l from-amber-50 to-amber-100/60', headerBorder: 'border-amber-300' },
+    '05': { bg: 'bg-rose-50', border: 'border-rose-200', text: 'text-rose-800', badge: 'bg-rose-600', headerBg: 'bg-gradient-to-l from-rose-50 to-rose-100/60', headerBorder: 'border-rose-300' },
+    '06': { bg: 'bg-cyan-50', border: 'border-cyan-200', text: 'text-cyan-800', badge: 'bg-cyan-600', headerBg: 'bg-gradient-to-l from-cyan-50 to-cyan-100/60', headerBorder: 'border-cyan-300' },
+    '07': { bg: 'bg-orange-50', border: 'border-orange-200', text: 'text-orange-800', badge: 'bg-orange-600', headerBg: 'bg-gradient-to-l from-orange-50 to-orange-100/60', headerBorder: 'border-orange-300' },
+    '08': { bg: 'bg-teal-50', border: 'border-teal-200', text: 'text-teal-800', badge: 'bg-teal-600', headerBg: 'bg-gradient-to-l from-teal-50 to-teal-100/60', headerBorder: 'border-teal-300' },
+    '09': { bg: 'bg-pink-50', border: 'border-pink-200', text: 'text-pink-800', badge: 'bg-pink-600', headerBg: 'bg-gradient-to-l from-pink-50 to-pink-100/60', headerBorder: 'border-pink-300' },
+    '10': { bg: 'bg-lime-50', border: 'border-lime-200', text: 'text-lime-800', badge: 'bg-lime-600', headerBg: 'bg-gradient-to-l from-lime-50 to-lime-100/60', headerBorder: 'border-lime-300' },
+    '11': { bg: 'bg-fuchsia-50', border: 'border-fuchsia-200', text: 'text-fuchsia-800', badge: 'bg-fuchsia-600', headerBg: 'bg-gradient-to-l from-fuchsia-50 to-fuchsia-100/60', headerBorder: 'border-fuchsia-300' },
+    '12': { bg: 'bg-sky-50', border: 'border-sky-200', text: 'text-sky-800', badge: 'bg-sky-600', headerBg: 'bg-gradient-to-l from-sky-50 to-sky-100/60', headerBorder: 'border-sky-300' },
+  };
+
+  const availableMonths = useMemo(() => {
+    const monthMap = new Map<string, { count: number; totalAmount: number; totalPaid: number; totalRemaining: number }>();
+    filteredArchiveList.forEach(inv => {
+      const d = new Date(inv.date);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      const existing = monthMap.get(key) || { count: 0, totalAmount: 0, totalPaid: 0, totalRemaining: 0 };
+      existing.count += 1;
+      const invTotal = inv.totalAfterDiscount || 0;
+      const invPaid = inv.paidAmount ?? invTotal;
+      existing.totalAmount += invTotal;
+      existing.totalPaid += invPaid;
+      existing.totalRemaining += invTotal - invPaid;
+      monthMap.set(key, existing);
+    });
+    return Array.from(monthMap.entries())
+      .sort((a, b) => b[0].localeCompare(a[0]))
+      .map(([key, info]) => ({ key, ...info }));
+  }, [filteredArchiveList]);
+
+  const filteredArchiveListByMonth = useMemo(() => {
+    if (!expandedMonth) return filteredArchiveList;
+    return filteredArchiveList.filter(inv => {
+      const d = new Date(inv.date);
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}` === expandedMonth;
+    });
+  }, [filteredArchiveList, expandedMonth]);
+
+  // Separate debtors list with its own filters
+  const filteredDebtorsList = useMemo(() => {
+    let result = invoices.filter(inv => {
+      const dTime = new Date(inv.date).getTime();
+      const isOld = !isNaN(dTime) && Date.now() - dTime > 48 * 60 * 60 * 1000;
+      if (inv.isDelivered === false && !isOld) return false;
+      const remaining = (inv.totalAfterDiscount || 0) - (inv.paidAmount ?? (inv.totalAfterDiscount || 0));
+      return remaining > 0.05;
+    });
+
+    result = result.filter(inv => {
+      const cust = customers.find(c => c.id === inv.customerId);
+      if (debtorGov !== 'all') {
+        if (!cust || normalizeArabic(cust.governorate || '') !== debtorGov) return false;
+      }
+      if (debtorArea !== 'all') {
+        if (!cust || normalizeArabic(cust.area || '') !== debtorArea) return false;
+      }
+      if (debtorCustomer !== 'all') {
+        if (inv.customerId !== debtorCustomer) return false;
+      }
+      if (debtorDelegate !== 'all') {
+        if (inv.delegatePhone !== debtorDelegate) return false;
+      }
+      return true;
+    });
+
+    return [...result].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  }, [invoices, customers, debtorGov, debtorArea, debtorCustomer, debtorDelegate]);
 
 
   return (
@@ -1459,6 +1357,26 @@ export default function InvoiceTab({
                   <option key={c.id} value={c.id}>{c.name} ({c.area})</option>
                 ))}
               </select>
+              {selectedCustomerId && (customerCredits[selectedCustomerId] || 0) > 0 && (
+                <div className="mt-1.5 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1.5 flex items-center justify-between text-[10px]">
+                  <span className="font-bold text-amber-800">💳 رصيد دائن متاح:</span>
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-black text-amber-700">{formatNum(customerCredits[selectedCustomerId])} ج.م</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const credit = customerCredits[selectedCustomerId] || 0;
+                        const newPaid = Math.max(0, Math.round(totals.after - credit));
+                        setCustomPaidAmount(String(newPaid));
+                        setAppliedCreditAmount(credit);
+                      }}
+                      className="bg-amber-500 hover:bg-amber-600 text-white px-2 py-0.5 rounded text-[9px] font-black cursor-pointer active:scale-95 transition-all"
+                    >
+                      تطبيق
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
 
             {isManager && (
@@ -1717,74 +1635,151 @@ export default function InvoiceTab({
         {/* Draft Bill Items List & Calculations */}
         <div className="bg-[#FFFFFF] p-5 rounded-2xl border border-emerald-100 shadow-sm flex flex-col gap-4">
           <h3 className="font-bold text-[#1A365D] text-sm border-b border-slate-100 pb-2 flex items-center justify-between">
-            <span>محتويات الفاتورة الحالية ({billItems.length})</span>
-            {totals.after > 0 && <span className="text-xs bg-emerald-100 text-emerald-800 font-extrabold py-0.5 px-2 rounded-lg">قيد التحضير</span>}
+            <span>محتويات الفاتورة الحالية ({billItems.filter(i => i.quantity > 0).length})</span>
+            <div className="flex items-center gap-2">
+              {selectedCustomerId && (
+                <button
+                  type="button"
+                  onClick={() => setShowCustomerInvoices(true)}
+                  className="text-[10px] font-black text-indigo-600 hover:text-indigo-800 bg-indigo-50 hover:bg-indigo-100 px-3 py-1.5 rounded-lg border border-indigo-200 transition-all cursor-pointer active:scale-95 flex items-center gap-1.5 shadow-sm"
+                >
+                  <RefreshCw className="h-3.5 w-3.5" />
+                  مرتجعات / فواتير سابقة
+                </button>
+              )}
+              {totals.after > 0 && <span className="text-xs bg-emerald-100 text-emerald-800 font-extrabold py-0.5 px-2 rounded-lg">قيد التحضير</span>}
+            </div>
           </h3>
 
           <div className="flex flex-col gap-2.5">
-            {billItems.length === 0 ? (
-              <p className="text-center text-gray-400 py-10 text-xs">لا توجد أصناف مضافة في الفاتورة الحالية بعد.</p>
-            ) : (
-              billItems.map((item, index) => {
-                const prod = products.find(p => String(p.id).trim() === String(item.productId).trim());
-                const weights = prod ? getProductWeightsFallback(prod) : [];
-                const weight = weights.find(w => String(w.id).trim() === String(item.weightId).trim()) || weights[0];
-                const itemTotal = item.finalPrice * item.quantity;
-                const fpPerUnit = getItemFactoryCost(item, weight, prod);
-                const itemProfit = ((item.finalPrice || 0) - fpPerUnit) * (item.quantity || 0);
-                
-                const multiplier = weight ? (weight.unitsPerCarton || 12) : 12;
-                const qtyLabel = formatCartonsAndPieces(item.quantity, multiplier);
-                const cartonFinalPrice = item.finalPrice * multiplier;
-
-                return (
-                  <div key={index} className="bg-[#F7FAFC] border border-slate-150 p-3 rounded-xl flex items-center justify-between gap-2.5">
-                    <div className="flex flex-col gap-1 text-xs">
-                      <span className="font-black text-[#1A365D]">{prod ? prod.name : 'منتج غير معروف'} ({weight ? weight.size : 'حجم عادي'})</span>
-                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[#2B6CB0] font-medium" dir="rtl">
-                        <span>البيان: <strong className="text-[#1A365D] font-black">{qtyLabel} {formatNum(cartonFinalPrice)} ج.م</strong></span>
-                        {item.discountPercent > 0 && <span className="text-rose-600 text-[10px] font-bold">(خصم {item.discountPercent}%)</span>}
-                        <span>•</span>
-                        <span>الصافي: <strong className="text-[#DD6B20] font-extrabold">{formatNum(itemTotal)} ج.م</strong></span>
-                        <span>•</span>
-                        <span className={`font-bold text-[10px] ${itemProfit >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
-                          هامش: {formatNum(itemProfit)} ج
-                        </span>
-                      </div>
-                    </div>
-                    
-                    <div className="flex items-center gap-1 shrink-0">
-                      <button
-                        type="button"
-                        disabled={isDuplicating}
-                        onClick={() => handleDuplicateDraftItem(index)}
-                        className="text-sky-500 hover:bg-sky-50 p-1.5 rounded-lg transition-colors cursor-pointer disabled:opacity-50"
-                        title="تكرار الصنف"
-                      >
-                        <Copy className="h-4 w-4" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleRemoveDraftItem(index)}
-                        className="text-rose-500 hover:bg-rose-50 p-1.5 rounded-lg transition-colors cursor-pointer"
-                        title="حذف الصنف من القائمة"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </button>
-                    </div>
-                  </div>
-                );
-              })
-            )}
+            {(() => {
+              const salesItems = billItems.filter(i => i.quantity > 0);
+              const returnItems = billItems.filter(i => i.quantity < 0);
+              const totalSales = salesItems.reduce((s, i) => s + ((i.finalPrice || 0) * i.quantity), 0);
+              const totalReturns = returnItems.reduce((s, i) => s + ((i.finalPrice || 0) * Math.abs(i.quantity)), 0);
+              return (
+                <>
+                  {/* Sales Items */}
+                  {salesItems.length === 0 && returnItems.length === 0 ? (
+                    <p className="text-center text-gray-400 py-10 text-xs">لا توجد أصناف مضافة في الفاتورة الحالية بعد.</p>
+                  ) : (
+                    <>
+                      {salesItems.map((item, index) => {
+                        const prod = products.find(p => String(p.id).trim() === String(item.productId).trim());
+                        const weights = prod ? getProductWeightsFallback(prod) : [];
+                        const weight = weights.find(w => String(w.id).trim() === String(item.weightId).trim()) || weights[0];
+                        const itemTotal = item.finalPrice * item.quantity;
+                        const fpPerUnit = getItemFactoryCost(item, weight, prod);
+                        const itemProfit = ((item.finalPrice || 0) - fpPerUnit) * (item.quantity || 0);
+                        const multiplier = weight ? (weight.unitsPerCarton || 12) : 12;
+                        const qtyLabel = formatCartonsAndPieces(item.quantity, multiplier);
+                        const cartonFinalPrice = item.finalPrice * multiplier;
+                        return (
+                          <div key={index} className="bg-[#F7FAFC] border border-slate-150 p-3 rounded-xl flex items-center justify-between gap-2.5">
+                            <div className="flex flex-col gap-1 text-xs">
+                              <span className="font-black text-[#1A365D]">{prod ? prod.name : 'منتج غير معروف'} ({weight ? weight.size : 'حجم عادي'})</span>
+                              <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[#2B6CB0] font-medium" dir="rtl">
+                                <span>البيان: <strong className="text-[#1A365D] font-black">{qtyLabel} {formatNum(cartonFinalPrice)} ج.م</strong></span>
+                                {item.discountPercent > 0 && <span className="text-rose-600 text-[10px] font-bold">(خصم {item.discountPercent}%)</span>}
+                                <span>•</span>
+                                <span>الصافي: <strong className="text-[#DD6B20] font-extrabold">{formatNum(itemTotal)} ج.م</strong></span>
+                                <span>•</span>
+                                <span className={`font-bold text-[10px] ${itemProfit >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                                  هامش: {formatNum(itemProfit)} ج
+                                </span>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-1 shrink-0">
+                              <button type="button" disabled={isDuplicating} onClick={() => handleDuplicateDraftItem(index)} className="text-sky-500 hover:bg-sky-50 p-1.5 rounded-lg transition-colors cursor-pointer disabled:opacity-50" title="تكرار الصنف"><Copy className="h-4 w-4" /></button>
+                              <button type="button" onClick={() => handleRemoveDraftItem(index)} className="text-rose-500 hover:bg-rose-50 p-1.5 rounded-lg transition-colors cursor-pointer" title="حذف الصنف من القائمة"><Trash2 className="h-4 w-4" /></button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                      {/* Returns Section */}
+                      {returnItems.length > 0 && (
+                        <div className="bg-rose-50/50 border border-rose-200 rounded-xl p-3">
+                          <h4 className="text-[11px] font-black text-rose-700 mb-2 flex items-center gap-1.5">
+                            <RefreshCw className="h-3.5 w-3.5" />
+                            المرتجعات ({returnItems.length})
+                          </h4>
+                          <div className="flex flex-col gap-2">
+                            {returnItems.map((item, index) => {
+                              const prod = products.find(p => String(p.id).trim() === String(item.productId).trim());
+                              const weights = prod ? getProductWeightsFallback(prod) : [];
+                              const weight = weights.find(w => String(w.id).trim() === String(item.weightId).trim()) || weights[0];
+                              const qty = Math.abs(item.quantity);
+                              const val = (item.finalPrice || 0) * qty;
+                              const multiplier = weight ? (weight.unitsPerCarton || 12) : 12;
+                              const qtyLabel = formatCartonsAndPieces(qty, multiplier);
+                              return (
+                                <div key={index} className="flex items-center justify-between bg-white rounded-lg p-2 border border-rose-100 text-[11px]">
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-bold text-slate-700">{prod?.name || item.productName} - {weight?.size || item.weightSize}</span>
+                                    <span className="text-slate-400">×</span>
+                                    <span className="text-rose-600 font-black">{qtyLabel}</span>
+                                  </div>
+                                  <div className="flex items-center gap-1">
+                                    <span className="font-black text-rose-700">{formatNum(Math.round(val))} ج.م</span>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const origIdx = billItems.indexOf(item);
+                                        if (origIdx >= 0) handleRemoveDraftItem(origIdx);
+                                      }}
+                                      className="text-rose-400 hover:text-rose-600 hover:bg-rose-50 p-1 rounded-lg transition-colors cursor-pointer"
+                                      title="حذف المرتجع"
+                                    >
+                                      <Trash2 className="h-3.5 w-3.5" />
+                                    </button>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                          <div className="flex items-center justify-between text-xs font-black text-rose-800 mt-2 pt-2 border-t border-rose-200">
+                            <span>إجمالي المرتجعات</span>
+                            <span>- {formatNum(Math.round(totalReturns))} ج.م</span>
+                          </div>
+                        </div>
+                      )}
+                    </>
+                  )}
+                </>
+              );
+            })()}
           </div>
 
           {/* Calculations section */}
-          {billItems.length > 0 && (
+          {billItems.length > 0 && (() => {
+            const salesItems = billItems.filter(i => i.quantity > 0);
+            const returnItems = billItems.filter(i => i.quantity < 0);
+            const totalSales = salesItems.reduce((s, i) => s + ((i.finalPrice || 0) * i.quantity), 0);
+            const totalReturns = returnItems.reduce((s, i) => s + ((i.finalPrice || 0) * Math.abs(i.quantity)), 0);
+            const netTotal = totalSales - totalReturns;
+            return (
             <div className="border-t border-slate-150 pt-4 flex flex-col gap-2 text-xs text-[#2B6CB0]">
-              <div className="flex justify-between">
-                <span>الإجمالي:</span>
-                <span className="font-semibold text-[#1A365D]">{formatNum(totals.before)}ج.م</span>
-              </div>
+              {totalReturns > 0 ? (
+                <>
+                  <div className="flex justify-between">
+                    <span>إجمالي الفاتورة قبل المرتجع:</span>
+                    <span className="font-semibold text-[#1A365D]">{formatNum(totalSales)} ج.م</span>
+                  </div>
+                  <div className="flex justify-between text-rose-600 font-bold">
+                    <span>المرتجعات:</span>
+                    <span>- {formatNum(Math.round(totalReturns))} ج.م</span>
+                  </div>
+                  <div className="flex justify-between text-sm font-black text-[#1A365D] border-t border-slate-200 pt-1">
+                    <span>إجمالي الفاتورة بعد المرتجع:</span>
+                    <span>{formatNum(Math.round(netTotal))} ج.م</span>
+                  </div>
+                </>
+              ) : (
+                <div className="flex justify-between">
+                  <span>الإجمالي:</span>
+                  <span className="font-semibold text-[#1A365D]">{formatNum(totals.before)} ج.م</span>
+                </div>
+              )}
               <div className="flex justify-between text-[#DD6B20] font-bold">
                 <span>إجمالي الخصومات:</span>
                 <span>-{formatNum(totals.discount)}ج.م</span>
@@ -1963,7 +1958,8 @@ export default function InvoiceTab({
                 </button>
               </div>
             </div>
-          )}
+          );
+        })()}
 
           {/* Active (Pending Delivery) Invoices List */}
           {activeSubTab === 'create' && (() => {
@@ -2088,7 +2084,8 @@ export default function InvoiceTab({
         {(activeSubTab === 'archive' || activeSubTab === 'debtors') && (
           <div className="flex flex-col gap-4">
             
-            {/* Filter Panel */}
+            {/* Archive Filter Panel */}
+            {activeSubTab === 'archive' && (
             <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-sm flex flex-col gap-5">
               
               <div className="flex items-center justify-between border-b border-slate-200 pb-3">
@@ -2100,7 +2097,6 @@ export default function InvoiceTab({
                   </div>
                   <div className="flex flex-col items-start">
                     <span className="text-xs font-black text-slate-800">البحث المتقدم وتصفية الحركات</span>
-                    <span className="text-[10px] font-bold text-slate-400 mt-0.5">اختر المحددات لتصفية جدول الفواتير أدناه</span>
                   </div>
                 </div>
                 
@@ -2113,6 +2109,7 @@ export default function InvoiceTab({
                     setSelectedInvoiceDelegate('all');
                     setInvoiceFilterDate(getEgyptTodayDate());
                     setSearchInvoice('');
+                    setExpandedMonth(null);
                   }}
                   className="text-[10px] font-black text-indigo-600 hover:text-indigo-800 bg-indigo-50 px-2.5 py-1.5 rounded-lg border border-indigo-100/70 transition-all active:scale-95 cursor-pointer"
                 >
@@ -2129,7 +2126,11 @@ export default function InvoiceTab({
                   </label>
                   <select 
                     value={selectedInvoiceGov}
-                    onChange={(e) => setSelectedInvoiceGov(e.target.value)}
+                    onChange={(e) => {
+                      setSelectedInvoiceGov(e.target.value);
+                      setSelectedInvoiceArea('all');
+                      setSelectedInvoiceCustomer('all');
+                    }}
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs font-bold text-slate-700 outline-none focus:ring-2 focus:ring-indigo-500/10 focus:border-indigo-500 focus:bg-white transition-all appearance-none cursor-pointer"
                   >
                     <option value="all">كل المحافظات</option>
@@ -2144,11 +2145,14 @@ export default function InvoiceTab({
                   </label>
                   <select 
                     value={selectedInvoiceArea}
-                    onChange={(e) => setSelectedInvoiceArea(e.target.value)}
+                    onChange={(e) => {
+                      setSelectedInvoiceArea(e.target.value);
+                      setSelectedInvoiceCustomer('all');
+                    }}
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs font-bold text-slate-700 outline-none focus:ring-2 focus:ring-sky-500/10 focus:border-sky-500 focus:bg-white transition-all appearance-none cursor-pointer"
                   >
                     <option value="all">كل المناطق</option>
-                    {listAreas.map(area => <option key={area} value={area}>{area}</option>)}
+                    {listAreasFiltered.map(area => <option key={area} value={area}>{area}</option>)}
                   </select>
                 </div>
 
@@ -2163,7 +2167,7 @@ export default function InvoiceTab({
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs font-bold text-slate-700 outline-none focus:ring-2 focus:ring-emerald-500/10 focus:border-emerald-500 focus:bg-white transition-all appearance-none cursor-pointer"
                   >
                     <option value="all">كل العملاء</option>
-                    {customers.map(cust => <option key={cust.id} value={cust.id}>{cust.name}</option>)}
+                    {listCustomersFiltered.map(cust => <option key={cust.id} value={cust.id}>{cust.name}</option>)}
                   </select>
                 </div>
 
@@ -2199,13 +2203,260 @@ export default function InvoiceTab({
 
               </div>
             </div>
+            )}
 
-            {/* Invoices List item */}
+            {/* Debtors Filter Panel */}
+            {activeSubTab === 'debtors' && (
+            <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-sm flex flex-col gap-5">
+              
+              <div className="flex items-center justify-between border-b border-slate-200 pb-3">
+                <div className="flex items-center gap-2">
+                  <div className="bg-rose-50 p-2 rounded-xl text-rose-600 border border-rose-100">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-4 h-4">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 3c2.755 0 5.455.232 8.083.678.533.09.917.556.917 1.096v1.044a2.25 2.25 0 0 1-.659 1.591l-5.432 5.432a2.25 2.25 0 0 0-.659 1.591v2.927a2.25 2.25 0 0 1-1.244 2.013L9.75 21v-6.568a2.25 2.25 0 0 0-.659-1.591L3.659 7.409A2.25 2.25 0 0 1 3 5.818V4.774c0-.54.384-1.006.917-1.096A48.32 48.32 0 0 1 12 3Z" />
+                    </svg>
+                  </div>
+                  <div className="flex flex-col items-start">
+                    <span className="text-xs font-black text-slate-800">تصفية العملاء المديونين</span>
+                  </div>
+                </div>
+                
+                <button 
+                  type="button" 
+                  onClick={() => {
+                    setDebtorGov('all');
+                    setDebtorArea('all');
+                    setDebtorCustomer('all');
+                    setDebtorDelegate('all');
+                  }}
+                  className="text-[10px] font-black text-rose-600 hover:text-rose-800 bg-rose-50 px-2.5 py-1.5 rounded-lg border border-rose-100/70 transition-all active:scale-95 cursor-pointer"
+                >
+                  إعادة تعيين
+                </button>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-2 gap-4 items-end">
+                
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-[11px] font-black text-slate-700 flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 bg-indigo-500 rounded-full shadow-xs"></span>
+                    المحافظة
+                  </label>
+                  <select 
+                    value={debtorGov}
+                    onChange={(e) => {
+                      setDebtorGov(e.target.value);
+                      setDebtorArea('all');
+                      setDebtorCustomer('all');
+                    }}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs font-bold text-slate-700 outline-none focus:ring-2 focus:ring-indigo-500/10 focus:border-indigo-500 focus:bg-white transition-all appearance-none cursor-pointer"
+                  >
+                    <option value="all">كل المحافظات</option>
+                    {listGovernorates.map(gov => <option key={gov} value={gov}>{gov}</option>)}
+                  </select>
+                </div>
+
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-[11px] font-black text-slate-700 flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 bg-sky-500 rounded-full shadow-xs"></span>
+                    المنطقة
+                  </label>
+                  <select 
+                    value={debtorArea}
+                    onChange={(e) => {
+                      setDebtorArea(e.target.value);
+                      setDebtorCustomer('all');
+                    }}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs font-bold text-slate-700 outline-none focus:ring-2 focus:ring-sky-500/10 focus:border-sky-500 focus:bg-white transition-all appearance-none cursor-pointer"
+                  >
+                    <option value="all">كل المناطق</option>
+                    {debtorListAreasFiltered.map(area => <option key={area} value={area}>{area}</option>)}
+                  </select>
+                </div>
+
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-[11px] font-black text-slate-700 flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full shadow-xs"></span>
+                    العميل
+                  </label>
+                  <select 
+                    value={debtorCustomer}
+                    onChange={(e) => setDebtorCustomer(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs font-bold text-slate-700 outline-none focus:ring-2 focus:ring-emerald-500/10 focus:border-emerald-500 focus:bg-white transition-all appearance-none cursor-pointer"
+                  >
+                    <option value="all">كل العملاء</option>
+                    {debtorListCustomersFiltered.map(cust => <option key={cust.id} value={cust.id}>{cust.name}</option>)}
+                  </select>
+                </div>
+
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-[11px] font-black text-slate-700 flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 bg-violet-500 rounded-full shadow-xs"></span>
+                    المندوب
+                  </label>
+                  <select 
+                    value={debtorDelegate}
+                    onChange={(e) => setDebtorDelegate(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs font-bold text-slate-700 outline-none focus:ring-2 focus:ring-violet-500/10 focus:border-violet-500 focus:bg-white transition-all appearance-none cursor-pointer"
+                  >
+                    <option value="all">كل المناديب</option>
+                    {usersList && usersList.filter(u => u.role !== 'owner').map(u => (
+                      <option key={u.phone} value={u.phone}>{u.name}</option>
+                    ))}
+                  </select>
+                </div>
+
+              </div>
+            </div>
+            )}
+
+            {/* Monthly Accordion Filter — archive only */}
+            {activeSubTab === 'archive' && availableMonths.length > 0 && (
+              <div className="flex flex-col gap-2.5 mt-1">
+                {availableMonths.map(m => {
+                  const [yr, mo] = m.key.split('-');
+                  const monthNames: Record<string, string> = {
+                    '01': 'يناير', '02': 'فبراير', '03': 'مارس', '04': 'أبريل',
+                    '05': 'مايو', '06': 'يونيو', '07': 'يوليو', '08': 'أغسطس',
+                    '09': 'سبتمبر', '10': 'أكتوبر', '11': 'نوفمبر', '12': 'ديسمبر'
+                  };
+                  const isExpanded = expandedMonth === m.key;
+                  const colors = MONTH_COLORS[mo] || MONTH_COLORS['01'];
+                  const hasDebt = m.totalRemaining > 0.05;
+
+                  const monthInvoices = isExpanded ? filteredArchiveList.filter(inv => {
+                    const d = new Date(inv.date);
+                    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}` === m.key;
+                  }) : [];
+
+                  return (
+                    <div key={m.key} className={`rounded-2xl border-2 transition-all duration-300 overflow-hidden ${isExpanded ? `${colors.border} shadow-lg` : 'border-slate-200 hover:border-slate-300 shadow-sm'}`}>
+                      {/* Accordion Header */}
+                      <button
+                        type="button"
+                        onClick={() => setExpandedMonth(isExpanded ? null : m.key)}
+                        className={`w-full flex items-center justify-between p-3.5 cursor-pointer transition-all duration-200 ${isExpanded ? colors.headerBg : 'bg-white hover:bg-slate-50'}`}
+                      >
+                        <div className="flex items-center gap-3">
+                          {/* Month Color Badge */}
+                          <div className={`${colors.badge} text-white w-10 h-10 rounded-xl flex flex-col items-center justify-center shadow-md`}>
+                            <span className="text-[10px] font-black leading-none">{monthNames[mo]}</span>
+                            <span className="text-[8px] font-bold opacity-80 leading-none mt-0.5">{yr}</span>
+                          </div>
+                          {/* Stats */}
+                          <div className="flex flex-col items-start gap-0.5">
+                            <span className={`text-sm font-black ${colors.text}`}>
+                              {monthNames[mo]} {yr}
+                              {isExpanded && <span className="text-[10px] font-bold opacity-60 mr-1">▼</span>}
+                              {!isExpanded && <span className="text-[10px] font-bold opacity-60 mr-1">◀</span>}
+                            </span>
+                            <div className="flex items-center gap-2 text-[10px] font-bold text-slate-500">
+                              <span>{m.count} فاتورة</span>
+                              <span className="text-slate-300">|</span>
+                              <span>إجمالي: {formatNum(m.totalAmount)} ج.م</span>
+                              {hasDebt && (
+                                <>
+                                  <span className="text-slate-300">|</span>
+                                  <span className="text-rose-500">متبقي: {formatNum(m.totalRemaining)} ج.م</span>
+                                </>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                        {/* Paid badge */}
+                        <div className={`${colors.badge}/10 ${colors.text} px-2.5 py-1 rounded-lg text-[10px] font-black`}>
+                          مسدد: {formatNum(m.totalPaid)} ج.م
+                        </div>
+                      </button>
+
+                      {/* Accordion Body */}
+                      {isExpanded && monthInvoices.length > 0 && (
+                        <div className={`${colors.bg} border-t ${colors.border} p-3 flex flex-col gap-2`}>
+                          {monthInvoices.map((inv, idx) => {
+                            const cust = customers.find(c => c.id === inv.customerId);
+                            const remaining = (inv.totalAfterDiscount || 0) - (inv.paidAmount ?? (inv.totalAfterDiscount || 0));
+                            return (
+                              <div
+                                key={`${inv.id}_month_${idx}`}
+                                className={`bg-white/80 backdrop-blur-sm p-3 rounded-xl border ${colors.border}/50 flex flex-col gap-1.5 text-xs`}
+                              >
+                                <div className="flex items-center justify-between">
+                                  <div className="flex items-center gap-1.5">
+                                    <span className={`${colors.badge}/15 ${colors.text} py-0.5 px-2 rounded-md font-black text-[11px]`}>
+                                      {cust ? cust.name : 'عميل غير محدد'}
+                                    </span>
+                                    {cust?.governorate && (
+                                      <span className="text-[10px] font-bold text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded">
+                                        {cust.governorate} - {cust.area}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <span className="text-[10px] font-black text-slate-500 bg-slate-100 px-2 py-0.5 rounded-lg">
+                                    #{inv.invoiceNumber}
+                                  </span>
+                                </div>
+                                <div className="flex items-center justify-between mt-1.5">
+                                  <div className="flex items-center gap-3 text-[10px] font-bold">
+                                    <span className="text-[#1A365D]">إجمالي: {formatNum(inv.totalAfterDiscount)} ج.م</span>
+                                    <span className="text-emerald-600">مسدد: {formatNum(inv.paidAmount ?? inv.totalAfterDiscount)} ج.م</span>
+                                    {remaining > 0.05 && <span className="text-rose-500">متبقي: {formatNum(remaining)} ج.م</span>}
+                                  </div>
+                                  <div className="flex items-center gap-1.5">
+                                    <button
+                                      onClick={() => setSelectedInvoice(inv)}
+                                      className="bg-[#1A365D] hover:bg-[#2B6CB0] text-white px-2.5 py-1 rounded-lg text-[10px] font-black transition-all cursor-pointer active:scale-95 flex items-center gap-1 shadow-sm"
+                                    >
+                                      <Eye className="h-3 w-3" />
+                                      التفاصيل
+                                    </button>
+                                    <button
+                                      onClick={() => {
+                                        setReturnForm({
+                                          items: [],
+                                          movementType: 'cash_refund',
+                                          exchangeProductId: '',
+                                          exchangeWeightId: '',
+                                          exchangeQty: '0',
+                                          exchangeUnitType: 'piece',
+                                          exchangeSettlementMethod: 'cash',
+                                          notes: ''
+                                        });
+                                        setReturnModal({ isOpen: true, invoice: inv });
+                                      }}
+                                      className="bg-rose-100 hover:bg-rose-200 text-rose-700 px-2.5 py-1 rounded-lg text-[10px] font-black transition-all cursor-pointer active:scale-95 flex items-center gap-1 border border-rose-200"
+                                    >
+                                      <RefreshCw className="h-3 w-3" />
+                                      مرتجعات
+                                    </button>
+                                    {isManager && (
+                                    <button
+                                      type="button"
+                                      onClick={() => onDeleteInvoice(inv.id)}
+                                      className="bg-red-50 hover:bg-red-100 text-red-600 px-2.5 py-1 rounded-lg text-[10px] font-black transition-all cursor-pointer active:scale-95 flex items-center gap-1 border border-red-200"
+                                    >
+                                      🗑️ حذف
+                                    </button>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Invoices List item — debtors only (archive uses accordion) */}
+            {activeSubTab === 'debtors' && (
             <div className="max-h-96 overflow-y-auto custom-scroll flex flex-col gap-2.5 mt-1">
-                {(activeSubTab === 'archive' ? filteredArchiveList : filteredDebtorsList).length === 0 ? (
-                  <p className="text-center text-gray-400 py-10 text-xs">لا توجد مبيعات مطابقة أو مسجلة بعد.</p>
+                {filteredDebtorsList.length === 0 ? (
+                  <p className="text-center text-gray-400 py-10 text-xs">لا توجد فواتير مديونين مطابقة.</p>
                 ) : (
-                  (activeSubTab === 'archive' ? filteredArchiveList : [...filteredDebtorsList].sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime())).map((inv, idx) => {
+                  [...filteredDebtorsList].sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime()).map((inv, idx) => {
                     const cust = customers.find(c => c.id === inv.customerId);
                     const remaining = inv.totalAfterDiscount - (inv.paidAmount ?? inv.totalAfterDiscount);
                     return (
@@ -2330,7 +2581,8 @@ export default function InvoiceTab({
                   })
                 )}
               </div>
-            </div>
+            )}
+          </div>
         )}
 
       </div>
@@ -2349,11 +2601,18 @@ export default function InvoiceTab({
             </div>
             
             <div className="p-5 flex-1 overflow-y-auto custom-scroll flex flex-col items-center bg-[#F7FAFC] gap-4">
-               <img 
-                 src={exportInvoiceAsPNG(selectedInvoice, false, true) || ''} 
-                 alt="الفاتورة" 
-                 className="max-w-full rounded-md shadow-sm border border-slate-200 mx-auto"
-               />
+               {previewImageUrl ? (
+                 <img 
+                   src={previewImageUrl} 
+                   alt="الفاتورة" 
+                   className="max-w-full rounded-md shadow-sm border border-slate-200 mx-auto"
+                 />
+               ) : (
+                 <div className="flex items-center justify-center py-10">
+                   <Loader2 className="h-6 w-6 animate-spin text-indigo-400" />
+                   <span className="text-xs text-slate-400 mr-2">جاري تحميل المعاينة...</span>
+                 </div>
+               )}
                <p className="text-[10px] text-slate-400 text-center flex-1 w-full mt-2">نسخة مطابقة للفاتورة الأصلية</p>
             </div>
 
@@ -2431,85 +2690,842 @@ export default function InvoiceTab({
         </div>
       )}
 
-      {justSavedInvoice && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fade-in" id="receipt-modal">
-          <div className="bg-[#FFFFFF] rounded-2xl border border-slate-100 shadow-xl max-w-sm w-full p-6 text-center flex flex-col gap-4 animate-scale-up">
-            <div className={`mx-auto h-12 w-12 rounded-full flex items-center justify-center ${justSavedInvoice._isPreview ? 'bg-indigo-100 text-[#1A365D]' : 'bg-emerald-100 text-[#DD6B20]'}`}>
-              {justSavedInvoice._isPreview ? (
-                <Eye className="h-6 w-6" />
+      {/* Customer Invoices Picker Modal */}
+      {showCustomerInvoices && !selectedReturnInvoice && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in">
+          <div className="bg-white rounded-3xl w-full max-w-lg overflow-hidden shadow-2xl flex flex-col max-h-[85vh] animate-in zoom-in-95 duration-200">
+            <div className="p-4 border-b border-slate-200 flex justify-between items-center bg-indigo-50">
+              <div className="flex items-center gap-2">
+                <RefreshCw className="h-5 w-5 text-indigo-600" />
+                <h3 className="font-bold text-indigo-900 text-sm">اختر فاتورة سابقة للعميل</h3>
+              </div>
+              <button
+                onClick={() => setShowCustomerInvoices(false)}
+                className="bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-full h-7 w-7 flex items-center justify-center transition-colors cursor-pointer text-xs"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="p-4 flex-1 overflow-y-auto custom-scroll flex flex-col gap-2.5">
+              {invoices.filter(inv => inv.customerId === selectedCustomerId).length === 0 ? (
+                <p className="text-center text-slate-400 py-10 text-xs font-bold">لا توجد فواتير سابقة لهذا العميل</p>
               ) : (
-                <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                invoices
+                  .filter(inv => inv.customerId === selectedCustomerId)
+                  .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+                  .slice(0, 50)
+                  .map(inv => {
+                    const remaining = (inv.totalAfterDiscount || 0) - (inv.paidAmount ?? (inv.totalAfterDiscount || 0));
+                    return (
+                      <button
+                        key={inv.id}
+                        type="button"
+                        onClick={() => {
+                          setSelectedReturnInvoice(inv);
+                          setInvoiceReturnItems(getEffectivePrices(inv).map(ei => ({
+                            productId: ei.productId,
+                            weightId: ei.weightId || '',
+                            productName: ei.productName,
+                            weightSize: ei.weightSize,
+                            finalPrice: ei.finalPrice || 0,
+                            quantity: '0',
+                            unitType: 'piece' as const,
+                            unitsPerCarton: ei.unitsPerCarton,
+                            effectiveCartonPrice: ei.effectiveCartonPrice
+                          })));
+                        }}
+                        className="w-full text-right bg-white border border-slate-200 hover:border-indigo-200 rounded-xl p-3 transition-all cursor-pointer active:scale-[0.99]"
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="font-black text-sm text-[#1A365D]">فاتورة #{inv.invoiceNumber}</span>
+                          <span className="text-[10px] text-slate-400 font-bold">
+                            {inv.date && !isNaN(new Date(inv.date).getTime()) ? new Date(inv.date).toLocaleDateString('ar-EG') : ''}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-3 mt-1 text-[11px] font-bold text-slate-600">
+                          <span>الإجمالي: {formatNum(inv.totalAfterDiscount)} ج.م</span>
+                          <span className={remaining > 0 ? 'text-rose-500' : 'text-emerald-600'}>
+                            {remaining > 0 ? `متبقي: ${formatNum(remaining)} ج.م` : 'مسدد بالكامل'}
+                          </span>
+                        </div>
+                        <div className="text-[9px] text-slate-400 mt-1">
+                          {inv.items.length} صنف | {(inv as any).extraDiscountAmount > 0 ? `خصم إضافي: ${formatNum((inv as any).extraDiscountAmount)} ج.م` : 'بدون خصم إضافي'}
+                        </div>
+                      </button>
+                    );
+                  })
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Customer Return Items Modal */}
+      {selectedReturnInvoice && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in">
+          <div className="bg-white rounded-3xl w-full max-w-lg overflow-hidden shadow-2xl flex flex-col max-h-[85vh] animate-in zoom-in-95 duration-200">
+            <div className="p-4 border-b border-slate-200 flex justify-between items-center bg-emerald-50">
+              <div className="flex items-center gap-2">
+                <RefreshCw className="h-5 w-5 text-emerald-600" />
+                <h3 className="font-bold text-emerald-900 text-sm">فاتورة #{selectedReturnInvoice.invoiceNumber} - المرتجعات</h3>
+              </div>
+              <button
+                onClick={() => { setSelectedReturnInvoice(null); setShowCustomerInvoices(false); }}
+                className="bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-full h-7 w-7 flex items-center justify-center transition-colors cursor-pointer text-xs"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="p-4 flex-1 overflow-y-auto custom-scroll flex flex-col gap-3">
+              {/* Original Invoice Summary (read-only) */}
+              <div className="bg-indigo-50/50 rounded-xl p-3 border border-indigo-200">
+                <h4 className="text-[11px] font-black text-indigo-800 mb-2">📋 الفاتورة الأصلية - الأصناف المباعة</h4>
+                {selectedReturnInvoice.items.map((invItem, idx) => {
+                  const prod = products.find(p => String(p.id).trim() === String(invItem.productId).trim());
+                  const weights = prod ? getProductWeightsFallback(prod) : [];
+                  const w = weights.find(ww => String(ww.id).trim() === String(invItem.weightId).trim()) || weights[0];
+                  const upc = w?.unitsPerCarton || 12;
+                  const cartons = Math.floor((invItem.quantity || 0) / upc);
+                  const pieces = (invItem.quantity || 0) % upc;
+                  return (
+                    <div key={idx} className="flex items-center justify-between text-[10px] py-1.5 border-b border-indigo-100 last:border-b-0">
+                      <div className="flex flex-col">
+                        <span className="font-black text-slate-800">{prod?.name || ''} - {w?.size || ''}</span>
+                        <span className="text-[9px] text-slate-500">
+                          الكمية: {cartons > 0 ? `${cartons} كرتونة` : ''} {pieces > 0 ? `${pieces} قطعة` : ''}
+                          {invItem.discountPercent > 0 ? ` | خصم ${invItem.discountPercent}%` : ''}
+                        </span>
+                      </div>
+                      <span className="font-black text-indigo-700">{formatNum((invItem.finalPrice || 0) * (invItem.quantity || 0))} ج.م</span>
+                    </div>
+                  );
+                })}
+                {(selectedReturnInvoice as any).extraDiscountAmount > 0 && (
+                  <div className="text-[9px] text-amber-700 font-bold mt-2 pt-2 border-t border-indigo-200">
+                    ⚠️ الخصم الإضافي: {formatNum((selectedReturnInvoice as any).extraDiscountAmount)} ج.م (موزع على الأصناف)
+                  </div>
+                )}
+                <div className="text-[10px] font-black text-indigo-800 mt-1 pt-1 border-t border-indigo-200">
+                  إجمالي الفاتورة: {formatNum(selectedReturnInvoice.totalAfterDiscount)} ج.م
+                </div>
+              </div>
+
+              {/* Return Items */}
+              {getEffectivePrices(selectedReturnInvoice).map((ei, idx) => {
+                const ri = invoiceReturnItems.find(i => i.productId === ei.productId && i.weightId === (ei.weightId || ''));
+                const qty = ri ? ri.quantity : '0';
+                const unitType = ri ? ri.unitType : 'piece';
+                const piecePrice = ei.effectiveCartonPrice;
+                const cartonPrice = piecePrice * ei.unitsPerCarton;
+                const totalVal = unitType === 'carton'
+                  ? Number(qty || 0) * cartonPrice
+                  : Number(qty || 0) * piecePrice;
+                const maxPieces = ei.quantity || 0;
+                const maxCartons = Math.floor(maxPieces / ei.unitsPerCarton);
+                return (
+                  <div key={idx} className="bg-white border border-emerald-200 rounded-xl p-3 shadow-sm">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-[11px] font-black text-slate-800">{ei.productName} - {ei.weightSize}</span>
+                    </div>
+                    <div className="flex items-center gap-2 mb-2">
+                      <div className="flex-1">
+                        <label className="text-[9px] text-slate-500 font-bold">
+                          {unitType === 'carton' ? `عدد الكراتين (أقصى: ${maxCartons})` : `عدد القطع (أقصى: ${maxPieces})`}
+                        </label>
+                        <input
+                          type="number"
+                          min={0}
+                          max={unitType === 'carton' ? maxCartons : maxPieces}
+                          value={qty}
+                          onChange={(e) => {
+                            const max = unitType === 'carton' ? maxCartons : maxPieces;
+                            const val = Math.min(Math.max(0, Number(e.target.value)), max);
+                            setInvoiceReturnItems(prev => prev.map(ri =>
+                              ri.productId === ei.productId && ri.weightId === (ei.weightId || '')
+                                ? { ...ri, quantity: String(val) }
+                                : ri
+                            ));
+                          }}
+                          className="w-full bg-slate-50 border border-slate-200 rounded-lg p-1.5 text-xs font-bold text-slate-800 outline-none focus:ring-1 focus:ring-emerald-300"
+                        />
+                      </div>
+                      <div className="flex gap-1 items-end pb-1">
+                        <button
+                          onClick={() => setInvoiceReturnItems(prev => prev.map(ri => {
+                            if (ri.productId !== ei.productId || ri.weightId !== (ei.weightId || '')) return ri;
+                            if (ri.unitType === 'carton') return ri;
+                            const conv = Math.floor(Number(ri.quantity || 0) / ei.unitsPerCarton);
+                            return { ...ri, unitType: 'carton' as const, quantity: String(conv) };
+                          }))}
+                          className={`px-2 py-1.5 rounded-lg text-[10px] font-black border cursor-pointer transition-all ${unitType === 'carton' ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}
+                        >
+                          📦 كرتونة
+                        </button>
+                        <button
+                          onClick={() => setInvoiceReturnItems(prev => prev.map(ri => {
+                            if (ri.productId !== ei.productId || ri.weightId !== (ei.weightId || '')) return ri;
+                            if (ri.unitType === 'piece') return ri;
+                            const conv = Number(ri.quantity || 0) * ei.unitsPerCarton;
+                            return { ...ri, unitType: 'piece' as const, quantity: String(conv) };
+                          }))}
+                          className={`px-2 py-1.5 rounded-lg text-[10px] font-black border cursor-pointer transition-all ${unitType === 'piece' ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}
+                        >
+                          🧪 قطعة
+                        </button>
+                      </div>
+                    </div>
+                    <div className="text-[10px] text-slate-500 font-bold">
+                      {unitType === 'carton'
+                        ? `سعر الكرتونة: ${formatNum(cartonPrice)} ج.م`
+                        : `سعر القطعة: ${formatNum(piecePrice)} ج.م`
+                      }
+                      {Number(qty || 0) > 0 && (
+                        <span className="mr-2 text-emerald-700">= {formatNum(totalVal)} ج.م</span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+
+              {/* Summary */}
+              {invoiceReturnItems.some(ri => Number(ri.quantity || 0) > 0) && (
+                <div className="bg-emerald-50 rounded-xl p-3 border border-emerald-200">
+                  <div className="text-[11px] font-black text-emerald-800 mb-1">ملخص المرتجعات</div>
+                  {invoiceReturnItems.filter(ri => Number(ri.quantity || 0) > 0).map((ri, idx) => {
+                    const piecePrice = getEffectivePrices(selectedReturnInvoice).find(ei => ei.productId === ri.productId && (ei.weightId || '') === ri.weightId)?.effectiveCartonPrice || 0;
+                    const cartonPrice = piecePrice * (ri.unitsPerCarton || 12);
+                    const val = ri.unitType === 'carton' ? Number(ri.quantity) * cartonPrice : Number(ri.quantity) * piecePrice;
+                    return (
+                      <div key={idx} className="flex items-center justify-between text-[10px] font-bold text-emerald-700 py-0.5">
+                        <span>{ri.productName} - {ri.weightSize} × {ri.quantity} {ri.unitType === 'carton' ? 'كرتونة' : 'قطعة'}</span>
+                        <span>{formatNum(val)} ج.م</span>
+                      </div>
+                    );
+                  })}
+                  <div className="border-t border-emerald-200 mt-1 pt-1 flex items-center justify-between text-xs font-black text-emerald-900">
+                    <span>الإجمالي</span>
+                    <span>{formatNum(invoiceReturnItems.filter(ri => Number(ri.quantity || 0) > 0).reduce((sum, ri) => {
+                      const piecePrice = getEffectivePrices(selectedReturnInvoice).find(ei => ei.productId === ri.productId && (ei.weightId || '') === ri.weightId)?.effectiveCartonPrice || 0;
+                      const cartonPrice = piecePrice * (ri.unitsPerCarton || 12);
+                      return sum + (ri.unitType === 'carton' ? Number(ri.quantity) * cartonPrice : Number(ri.quantity) * piecePrice);
+                    }, 0))} ج.م</span>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="p-4 border-t border-slate-200 bg-slate-50 flex gap-2">
+              <button
+                onClick={() => setSelectedReturnInvoice(null)}
+                className="flex-1 bg-slate-200 hover:bg-slate-300 text-slate-700 font-extrabold py-3 rounded-xl text-sm transition-colors cursor-pointer active:scale-95"
+              >
+                رجوع للفواتير
+              </button>
+              <button
+                onClick={() => {
+                  const items = invoiceReturnItems.filter(ri => Number(ri.quantity || 0) > 0);
+                  if (items.length === 0) {
+                    showToast('اختر كمية مرتجعة على الأقل', 'error');
+                    return;
+                  }
+                  const returnBillItems: InvoiceItem[] = items.map(ri => {
+                    const piecePrice = getEffectivePrices(selectedReturnInvoice).find(ei => ei.productId === ri.productId && (ei.weightId || '') === ri.weightId)?.effectiveCartonPrice || 0;
+                    const cartonPrice = piecePrice * (ri.unitsPerCarton || 12);
+                    return {
+                      productId: ri.productId,
+                      weightId: ri.weightId,
+                      productName: ri.productName,
+                      weightSize: ri.weightSize,
+                      quantity: -(Number(ri.quantity)),
+                      cartonPrice: 0,
+                      unitPrice: 0,
+                      finalPrice: ri.unitType === 'carton' ? cartonPrice : piecePrice,
+                      discountPercent: 0,
+                      totalBeforeDiscount: 0,
+                    };
+                  });
+                  setBillItems(prev => [...prev, ...returnBillItems]);
+                  setSelectedReturnInvoice(null);
+                  setShowCustomerInvoices(false);
+                  showToast(`✓ تم إضافة ${items.length} صنف مرتجع للفاتورة`, 'success');
+                }}
+                disabled={!invoiceReturnItems.some(ri => Number(ri.quantity || 0) > 0)}
+                className="flex-1 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 text-white font-extrabold py-3 rounded-xl text-sm transition-colors cursor-pointer active:scale-95 shadow-md disabled:cursor-not-allowed"
+              >
+                إضافة المرتجعات للفاتورة
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Return Modal */}
+      {returnModal.isOpen && returnModal.invoice && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in">
+          <div className="bg-white rounded-3xl w-full max-w-lg overflow-hidden shadow-2xl flex flex-col max-h-[90vh] animate-in zoom-in-95 duration-200">
+            <div className="p-4 border-b border-slate-200 flex justify-between items-center bg-rose-50">
+              <div className="flex items-center gap-2">
+                <RefreshCw className="h-5 w-5 text-rose-600" />
+                <h3 className="font-bold text-rose-900 text-sm">عمل مرتجع / استبدال</h3>
+              </div>
+              <button
+                onClick={() => setReturnModal({ isOpen: false, invoice: null })}
+                className="bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-full h-7 w-7 flex items-center justify-center transition-colors cursor-pointer text-xs"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="p-4 flex-1 overflow-y-auto custom-scroll flex flex-col gap-3">
+              {/* Invoice Info */}
+              <div className="bg-slate-50 rounded-xl p-3 border border-slate-200">
+                <div className="flex items-center justify-between text-[11px] font-bold text-slate-600 mb-2">
+                  <span>فاتورة #{returnModal.invoice.invoiceNumber}</span>
+                  <span>{returnModal.invoice.date && !isNaN(new Date(returnModal.invoice.date).getTime()) ? new Date(returnModal.invoice.date).toLocaleDateString('ar-EG') : ''}</span>
+                </div>
+                <div className="text-xs font-black text-[#1A365D]">
+                  {customers.find(c => c.id === returnModal.invoice?.customerId)?.name || 'عميل غير محدد'}
+                </div>
+              </div>
+
+              {/* Original Invoice Summary (read-only) */}
+              <div className="bg-indigo-50/50 rounded-xl p-3 border border-indigo-200">
+                <h4 className="text-[11px] font-black text-indigo-800 mb-2">📋 الفاتورة الأصلية - الأصناف المباعة</h4>
+                {returnModal.invoice.items.map((invItem, idx) => {
+                  const prod = products.find(p => String(p.id).trim() === String(invItem.productId).trim());
+                  const weights = prod ? getProductWeightsFallback(prod) : [];
+                  const w = weights.find(ww => String(ww.id).trim() === String(invItem.weightId).trim()) || weights[0];
+                  const upc = w?.unitsPerCarton || 12;
+                  const cartons = Math.floor((invItem.quantity || 0) / upc);
+                  const pieces = (invItem.quantity || 0) % upc;
+                  const effectiveItems = getEffectivePrices(returnModal.invoice);
+                  const effectiveItem = effectiveItems.find(ei => ei.productId === invItem.productId && (ei.weightId || '') === (invItem.weightId || ''));
+                  const effPrice = effectiveItem?.effectiveCartonPrice || invItem.finalPrice || 0;
+                  return (
+                    <div key={idx} className="flex items-center justify-between text-[10px] py-1.5 border-b border-indigo-100 last:border-b-0">
+                      <div className="flex flex-col">
+                        <span className="font-black text-slate-800">{prod?.name || ''} - {w?.size || ''}</span>
+                        <span className="text-[9px] text-slate-500">
+                          الكمية: {cartons > 0 ? `${cartons} كرتونة` : ''} {pieces > 0 ? `${pieces} قطعة` : ''}
+                          {invItem.discountPercent > 0 ? ` | خصم ${invItem.discountPercent}%` : ''}
+                        </span>
+                      </div>
+                      <span className="font-black text-indigo-700">{formatNum((invItem.finalPrice || 0) * (invItem.quantity || 0))} ج.م</span>
+                    </div>
+                  );
+                })}
+                {(returnModal.invoice as any).extraDiscountAmount > 0 && (
+                  <div className="text-[9px] text-amber-700 font-bold mt-2 pt-2 border-t border-indigo-200">
+                    ⚠️ الخصم الإضافي: {formatNum((returnModal.invoice as any).extraDiscountAmount)} ج.م (موزع على الأصناف)
+                  </div>
+                )}
+                <div className="text-[10px] font-black text-indigo-800 mt-1 pt-1 border-t border-indigo-200">
+                  إجمالي الفاتورة: {formatNum(returnModal.invoice.totalAfterDiscount)} ج.م
+                </div>
+              </div>
+
+              {/* Return Items */}
+              <div>
+                <label className="text-[11px] font-black text-slate-700 mb-1.5 block">🔄 الأصناف المراد إرجاعها</label>
+                {returnForm.items.map((item, idx) => {
+                  const invItem = returnModal.invoice?.items.find(i => i.productId === item.productId && (i.weightId || '') === (item.weightId || ''));
+                  const maxPieces = invItem?.quantity || 0;
+                  const prod = products.find(p => p.id === item.productId);
+                  const weight = prod?.weights?.find(w => w.id === item.weightId);
+                  const unitsPerCarton = weight?.unitsPerCarton || 12;
+                  const maxCartons = Math.floor(maxPieces / unitsPerCarton);
+                  const effectiveItems = returnModal.invoice ? getEffectivePrices(returnModal.invoice) : [];
+                  const effectiveItem = effectiveItems.find(ei => ei.productId === item.productId && (ei.weightId || '') === (item.weightId || ''));
+                  const piecePrice = effectiveItem?.effectiveCartonPrice || invItem?.finalPrice || 0;
+                  const cartonPrice = piecePrice * unitsPerCarton;
+                  const qtyNum = Number(item.quantity || 0);
+                  const totalVal = item.unitType === 'carton' ? qtyNum * cartonPrice : qtyNum * piecePrice;
+                  return (
+                    <div key={idx} className="bg-white border border-rose-200 rounded-xl p-3 mb-2 shadow-sm">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-[11px] font-black text-slate-800">
+                          {prod?.name || item.productId} {weight ? `- ${weight.size}` : ''}
+                        </span>
+                        <button
+                          onClick={() => {
+                            setReturnForm(prev => ({
+                              ...prev,
+                              items: prev.items.filter((_, i) => i !== idx)
+                            }));
+                          }}
+                          className="text-rose-500 hover:text-rose-700 text-[10px] font-bold cursor-pointer"
+                        >
+                          حذف
+                        </button>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <div className="flex-1">
+                          <label className="text-[9px] text-slate-500 font-bold">
+                            {item.unitType === 'carton' ? `عدد الكراتين (أقصى: ${maxCartons})` : `عدد القطع (أقصى: ${maxPieces})`}
+                          </label>
+                          <input
+                            type="number"
+                            min={0}
+                            max={item.unitType === 'carton' ? maxCartons : maxPieces}
+                            value={item.quantity}
+                            onChange={(e) => {
+                              const max = item.unitType === 'carton' ? maxCartons : maxPieces;
+                              const val = Math.min(Math.max(0, Number(e.target.value)), max);
+                              setReturnForm(prev => ({
+                                ...prev,
+                                items: prev.items.map((it, i) => i === idx ? { ...it, quantity: String(val) } : it)
+                              }));
+                            }}
+                            className="w-full bg-white border border-slate-200 rounded-lg p-1.5 text-xs font-bold text-slate-800 outline-none focus:ring-1 focus:ring-rose-300"
+                          />
+                        </div>
+                        <div className="flex gap-1 items-end pb-1">
+                          <button
+                            onClick={() => {
+                              setReturnForm(prev => ({
+                                ...prev,
+                                items: prev.items.map((it, i) => {
+                                  if (i !== idx) return it;
+                                  if (it.unitType === 'carton') return it;
+                                  const conv = Math.floor(Number(it.quantity || 0) / unitsPerCarton);
+                                  return { ...it, unitType: 'carton' as const, quantity: String(conv) };
+                                })
+                              }));
+                            }}
+                            className={`px-2 py-1.5 rounded-lg text-[10px] font-black border cursor-pointer transition-all ${item.unitType === 'carton' ? 'bg-rose-600 text-white border-rose-600 shadow-sm' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}
+                          >
+                            📦 كرتونة
+                          </button>
+                          <button
+                            onClick={() => {
+                              setReturnForm(prev => ({
+                                ...prev,
+                                items: prev.items.map((it, i) => {
+                                  if (i !== idx) return it;
+                                  if (it.unitType === 'piece') return it;
+                                  const conv = Number(it.quantity || 0) * unitsPerCarton;
+                                  return { ...it, unitType: 'piece' as const, quantity: String(conv) };
+                                })
+                              }));
+                            }}
+                            className={`px-2 py-1.5 rounded-lg text-[10px] font-black border cursor-pointer transition-all ${item.unitType === 'piece' ? 'bg-rose-600 text-white border-rose-600 shadow-sm' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}
+                          >
+                            🧪 قطعة
+                          </button>
+                        </div>
+                      </div>
+                      <div className="text-[10px] text-slate-500 font-bold mt-1">
+                        {item.unitType === 'carton'
+                          ? `سعر الكرتونة: ${formatNum(cartonPrice)} ج.م`
+                          : `سعر القطعة: ${formatNum(piecePrice)} ج.م`
+                        }
+                        {qtyNum > 0 && <span className="mr-2 text-rose-700">= {formatNum(totalVal)} ج.م</span>}
+                      </div>
+                    </div>
+                  );
+                })}
+                <button
+                  onClick={() => {
+                    const addedProducts = new Set(returnForm.items.map(i => `${i.productId}_${i.weightId}`));
+                    const availableItems = (returnModal.invoice?.items || []).filter(
+                      invItem => !addedProducts.has(`${invItem.productId}_${invItem.weightId || ''}`)
+                    );
+                    if (availableItems.length === 0) {
+                      showToast('لا توجد أصناف متاحة للإضافة', 'error');
+                      return;
+                    }
+                    setReturnForm(prev => ({
+                      ...prev,
+                      items: [...prev.items, {
+                        productId: availableItems[0].productId,
+                        weightId: availableItems[0].weightId || '',
+                        quantity: '0',
+                        unitType: 'piece'
+                      }]
+                    }));
+                  }}
+                  className="w-full bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 border-dashed rounded-xl py-2 text-[11px] font-black transition-all cursor-pointer active:scale-95"
+                >
+                  + إضافة صنف
+                </button>
+              </div>
+
+              {/* Movement Type */}
+              <div>
+                <label className="text-[11px] font-black text-slate-700 mb-1.5 block">نوع الحركة المالية</label>
+                <div className="grid grid-cols-3 gap-2">
+                  {[
+                    { type: 'cash_refund' as ReturnMovementType, label: 'مرتجع كاش', icon: '💵' },
+                    { type: 'credit_note' as ReturnMovementType, label: 'مرتجع رصيد', icon: '📝' },
+                    { type: 'exchange' as ReturnMovementType, label: 'استبدال', icon: '🔄' }
+                  ].map(opt => (
+                    <button
+                      key={opt.type}
+                      onClick={() => setReturnForm(prev => ({ ...prev, movementType: opt.type }))}
+                      className={`p-2.5 rounded-xl text-[10px] font-black border transition-all cursor-pointer active:scale-95 text-center ${
+                        returnForm.movementType === opt.type
+                          ? 'bg-rose-600 text-white border-rose-600 shadow-md'
+                          : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                      }`}
+                    >
+                      <div className="text-base mb-0.5">{opt.icon}</div>
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Exchange details */}
+              {returnForm.movementType === 'exchange' && (() => {
+                const exProd = products.find(p => p.id === returnForm.exchangeProductId);
+                const exWeight = exProd?.weights?.find(w => w.id === returnForm.exchangeWeightId);
+                const exchUnitsPerCarton = exWeight?.unitsPerCarton || 12;
+                const exchPiecePrice = exWeight?.retailPricePerUnit || 0;
+                const exchCartonPrice = exchPiecePrice * exchUnitsPerCarton;
+                const exchQtyNum = Number(returnForm.exchangeQty || 0);
+                const exchTotal = returnForm.exchangeUnitType === 'carton' ? exchQtyNum * exchCartonPrice : exchQtyNum * exchPiecePrice;
+                const returnTotal = returnForm.items.reduce((sum, item) => {
+                  const invItem = returnModal.invoice?.items.find(i => i.productId === item.productId && (i.weightId || '') === (item.weightId || ''));
+                  const effectiveItems = returnModal.invoice ? getEffectivePrices(returnModal.invoice) : [];
+                  const effectiveItem = effectiveItems.find(ei => ei.productId === item.productId && (ei.weightId || '') === (item.weightId || ''));
+                  const piecePrice = effectiveItem?.effectiveCartonPrice || invItem?.finalPrice || 0;
+                  const cartonPrice = piecePrice * (effectiveItem?.unitsPerCarton || 12);
+                  return sum + (item.unitType === 'carton' ? Number(item.quantity || 0) * cartonPrice : Number(item.quantity || 0) * piecePrice);
+                }, 0);
+                const difference = returnTotal - exchTotal;
+                return (
+                <div className="bg-blue-50 rounded-xl p-3 border border-blue-200">
+                  <div className="grid grid-cols-2 gap-3">
+                    {/* Left: Returned items summary */}
+                    <div className="bg-rose-50 rounded-lg p-2 border border-rose-200">
+                      <div className="text-[10px] font-black text-rose-800 mb-1.5">🔄 الأصناف المرتجعة</div>
+                      {returnForm.items.map((item, idx) => {
+                        const invItem = returnModal.invoice?.items.find(i => i.productId === item.productId && (i.weightId || '') === (item.weightId || ''));
+                        const prod = products.find(p => p.id === item.productId);
+                        const weight = prod?.weights?.find(w => w.id === item.weightId);
+                        const effectiveItems = returnModal.invoice ? getEffectivePrices(returnModal.invoice) : [];
+                        const effectiveItem = effectiveItems.find(ei => ei.productId === item.productId && (ei.weightId || '') === (item.weightId || ''));
+                        const piecePrice = effectiveItem?.effectiveCartonPrice || invItem?.finalPrice || 0;
+                        const cartonPrice = piecePrice * (weight?.unitsPerCarton || 12);
+                        const val = item.unitType === 'carton' ? Number(item.quantity || 0) * cartonPrice : Number(item.quantity || 0) * piecePrice;
+                        return (
+                          <div key={idx} className="flex items-center justify-between text-[9px] font-bold text-rose-700 py-0.5">
+                            <span>{prod?.name || item.productId} × {item.quantity} {item.unitType === 'carton' ? 'كرتونة' : 'قطعة'}</span>
+                            <span>{formatNum(val)} ج.م</span>
+                          </div>
+                        );
+                      })}
+                      <div className="border-t border-rose-200 mt-1 pt-1 text-[10px] font-black text-rose-900 flex justify-between">
+                        <span>المجموع</span>
+                        <span>{formatNum(returnTotal)} ج.م</span>
+                      </div>
+                    </div>
+                    {/* Right: Exchange product */}
+                    <div className="bg-emerald-50 rounded-lg p-2 border border-emerald-200">
+                      <div className="text-[10px] font-black text-emerald-800 mb-1.5">🆕 الصنف البديل</div>
+                      <select
+                        value={`${returnForm.exchangeProductId}_${returnForm.exchangeWeightId}`}
+                        onChange={(e) => {
+                          const [pid, wid] = e.target.value.split('_');
+                          setReturnForm(prev => ({
+                            ...prev,
+                            exchangeProductId: pid || '',
+                            exchangeWeightId: wid || '',
+                            exchangeQty: '0'
+                          }));
+                        }}
+                        className="w-full bg-white border border-emerald-200 rounded-lg p-1 text-[10px] font-bold text-slate-700 outline-none focus:ring-1 focus:ring-emerald-300 mb-1.5"
+                      >
+                        <option value="_">اختر الصنف البديل</option>
+                        {products.filter(p => p.weights && p.weights.length > 0).map(p =>
+                          p.weights!.map(w => (
+                            <option key={`${p.id}_${w.id}`} value={`${p.id}_${w.id}`}>
+                              {p.name} - {w.size}
+                            </option>
+                          ))
+                        )}
+                      </select>
+                      {exWeight && (
+                        <>
+                          <div className="flex items-center gap-1 mb-1">
+                            <div className="flex gap-0.5">
+                              <button
+                                onClick={() => {
+                                  if (returnForm.exchangeUnitType === 'carton') return;
+                                  const conv = Math.floor(Number(returnForm.exchangeQty || 0) / exchUnitsPerCarton);
+                                  setReturnForm(prev => ({ ...prev, exchangeUnitType: 'carton', exchangeQty: String(conv) }));
+                                }}
+                                className={`px-1.5 py-0.5 rounded text-[8px] font-black border cursor-pointer ${returnForm.exchangeUnitType === 'carton' ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white text-slate-600 border-slate-200'}`}
+                              >📦 كرتونة</button>
+                              <button
+                                onClick={() => {
+                                  if (returnForm.exchangeUnitType === 'piece') return;
+                                  const conv = Number(returnForm.exchangeQty || 0) * exchUnitsPerCarton;
+                                  setReturnForm(prev => ({ ...prev, exchangeUnitType: 'piece', exchangeQty: String(conv) }));
+                                }}
+                                className={`px-1.5 py-0.5 rounded text-[8px] font-black border cursor-pointer ${returnForm.exchangeUnitType === 'piece' ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white text-slate-600 border-slate-200'}`}
+                              >🧪 قطعة</button>
+                            </div>
+                            <input
+                              type="number"
+                              min="0"
+                              value={returnForm.exchangeQty}
+                              onChange={(e) => setReturnForm(prev => ({ ...prev, exchangeQty: e.target.value }))}
+                              className="flex-1 bg-white border border-emerald-200 rounded-lg p-1 text-[10px] font-bold text-slate-800 outline-none focus:ring-1 focus:ring-emerald-300 text-center"
+                            />
+                          </div>
+                          <div className="text-[8px] text-emerald-700 font-bold mb-0.5">
+                            سعر {returnForm.exchangeUnitType === 'carton' ? 'الكرتونة' : 'القطعة'}: {formatNum(returnForm.exchangeUnitType === 'carton' ? exchCartonPrice : exchPiecePrice)} ج.م
+                          </div>
+                          {exchQtyNum > 0 && (
+                            <div className="text-[10px] font-black text-emerald-800 flex justify-between pt-1 border-t border-emerald-200">
+                              <span>المجموع</span>
+                              <span>{formatNum(exchTotal)} ج.م</span>
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  </div>
+                  {/* Difference */}
+                  {exchQtyNum > 0 && returnTotal > 0 && (
+                    <div className={`mt-2 p-2 rounded-lg border text-[11px] font-black flex justify-between ${difference >= 0 ? 'bg-amber-50 border-amber-200 text-amber-800' : 'bg-sky-50 border-sky-200 text-sky-800'}`}>
+                      <span>{difference >= 0 ? 'الفارق لصالح العميل (رصيد)' : 'المطلوب من العميل'}</span>
+                      <span>{formatNum(Math.abs(difference))} ج.م</span>
+                    </div>
+                  )}
+                  {/* Settlement method */}
+                  <div className="mt-2">
+                    <label className="text-[9px] font-bold text-blue-700 mb-0.5 block">تسوية الفرق</label>
+                    <div className="flex gap-1.5">
+                      <button
+                        onClick={() => setReturnForm(prev => ({ ...prev, exchangeSettlementMethod: 'cash' }))}
+                        className={`flex-1 py-1 rounded-lg text-[9px] font-black border cursor-pointer transition-all ${
+                          returnForm.exchangeSettlementMethod === 'cash' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-slate-600 border-slate-200'
+                        }`}
+                      >نقداً</button>
+                      <button
+                        onClick={() => setReturnForm(prev => ({ ...prev, exchangeSettlementMethod: 'credit' }))}
+                        className={`flex-1 py-1 rounded-lg text-[9px] font-black border cursor-pointer transition-all ${
+                          returnForm.exchangeSettlementMethod === 'credit' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-slate-600 border-slate-200'
+                        }`}
+                      >رصيد دائن</button>
+                    </div>
+                  </div>
+                </div>
+              )})()}
+
+              {/* Notes */}
+              <div>
+                <label className="text-[11px] font-black text-slate-700 mb-1 block">ملاحظات (اختياري)</label>
+                <input
+                  type="text"
+                  value={returnForm.notes}
+                  onChange={(e) => setReturnForm(prev => ({ ...prev, notes: e.target.value }))}
+                  placeholder="سبب المرتجع..."
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2 text-xs font-bold text-slate-700 outline-none focus:ring-1 focus:ring-rose-300"
+                />
+              </div>
+
+              {/* Summary */}
+              {returnForm.items.length > 0 && (() => {
+                const returnTotal = returnForm.items.reduce((sum, item) => {
+                  const invItem = returnModal.invoice?.items.find(i => i.productId === item.productId && (i.weightId || '') === (item.weightId || ''));
+                  const effectiveItems = returnModal.invoice ? getEffectivePrices(returnModal.invoice) : [];
+                  const effectiveItem = effectiveItems.find(ei => ei.productId === item.productId && (ei.weightId || '') === (item.weightId || ''));
+                  const piecePrice = effectiveItem?.effectiveCartonPrice || invItem?.finalPrice || 0;
+                  const cartonPrice = piecePrice * (effectiveItem?.unitsPerCarton || 12);
+                  return sum + (item.unitType === 'carton' ? Number(item.quantity || 0) * cartonPrice : Number(item.quantity || 0) * piecePrice);
+                }, 0);
+                const exProd = products.find(p => p.id === returnForm.exchangeProductId);
+                const exWeight = exProd?.weights?.find(w => w.id === returnForm.exchangeWeightId);
+                const exchPiecePrice = exWeight?.retailPricePerUnit || 0;
+                const exchCartonPrice = exchPiecePrice * (exWeight?.unitsPerCarton || 12);
+                const exchQtyNum = Number(returnForm.exchangeQty || 0);
+                const exchTotal = returnForm.exchangeUnitType === 'carton' ? exchQtyNum * exchCartonPrice : exchQtyNum * exchPiecePrice;
+                const diff = returnTotal - (returnForm.movementType === 'exchange' && exchQtyNum > 0 ? exchTotal : 0);
+                return (
+                <div className="bg-rose-50 rounded-xl p-3 border border-rose-200">
+                  <div className="text-[11px] font-black text-rose-800 mb-1">ملخص المرتجع</div>
+                  {returnForm.items.map((item, idx) => {
+                    const invItem = returnModal.invoice?.items.find(i => i.productId === item.productId && (i.weightId || '') === (item.weightId || ''));
+                    const prod = products.find(p => p.id === item.productId);
+                    const weight = prod?.weights?.find(w => w.id === item.weightId);
+                    const effectiveItems = returnModal.invoice ? getEffectivePrices(returnModal.invoice) : [];
+                    const effectiveItem = effectiveItems.find(ei => ei.productId === item.productId && (ei.weightId || '') === (item.weightId || ''));
+                    const piecePrice2 = effectiveItem?.effectiveCartonPrice || invItem?.finalPrice || 0;
+                    const cartonPrice2 = piecePrice2 * (weight?.unitsPerCarton || 12);
+                    const value = item.unitType === 'carton' ? Number(item.quantity || 0) * cartonPrice2 : Number(item.quantity || 0) * piecePrice2;
+                    return (
+                      <div key={idx} className="flex items-center justify-between text-[10px] font-bold text-rose-700 py-0.5">
+                        <span>{prod?.name || item.productId} {weight ? `- ${weight.size}` : ''} × {item.quantity} {item.unitType === 'carton' ? 'كرتونة' : 'قطعة'}</span>
+                        <span>{formatNum(value)} ج.م</span>
+                      </div>
+                    );
+                  })}
+                  <div className="border-t border-rose-200 mt-1 pt-1 flex items-center justify-between text-xs font-black text-rose-900">
+                    <span>إجمالي المرتجع</span>
+                    <span>{formatNum(returnTotal)} ج.م</span>
+                  </div>
+                  {returnForm.movementType === 'exchange' && exchQtyNum > 0 && (
+                    <>
+                      <div className="flex items-center justify-between text-[10px] font-black text-emerald-700 mt-1 pt-1 border-t border-emerald-200">
+                        <span>إجمالي البديل ({exProd?.name} - {exWeight?.size})</span>
+                        <span>{formatNum(exchTotal)} ج.م</span>
+                      </div>
+                      <div className={`flex items-center justify-between text-xs font-black mt-1 pt-1 border-t ${diff >= 0 ? 'border-amber-200 text-amber-800' : 'border-sky-200 text-sky-800'}`}>
+                        <span>{diff >= 0 ? 'الفارق (رصيد للعميل)' : 'المطلوب من العميل'}</span>
+                        <span>{formatNum(Math.abs(diff))} ج.م</span>
+                      </div>
+                    </>
+                  )}
+                </div>
+              )})()}
+            </div>
+
+            <div className="p-4 border-t border-slate-200 bg-slate-50">
+              <button
+                onClick={() => {
+                  if (!returnModal.invoice || !onAddReturn || returnForm.items.length === 0) {
+                    showToast('أضف صنفاً واحداً على الأقل', 'error');
+                    return;
+                  }
+                  const inv = returnModal.invoice;
+                  const cust = customers.find(c => c.id === inv.customerId);
+                  const effectiveItems = getEffectivePrices(inv);
+                  const totalVal = returnForm.items.reduce((sum, item) => {
+                    const effectiveItem = effectiveItems.find(ei => ei.productId === item.productId && (ei.weightId || '') === (item.weightId || ''));
+                    const piecePrice = effectiveItem?.effectiveCartonPrice || 0;
+                    const cartonPrice = piecePrice * (effectiveItem?.unitsPerCarton || 12);
+                    return sum + (item.unitType === 'carton' ? Number(item.quantity || 0) * cartonPrice : Number(item.quantity || 0) * piecePrice);
+                  }, 0);
+                  const returnItems: ReturnItem[] = returnForm.items.map(item => {
+                    const invItem = inv.items.find(i => i.productId === item.productId && (i.weightId || '') === (item.weightId || ''));
+                    const prod = products.find(p => p.id === item.productId);
+                    const weight = prod?.weights?.find(w => w.id === item.weightId);
+                    const effectiveItem = effectiveItems.find(ei => ei.productId === item.productId && (ei.weightId || '') === (item.weightId || ''));
+                    const piecePrice = effectiveItem?.effectiveCartonPrice || invItem?.finalPrice || 0;
+                    const cartonPrice = piecePrice * (effectiveItem?.unitsPerCarton || weight?.unitsPerCarton || 12);
+                    const unitPrice = item.unitType === 'carton' ? cartonPrice : piecePrice;
+                    return {
+                      productId: item.productId,
+                      weightId: item.weightId,
+                      productName: prod?.name || '',
+                      weightSize: weight?.size || '',
+                      quantity: Number(item.quantity || 0),
+                      unitType: item.unitType,
+                      unitPrice,
+                      totalValue: unitPrice * Number(item.quantity || 0)
+                    };
+                  });
+                  let exchangeProduct: any = undefined;
+                  let exchangeDifference = 0;
+                  if (returnForm.movementType === 'exchange' && returnForm.exchangeProductId) {
+                    const exProd = products.find(p => p.id === returnForm.exchangeProductId);
+                    const exWeight = exProd?.weights?.find(w => w.id === returnForm.exchangeWeightId);
+                    const exchUnitsPerCarton = exWeight?.unitsPerCarton || 12;
+                    const exchPiecePrice = exWeight?.retailPricePerUnit || 0;
+                    const exchCartonPrice = exchPiecePrice * exchUnitsPerCarton;
+                    const exchQtyNum = Number(returnForm.exchangeQty || 0);
+                    const exchTotal = returnForm.exchangeUnitType === 'carton' ? exchQtyNum * exchCartonPrice : exchQtyNum * exchPiecePrice;
+                    exchangeDifference = totalVal - exchTotal;
+                    exchangeProduct = {
+                      productId: returnForm.exchangeProductId,
+                      weightId: returnForm.exchangeWeightId,
+                      productName: exProd?.name || '',
+                      weightSize: exWeight?.size || '',
+                      cartonPrice: exchCartonPrice,
+                      unitPrice: exchPiecePrice,
+                      quantity: exchQtyNum,
+                      unitType: returnForm.exchangeUnitType,
+                      totalValue: exchTotal
+                    };
+                  }
+                  onAddReturn({
+                    date: nowEgyptISO(),
+                    invoiceId: inv.id,
+                    invoiceNumber: inv.invoiceNumber,
+                    customerId: inv.customerId,
+                    customerName: cust?.name || inv.customerName || '',
+                    delegatePhone: inv.delegatePhone || '',
+                    delegateName: inv.delegateName || '',
+                    items: returnItems,
+                    totalReturnValue: totalVal,
+                    movementType: returnForm.movementType,
+                    exchangeProduct,
+                    exchangeDifference,
+                    exchangeSettlementMethod: returnForm.movementType === 'exchange' ? returnForm.exchangeSettlementMethod : undefined,
+                    notes: returnForm.notes
+                  });
+                  showToast('✓ تم تسجيل المرتجع بنجاح', 'success');
+                  setReturnModal({ isOpen: false, invoice: null });
+                }}
+                disabled={returnForm.items.length === 0}
+                className="w-full bg-rose-600 hover:bg-rose-700 disabled:bg-slate-300 text-white font-extrabold py-3 rounded-xl text-sm transition-colors cursor-pointer active:scale-95 shadow-md disabled:cursor-not-allowed"
+              >
+                تأكيد المرتجع
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {justSavedInvoice && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-3 z-50 animate-fade-in" id="receipt-modal">
+          <div className="bg-[#FFFFFF] rounded-2xl border border-slate-100 shadow-xl max-w-lg w-full p-4 text-center flex flex-col gap-3 animate-scale-up max-h-[95vh]">
+
+            {/* Header */}
+            <div className={`mx-auto h-10 w-10 rounded-full flex items-center justify-center ${justSavedInvoice._isPreview ? 'bg-indigo-100 text-[#1A365D]' : 'bg-emerald-100 text-[#DD6B20]'}`}>
+              {justSavedInvoice._isPreview ? (
+                <Eye className="h-5 w-5" />
+              ) : (
+                <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
                 </svg>
               )}
             </div>
-
             <div>
-              <h3 className="font-extrabold text-[#1A365D] text-lg">
-                {justSavedInvoice._isPreview ? 'معاينة الفاتورة قبل الإصدار 🔍' : 'تم حفظ الفاتورة بنجاح! 🎉'}
+              <h3 className="font-extrabold text-[#1A365D] text-base">
+                {justSavedInvoice._isPreview ? 'معاينة الفاتورة قبل الإصدار' : 'تم حفظ الفاتورة بنجاح!'}
               </h3>
-              <p className="text-xs text-[#2B6CB0] mt-1 font-mono">رقم المستند: {justSavedInvoice.invoiceNumber}</p>
+              <p className="text-[10px] text-[#2B6CB0] mt-0.5 font-mono">رقم المستند: {justSavedInvoice.invoiceNumber}</p>
             </div>
 
-            <div className="bg-[#F7FAFC] rounded-xl p-3 border border-slate-150 text-right text-xs font-semibold text-[#1A365D] flex flex-col items-center gap-2">
-               <img 
-                 src={exportInvoiceAsPNG(justSavedInvoice, false, true) || ''} 
-                 alt="الفاتورة" 
-                 className="max-w-full rounded-md shadow-sm border border-slate-200"
-               />
-               <p className="text-[10.5px] text-slate-400 text-center w-full mt-1">معاينة لصورة الفاتورة المعتمدة</p>
+            {/* Scrollable Invoice Viewport — HTML Direct */}
+            <div className="bg-white border border-slate-200 rounded-2xl max-h-[50vh] overflow-y-auto w-full overflow-x-auto whitespace-nowrap scrollbar-thin">
+              <div
+                dangerouslySetInnerHTML={{ __html: getInvoiceHTML(justSavedInvoice) }}
+                className="w-full"
+                style={{ minHeight: '300px' }}
+              />
             </div>
 
-            {justSavedInvoice._isPreview ? (
-               <p className="text-[10.5px] text-[#2B6CB0] font-bold text-center leading-relaxed">
-                 يمكنك تنزيل صورة الفاتورة للمراجعة أو حفظها نهائياً لإصدارها
-               </p>
-            ) : (
-               <p className="text-[10.5px] text-[#2B6CB0] font-bold text-center leading-relaxed">
-                 اختر إحدى قنوات المراسلة السريعة لإرسال الفاتورة لعميلك مباشرة:
-               </p>
-            )}
-
-            <div className="flex flex-col gap-2">
-              <button
-                type="button"
-                onClick={() => printInvoiceHTMLDirectly(justSavedInvoice)}
-                disabled={isPrinting}
-                className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold py-3 rounded-xl text-xs transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-md active:scale-95 border-none disabled:opacity-50"
-              >
-                <Printer className="h-4 w-4" />
-                <span>الطباعة الفورية للفاتورة المعتمدة (HTML/PDF) 🖨️</span>
-              </button>
-
-              <div className="grid grid-cols-2 gap-2">
+            {/* Action Buttons */}
+            <div className="flex flex-col gap-1.5">
+              {justSavedInvoice._isPreview && (
                 <button
                   type="button"
-                  onClick={() => exportInvoiceAsPNG(justSavedInvoice)}
-                  className="w-full bg-[#1A365D] text-white hover:bg-slate-800 font-bold py-2.5 rounded-xl text-xs transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-sm active:scale-95"
+                  onClick={() => {
+                    setJustSavedInvoice(null);
+                    handleSaveInvoice();
+                  }}
+                  disabled={isSaving}
+                  className="w-full bg-[#DD6B20] text-white hover:bg-[#C05621] font-bold py-2.5 rounded-xl text-xs transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-sm active:scale-95 disabled:opacity-50"
                 >
-                  📥 تنزيل صورة
+                  <Save className="h-3.5 w-3.5" />
+                  حفظ وإصدار الفاتورة فعلياً
                 </button>
+              )}
 
-                <button
-                  type="button"
-                  onClick={() => exportInvoiceAsPDF(justSavedInvoice)}
-                  className="w-full bg-slate-800 text-white hover:bg-slate-700 font-bold py-2.5 rounded-xl text-xs transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-sm active:scale-95"
-                >
-                  <FileText className="h-4 w-4" />
-                  تحميل PDF
-                </button>
-              </div>
-              
               {!justSavedInvoice._isPreview && (
                 <>
                   <button
                     type="button"
                     onClick={() => shareInvoiceOnWhatsApp(justSavedInvoice)}
-                    className="w-full bg-[#DD6B20] text-white hover:bg-[#C05621] text-white font-bold py-2.5 rounded-xl text-xs transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-sm active:scale-95"
+                    className="w-full bg-[#DD6B20] text-white hover:bg-[#C05621] font-bold py-2.5 rounded-xl text-xs transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-sm active:scale-95"
                   >
-                    💬 إرسال الفاتورة كرسالة نصية للواتساب
+                    💬 إرسال الفاتورة للواتساب
                   </button>
-
                   <button
                     type="button"
                     onClick={() => {
@@ -2521,34 +3537,50 @@ export default function InvoiceTab({
                     }}
                     className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2.5 rounded-xl text-xs transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-sm active:scale-95"
                   >
-                    🖼️ مشاركة صورة الفاتورة مباشرة للواتساب
+                    🖼️ مشاركة صورة الفاتورة
                   </button>
                 </>
               )}
 
-              {justSavedInvoice._isPreview && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setJustSavedInvoice(null);
-                      handleSaveInvoice();
-                    }}
-                    disabled={isSaving}
-                    className="w-full bg-[#DD6B20] text-white hover:bg-[#C05621] text-white font-bold py-2.5 rounded-xl text-xs transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-sm active:scale-95 mt-1 disabled:opacity-50"
-                  >
-                    <Save className="h-4 w-4" />
-                    حفظ وإصدار الفاتورة فعلياً
-                  </button>
-              )}
-            </div>
+              {/* Download row: PDF + Image */}
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => exportInvoiceAsPNG(justSavedInvoice)}
+                  className="flex-1 bg-[#1A365D] text-white hover:bg-slate-800 font-bold py-2 rounded-xl text-[10px] transition-all flex items-center justify-center gap-1 cursor-pointer shadow-sm active:scale-95"
+                >
+                  📥 تنزيل صورة
+                </button>
+                <button
+                  type="button"
+                  onClick={() => exportInvoiceAsPDF(justSavedInvoice)}
+                  className="flex-1 bg-slate-800 text-white hover:bg-slate-700 font-bold py-2 rounded-xl text-[10px] transition-all flex items-center justify-center gap-1 cursor-pointer shadow-sm active:scale-95"
+                >
+                  <FileText className="h-3 w-3" />
+                  تحميل PDF
+                </button>
+              </div>
 
-            <button
-              type="button"
-              onClick={() => setJustSavedInvoice(null)}
-              className="w-full bg-[#F7FAFC] hover:bg-slate-200 text-[#1A365D] font-semibold py-2 rounded-xl text-xs transition-colors cursor-pointer"
-            >
-              {justSavedInvoice._isPreview ? 'العودة للتعديل' : 'إغلاق ومتابعة العمل'}
-            </button>
+              {/* Print + Back row */}
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => printInvoiceHTMLDirectly(justSavedInvoice)}
+                  disabled={isPrinting}
+                  className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 rounded-xl text-[10px] transition-all flex items-center justify-center gap-1 cursor-pointer shadow-sm active:scale-95 border-none disabled:opacity-50"
+                >
+                  <Printer className="h-3 w-3" />
+                  طباعة فورية
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setJustSavedInvoice(null)}
+                  className="flex-1 bg-[#F7FAFC] hover:bg-slate-200 text-[#1A365D] font-semibold py-2 rounded-xl text-[10px] transition-colors cursor-pointer"
+                >
+                  {justSavedInvoice._isPreview ? 'العودة للتعديل' : 'إغلاق'}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

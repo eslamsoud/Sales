@@ -873,7 +873,7 @@ export default function PricesTab({ products: rawProducts, onGoBack, permittedSu
                   </div>
 
                   {/* Weights container displaying HTML Table */}
-                  <div className="overflow-x-auto -mx-4 sm:mx-0">
+                  <div className="w-full overflow-x-auto whitespace-nowrap scrollbar-thin -mx-4 sm:mx-0">
                     <table className="w-full text-xs text-right border-collapse border border-slate-200 min-w-[650px]">
                       <thead className="bg-[#1A365D] text-white text-[11px]">
                         <tr>

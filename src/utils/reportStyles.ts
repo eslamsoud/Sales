@@ -153,6 +153,8 @@ export const PROFESSIONAL_CSS = `
     width: 100%;
     border-collapse: collapse;
     margin-bottom: 14px;
+    margin-left: auto !important;
+    margin-right: auto !important;
     font-size: 10px;
   }
   th {
@@ -573,9 +575,11 @@ export const COMPACT_PRO_CSS = `
     width: 100% !important;
     max-width: 100% !important;
     margin: 6px auto !important;
+    margin-left: auto !important;
+    margin-right: auto !important;
     border-collapse: separate !important;
     border-spacing: 0 !important;
-    table-layout: fixed !important;
+    table-layout: auto !important;
     word-wrap: break-word !important;
     border-radius: 8px !important;
     overflow: hidden !important;

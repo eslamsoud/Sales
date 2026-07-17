@@ -11,14 +11,12 @@ function todayEgyptISO() {
 }
 
 function getSafeString(val) {
-  // 1. إذا كانت القيمة كائن تاريخ أصلي قادم من الشيت
   if (val instanceof Date) {
     return Utilities.formatDate(val, EGYPT_TZ, "yyyy-MM-dd'T'HH:mm:ss");
   }
   
   var str = String(val !== undefined && val !== null ? val : '').trim();
   
-  // 2. اصطياد النصوص التي تنتهي بـ Z (UTC) وتحويلها فوراً لتوقيت مصر
   var utcPattern = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{3})?Z$/;
   var utcPatternShort = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
   
@@ -28,9 +26,7 @@ function getSafeString(val) {
       if (!isNaN(dateObj.getTime())) {
         return Utilities.formatDate(dateObj, EGYPT_TZ, "yyyy-MM-dd'T'HH:mm:ss");
       }
-    } catch(err) {
-      // في حال حدوث خطأ نادر يتم إرجاع النص كما هو كحماية
-    }
+    } catch(err) {}
   }
   
   return str;
@@ -54,7 +50,6 @@ function getSafePhone(val) {
   return formatPhone(val);
 }
 
-// 1. استقبال طلب الجلب والتحديث الميداني ثنائي الاتجاه مع نظام التخزين المؤقت (Cache)
 function doGet(e) {
   try {
     var SHEET_URL = ""; 
@@ -106,7 +101,10 @@ function doGet(e) {
         items: items, delegatePhone: getSafePhone(row[10]),
         customerId: getSafeString(row[11]),
         totalBeforeDiscount: getSafeNumber(row[12]) || getSafeNumber(row[5]),
-        isDelivered: (row[13] === '' || row[13] === undefined) ? true : (row[13] === 'true' || row[13] === true)
+        isDelivered: (row[13] === '' || row[13] === undefined) ? true : (row[13] === 'true' || row[13] === true),
+        archivedAt: getSafeString(row[16]),
+        archived: row[17] === 'نعم' || row[17] === true,
+        isArchived: row[18] === 'نعم' || row[18] === true
       };
     }
 
@@ -120,7 +118,10 @@ function doGet(e) {
       return { 
         id: expId, date: getSafeString(row[1]), category: getSafeString(row[2]), 
         type: getSafeString(row[3]), amount: getSafeNumber(row[4]), description: getSafeString(row[5]),
-        delegateName: getSafeString(row[6]).replace(/\s*\(.*?\)/g, '').trim(), delegatePhone: getSafePhone(row[7])
+        delegateName: getSafeString(row[6]).replace(/\s*\(.*?\)/g, '').trim(), delegatePhone: getSafePhone(row[7]),
+        archivedAt: getSafeString(row[8]),
+        archived: row[9] === 'نعم' || row[9] === true,
+        isArchived: row[10] === 'نعم' || row[10] === true
       };
     });
 
@@ -192,7 +193,10 @@ function doGet(e) {
             cartonsCount: getSafeNumber(row[6]), quantity: getSafeNumber(row[7]), 
             advanceAmount: getSafeNumber(row[8]), warehouseKeeper: getSafeString(row[9]),
             delegateName: getSafeString(row[10]).replace(/\s*\(.*?\)/g, '').trim(), delegatePhone: getSafePhone(row[11]),
-            cartonPrice: getSafeNumber(row[12]), unitPrice: getSafeNumber(row[13])
+            cartonPrice: getSafeNumber(row[12]), unitPrice: getSafeNumber(row[13]),
+            archivedAt: getSafeString(row[14]),
+            archived: row[15] === 'نعم' || row[15] === true,
+            isArchived: row[16] === 'نعم' || row[16] === true
           };
         } else {
           return { 
@@ -251,7 +255,31 @@ function doGet(e) {
         totalAdvancePayments: getSafeNumber(row[5]), creditBalance: getSafeNumber(row[6]),
         carriedOverDebtAtTime: getSafeNumber(row[7]), waivedAmount: getSafeNumber(row[8]),
         loads: loads, payments: payments,
-        delegatePhone: getSafePhone(row[11]), delegateName: getSafeString(row[12])
+        delegatePhone: getSafePhone(row[11]), delegateName: getSafeString(row[12]),
+        amountPaidInSettlement: getSafeNumber(row[13]),
+        amountCarriedOver: getSafeNumber(row[14]),
+        settlementReason: getSafeString(row[15])
+      };
+    });
+
+    result.returns = safeGetSheetData('المرتجعات', function(row) {
+      var items = [];
+      try { items = JSON.parse(getSafeString(row[10])); } catch(e) { items = []; }
+      var exchangeProduct = null;
+      try { exchangeProduct = JSON.parse(getSafeString(row[13])); } catch(e) { exchangeProduct = null; }
+      return {
+        id: getSafeString(row[0]), date: getSafeString(row[1]),
+        invoiceId: getSafeString(row[2]), invoiceNumber: getSafeString(row[3]),
+        customerId: getSafeString(row[4]), customerName: getSafeString(row[5]),
+        delegatePhone: getSafePhone(row[6]), delegateName: getSafeString(row[7]),
+        movementType: getSafeString(row[8]), totalReturnValue: getSafeNumber(row[9]),
+        items: items, notes: getSafeString(row[11]),
+        exchangeDifference: getSafeNumber(row[12]),
+        exchangeProduct: exchangeProduct,
+        exchangeSettlementMethod: getSafeString(row[14]),
+        archivedAt: getSafeString(row[15]),
+        archived: row[16] === 'نعم' || row[16] === true,
+        isArchived: row[17] === 'نعم' || row[17] === true
       };
     });
 
@@ -273,7 +301,6 @@ function doGet(e) {
   }
 }
 
-// 2. استقبال طلب الصب والترحيل والنسخ الاحتياطي مع نظام الحماية (LockService)
 function doPost(e) {
   try {
     Logger.log("Incoming doPost request. Payload size: " + (e && e.postData && e.postData.contents ? e.postData.contents.length : 0) + " characters.");
@@ -284,12 +311,10 @@ function doPost(e) {
     
     var SHEET_URL = "";
     var data = JSON.parse(e.postData.contents);
-    var deletedIds = data.deletedIds || [];
     var isOwner = data.syncRole === 'owner' 
       || data.syncPhone === '01228466613' 
       || (data.customRoleName && (data.customRoleName.includes('نائب المدير') || data.customRoleName.includes('مشرف عام')));
     var canEditPrices = data.canEditPrices === true || isOwner;
-    if (!isOwner) deletedIds = [];
     
     var ss;
     try {
@@ -315,88 +340,59 @@ function doPost(e) {
       }
     }
 
-    function upsertData(sheetName, headers, dataRows, headerColor, delIds) {
+    // 🛡️ قراءة المعرفات الحالية من الشيت لمنع الحذف بالخطأ
+    function getExistingIds(sheetName) {
+      var sheet = ss.getSheetByName(sheetName);
+      if (!sheet || sheet.getLastRow() <= 1) return [];
+      var colA = sheet.getRange(2, 1, sheet.getLastRow() - 1, 1).getValues();
+      var ids = [];
+      for (var i = 0; i < colA.length; i++) {
+        var id = String(colA[i][0]).replace(/^'/, '').trim();
+        if (id) {
+          if (id.length === 10 && id.indexOf('1') === 0) id = '0' + id;
+          ids.push(id);
+        }
+      }
+      return ids;
+    }
+
+    function upsertData(sheetName, headers, dataRows, headerColor) {
       var sheet = ss.getSheetByName(sheetName);
       if (!sheet) {
         sheet = ss.insertSheet(sheetName);
       }
       
-      var existingRange = sheet.getDataRange();
-      var existingData = existingRange.getValues();
-      
-      var dataMap = {};
-      var order = [];
-      
-      if (existingData.length > 1) {
-        for (var k = 1; k < existingData.length; k++) {
-          var r = existingData[k];
-          
-          if (!r || r.length === 0) continue;
-          var allEmpty = true;
-          for (var chk = 0; chk < r.length; chk++) {
-            if (String(r[chk]).trim() !== '') { allEmpty = false; break; }
-          }
-          if (allEmpty) continue;
-          
-          var rowId = String(r[0]).replace(/^'/, '').trim();
-          if (rowId === '') {
-            rowId = 'manual_' + sheetName.replace(/[^a-zA-Z0-9]/g, '') + '_' + k + '_' + Date.now();
-            r[0] = rowId;
-          }
-          var altId = String(r[1]).replace(/^'/, '').trim();
-          if (rowId.length === 10 && rowId.indexOf('1') === 0) rowId = '0' + rowId;
-          
-          if (delIds && (delIds.indexOf(rowId) !== -1 || delIds.indexOf(altId) !== -1)) continue;
-          
-          var paddedRow = [];
-          for (var c = 0; c < headers.length; c++) {
-            paddedRow.push(r[c] !== undefined ? r[c] : '');
-          }
-          dataMap[rowId] = paddedRow;
-          order.push(rowId);
-        }
-      }
-      
-      if (dataRows && dataRows.length > 0) {
-        for (var j = 0; j < dataRows.length; j++) {
-          var row = dataRows[j];
-          if (!row || row.length === 0) continue;
-  
-          var incomingId = String(row[0]).replace(/^'/, '').trim();
-          if (incomingId === '') {
-            incomingId = 'auto_' + sheetName.replace(/[^a-zA-Z0-9]/g, '') + '_' + j + '_' + Date.now();
-          }
-          if (incomingId.length === 10 && incomingId.indexOf('1') === 0) incomingId = '0' + incomingId;
-          
-          if (delIds && delIds.indexOf(incomingId) !== -1) continue;
-          
-          var paddedNewRow = [];
-          for (var col = 0; col < headers.length; col++) {
-            paddedNewRow.push(row[col] !== undefined ? row[col] : '');
-          }
-          dataMap[incomingId] = paddedNewRow;
-          
-          if (order.indexOf(incomingId) === -1) {
-            order.push(incomingId);
-          }
-        }
+      // 🛡️ حماية حاسمة: إذا البيانات الواردة فارغة، لا تحذف شيئاً من الشيت
+      if (!dataRows || dataRows.length === 0) {
+        Logger.log('⛔ upsertData SKIPPED for ' + sheetName + ': incoming dataRows is empty — preserving existing rows');
+        return;
       }
       
       var finalData = [headers];
-      for (var i = 0; i < order.length; i++) {
-        finalData.push(dataMap[order[i]]);
+      for (var j = 0; j < dataRows.length; j++) {
+        var row = dataRows[j];
+        if (!row || row.length === 0) continue;
+        var paddedRow = [];
+        for (var col = 0; col < headers.length; col++) {
+          paddedRow.push(row[col] !== undefined ? row[col] : '');
+        }
+        finalData.push(paddedRow);
       }
 
       if (sheet.getMaxColumns() < headers.length) {
         sheet.insertColumnsAfter(sheet.getMaxColumns(), headers.length - sheet.getMaxColumns());
       }
 
-      if (sheet.getMaxRows() < finalData.length + 10) {
-        sheet.insertRowsAfter(sheet.getMaxRows(), Math.max(50, finalData.length - sheet.getMaxRows() + 10));
+      var existingRowCount = sheet.getLastRow();
+      if (sheet.getMaxRows() < finalData.length) {
+        sheet.insertRowsAfter(sheet.getMaxRows(), finalData.length - sheet.getMaxRows());
       }
 
-      sheet.clearContents();
+      // 📝 الكتابة المباشرة — استبدال كامل (البيانات المحذوفة من الـ app مش بتترسل فتمسح من الشيت)
       sheet.getRange(1, 1, finalData.length, headers.length).setValues(finalData);
+      if (existingRowCount > finalData.length) {
+        sheet.getRange(finalData.length + 1, 1, existingRowCount - finalData.length, headers.length).clearContent();
+      }
       sheet.getRange(1, 1, 1, headers.length).setFontWeight("bold").setBackground(headerColor || "#cfe2f3");
       
       if (sheet.getFilter() === null) {
@@ -406,23 +402,27 @@ function doPost(e) {
 
     if (data.type === 'تقرير_كامل') {
 
+      // 🛡️ حماية شاملة: إذا جميع الجداول فارغة، لا تتم المزامنة
+      var totalRows = (data.invoices || []).length + (data.expenses || []).length + 
+                      (data.trips || []).length + (data.customers || []).length + 
+                      (data.factoryLoads || []).length + (data.products || []).length +
+                      (data.returns || []).length;
+      if (totalRows === 0) {
+        Logger.log('⛔ doPost BLOCKED: All data arrays are empty — refusing to overwrite sheets');
+        return ContentService.createTextOutput(JSON.stringify({"status": "blocked", "message": "All data arrays empty — sheets preserved"}))
+          .setMimeType(ContentService.MimeType.JSON);
+      }
+      
       var currentDbVersion = PropertiesService.getScriptProperties().getProperty('dbVersion');
       if (data.dbVersion !== undefined && data.dbVersion !== null && 
           (!currentDbVersion || Number(data.dbVersion) > Number(currentDbVersion))) {
         PropertiesService.getScriptProperties().setProperty('dbVersion', data.dbVersion.toString());
-        ['الفواتير', 'أرشيف السداد', 'الماليات', 'المشاوير', 'العملاء', 'الأصناف_والأوزان', 'المصنع', 'عملاء_مكتشفين', 'عملاء_محتملين'].forEach(function(name) {
-          var s = ss.getSheetByName(name);
-          if (s && s.getLastRow() > 1) s.getRange(2, 1, s.getLastRow() - 1, s.getLastColumn()).clearContent();
-        });
       }
       
       var activeInvRows = [];
       var archivedInvRows = [];
-      var activeInvIds = [];
-      var archivedInvIds = [];
       
       (data.invoices || []).forEach(function(inv) { 
-        var cleanId = String(inv.id).replace(/^'/, '').trim();
         var isDel = inv.hasOwnProperty('isDelivered') ? inv.isDelivered : true;
         var remaining = Math.max(0, (Number(inv.total) || 0) - (Number(inv.paidAmount) || 0));
         var paymentStatus = remaining > 0 ? 'مديونية ⚠️' : 'خالصة ✅';
@@ -431,35 +431,35 @@ function doPost(e) {
           inv.id, inv.date, inv.invNum, inv.customerName, inv.area, 
           inv.total, inv.paidAmount, inv.delegateName, inv.notes || '',
           JSON.stringify(inv.items || []), formatPhone(inv.delegatePhone),
-          inv.customerId || '', inv.totalBeforeDiscount || inv.total || 0, isDel ? 'true' : 'false', remaining, paymentStatus
+          inv.customerId || '', inv.totalBeforeDiscount || inv.total || 0, isDel ? 'true' : 'false', remaining, paymentStatus,
+          inv.archivedAt || '', inv.archived ? 'نعم' : 'لا', inv.isArchived ? 'نعم' : 'لا'
         ]; 
         
         if (remaining === 0 && isDel) {
            archivedInvRows.push(rowData);
-           archivedInvIds.push(cleanId);
         } else {
            activeInvRows.push(rowData);
-           activeInvIds.push(cleanId);
         }
       });
       
       try {
-        upsertData('الفواتير', ['المعرف', 'التاريخ', 'رقم الفاتورة', 'العميل', 'المنطقة', 'إجمالي الفاتورة', 'المدفوع', 'المندوب', 'الملاحظات', 'التفاصيل (JSON)', 'هاتف المندوب', 'معرف العميل', 'الإجمالي قبل الخصم', 'تم التسليم', 'المتبقي (المديونية)', 'حالة السداد'], activeInvRows, "#cfe2f3", deletedIds.concat(archivedInvIds));
+        upsertData('الفواتير', ['المعرف', 'التاريخ', 'رقم الفاتورة', 'العميل', 'المنطقة', 'إجمالي الفاتورة', 'المدفوع', 'المندوب', 'الملاحظات', 'التفاصيل (JSON)', 'هاتف المندوب', 'معرف العميل', 'الإجمالي قبل الخصم', 'تم التسليم', 'المتبقي (المديونية)', 'حالة السداد', 'تاريخ الأرشفة', 'مؤرشف مالي', 'مؤرشف بالكامل'], activeInvRows, "#cfe2f3");
       } catch(err) { Logger.log('Error upserting الفواتير: ' + err); }
       
       try {
-        upsertData('أرشيف السداد', ['المعرف', 'التاريخ', 'رقم الفاتورة', 'العميل', 'المنطقة', 'إجمالي الفاتورة', 'المدفوع', 'المندوب', 'الملاحظات', 'التفاصيل (JSON)', 'هاتف المندوب', 'معرف العميل', 'الإجمالي قبل الخصم', 'تم التسليم', 'المتبقي (المديونية)', 'حالة السداد'], archivedInvRows, "#d9ead3", deletedIds.concat(activeInvIds));
+        upsertData('أرشيف السداد', ['المعرف', 'التاريخ', 'رقم الفاتورة', 'العميل', 'المنطقة', 'إجمالي الفاتورة', 'المدفوع', 'المندوب', 'الملاحظات', 'التفاصيل (JSON)', 'هاتف المندوب', 'معرف العميل', 'الإجمالي قبل الخصم', 'تم التسليم', 'المتبقي (المديونية)', 'حالة السداد', 'تاريخ الأرشفة', 'مؤرشف مالي', 'مؤرشف بالكامل'], archivedInvRows, "#d9ead3");
       } catch(err) { Logger.log('Error upserting أرشيف السداد: ' + err); }
       
       var expRows = (data.expenses || []).map(function(exp) { 
         return [
           exp.id, exp.date, exp.category, exp.type || 'expense',
           exp.amount, exp.description || '', exp.delegateName || '',
-          formatPhone(exp.delegatePhone)
+          formatPhone(exp.delegatePhone),
+          exp.archivedAt || '', exp.archived ? 'نعم' : 'لا', exp.isArchived ? 'نعم' : 'لا'
         ]; 
       });
       try {
-        upsertData('الماليات', ['المعرف', 'التاريخ', 'الفئة', 'النوع', 'المبلغ', 'البيان', 'المندوب', 'هاتف المندوب'], expRows, "#e0e0e0", deletedIds);
+        upsertData('الماليات', ['المعرف', 'التاريخ', 'الفئة', 'النوع', 'المبلغ', 'البيان', 'المندوب', 'هاتف المندوب', 'تاريخ الأرشفة', 'مؤرشف مالي', 'مؤرشف بالكامل'], expRows, "#e0e0e0");
       } catch(err) { Logger.log('Error upserting الماليات: ' + err); }
 
       var tripRows = (data.trips || []).map(function(t) { 
@@ -470,7 +470,7 @@ function doPost(e) {
         ]; 
       });
       try {
-        upsertData('المشاوير', ['المعرف', 'التاريخ', 'البيان', 'الأجرة', 'الحالة', 'المندوب', 'هاتف المندوب', 'عداد البداية', 'عداد النهاية'], tripRows, "#ffe599", deletedIds);
+        upsertData('المشاوير', ['المعرف', 'التاريخ', 'البيان', 'الأجرة', 'الحالة', 'المندوب', 'هاتف المندوب', 'عداد البداية', 'عداد النهاية'], tripRows, "#ffe599");
       } catch(err) { Logger.log('Error upserting المشاوير: ' + err); }
 
       var custRows = (data.customers || []).map(function(c) { 
@@ -481,7 +481,7 @@ function doPost(e) {
         ]; 
       });
       try {
-        upsertData('العملاء', ['المعرف', 'المحافظة', 'المنطقة', 'اسم العميل', 'رقم الهاتف', 'العنوان', 'رابط جوجل ماب', 'عدد المشتريات', 'مدير البيع', 'إجمالي المسحوبات', 'آخر شراء'], custRows, "#d9ead3", deletedIds);
+        upsertData('العملاء', ['المعرف', 'المحافظة', 'المنطقة', 'اسم العميل', 'رقم الهاتف', 'العنوان', 'رابط جوجل ماب', 'عدد المشتريات', 'مدير البيع', 'إجمالي المسحوبات', 'آخر شراء'], custRows, "#d9ead3");
       } catch(err) { Logger.log('Error upserting العملاء: ' + err); }
 
       if (canEditPrices) {
@@ -499,7 +499,7 @@ function doPost(e) {
           }
         });
         try {
-          upsertData('الأصناف_والأوزان', ['معرف الوزن (لا تحذفه)', 'معرف الصنف', 'اسم الصنف', 'الحجم/الوزن', 'سعر الكرتونة', 'العدد بالكرتونة', 'سعر العبوة (مصنع)', 'القيمة المضافة', 'سعر بيع الكرتونة', 'سعر بيع العبوة', 'الباركود'], prodRows, "#cfe2f3", deletedIds);
+          upsertData('الأصناف_والأوزان', ['معرف الوزن (لا تحذفه)', 'معرف الصنف', 'اسم الصنف', 'الحجم/الوزن', 'سعر الكرتونة', 'العدد بالكرتونة', 'سعر العبوة (مصنع)', 'القيمة المضافة', 'سعر بيع الكرتونة', 'سعر بيع العبوة', 'الباركود'], prodRows, "#cfe2f3");
         } catch(err) { Logger.log('Error upserting الأصناف: ' + err); }
       }
       
@@ -508,11 +508,12 @@ function doPost(e) {
           fl.id, fl.date, fl.productId || '', fl.weightId || '', fl.productName, 
           fl.weightSize || 'كرتونة', fl.cartonsCount || 0, fl.quantity || 0, 
           fl.advanceAmount || 0, fl.warehouseKeeper || '', fl.delegateName || '',
-          formatPhone(fl.delegatePhone), fl.cartonPrice || 0, fl.unitPrice || 0
+          formatPhone(fl.delegatePhone), fl.cartonPrice || 0, fl.unitPrice || 0,
+          fl.archivedAt || '', fl.archived ? 'نعم' : 'لا', fl.isArchived ? 'نعم' : 'لا'
         ]; 
       });
       try {
-        upsertData('المصنع', ['المعرف', 'التاريخ', 'معرف الصنف', 'معرف الوزن', 'اسم الصنف', 'الحجم/الوزن', 'الكمية (كرتونة)', 'إجمالي الوحدات', 'مقدم المصنع', 'أمين المخزن', 'اسم المندوب', 'هاتف المندوب', 'سعر الكرتونة', 'سعر العبوة'], factoryRows, "#fce5cd", deletedIds);
+        upsertData('المصنع', ['المعرف', 'التاريخ', 'معرف الصنف', 'معرف الوزن', 'اسم الصنف', 'الحجم/الوزن', 'الكمية (كرتونة)', 'إجمالي الوحدات', 'مقدم المصنع', 'أمين المخزن', 'اسم المندوب', 'هاتف المندوب', 'سعر الكرتونة', 'سعر العبوة', 'تاريخ الأرشفة', 'مؤرشف مالي', 'مؤرشف بالكامل'], factoryRows, "#fce5cd");
       } catch(err) { Logger.log('Error upserting المصنع: ' + err); }
 
       if (isOwner) {
@@ -531,7 +532,7 @@ function doPost(e) {
           ]; 
         });
         try {
-          upsertData('صلاحيات_المستخدمين', ['رقم الهاتف', 'الاسم', 'الدور/الوظيفة', 'الحالة', 'الرمز السري', 'المسمى الوظيفي', 'الصلاحيات المفعّلة', 'الصلاحيات الفرعية', 'تعديل الأسعار', 'آخر ظهور', 'خط العرض', 'خط الطول', 'المستشار الذكي', 'السماح بالخصم', 'أقصى خصم من الربح', 'أقصى مبلغ خصم إضافي', 'منطقة العمل'], userRows, "#ead1dc", deletedIds);
+          upsertData('صلاحيات_المستخدمين', ['رقم الهاتف', 'الاسم', 'الدور/الوظيفة', 'الحالة', 'الرمز السري', 'المسمى الوظيفي', 'الصلاحيات المفعّلة', 'الصلاحيات الفرعية', 'تعديل الأسعار', 'آخر ظهور', 'خط العرض', 'خط الطول', 'المستشار الذكي', 'السماح بالخصم', 'أقصى خصم من الربح', 'أقصى مبلغ خصم إضافي', 'منطقة العمل'], userRows, "#ead1dc");
         } catch(err) { Logger.log('Error upserting صلاحيات: ' + err); }
       }
 
@@ -543,7 +544,7 @@ function doPost(e) {
         ]; 
       });
       try {
-        upsertData('عملاء_مكتشفين', ['المعرف', 'المحافظة', 'المنطقة', 'اسم العميل', 'رقم الهاتف', 'العنوان', 'رابط جوجل ماب', 'النشاط', 'تاريخ الإضافة'], discoveredRows, "#fff2cc", deletedIds);
+        upsertData('عملاء_مكتشفين', ['المعرف', 'المحافظة', 'المنطقة', 'اسم العميل', 'رقم الهاتف', 'العنوان', 'رابط جوجل ماب', 'النشاط', 'تاريخ الإضافة'], discoveredRows, "#fff2cc");
       } catch(err) { Logger.log('Error upserting عملاء_مكتشفين: ' + err); }
 
       var potentialRows = (data.potentialLeads || []).map(function(l) { 
@@ -554,7 +555,7 @@ function doPost(e) {
         ]; 
       });
       try {
-        upsertData('عملاء_محتملين', ['المعرف', 'المحافظة', 'المنطقة', 'اسم العميل', 'رقم الهاتف', 'العنوان', 'رابط جوجل ماب', 'النشاط', 'تاريخ الإضافة'], potentialRows, "#d9ead3", deletedIds);
+        upsertData('عملاء_محتملين', ['المعرف', 'المحافظة', 'المنطقة', 'اسم العميل', 'رقم الهاتف', 'العنوان', 'رابط جوجل ماب', 'النشاط', 'تاريخ الإضافة'], potentialRows, "#d9ead3");
       } catch(err) { Logger.log('Error upserting عملاء_محتملين: ' + err); }
 
       var archiveRows = (data.factoryArchiveCycles || []).map(function(c) {
@@ -564,22 +565,45 @@ function doPost(e) {
           c.totalAdvancePayments || 0, c.creditBalance || 0,
           c.carriedOverDebtAtTime || 0, c.waivedAmount || 0,
           JSON.stringify(c.loads || []), JSON.stringify(c.payments || []),
-          c.delegatePhone || '', c.delegateName || ''
+          c.delegatePhone || '', c.delegateName || '',
+          c.amountPaidInSettlement || 0, c.amountCarriedOver || 0,
+          c.settlementReason || ''
         ];
       });
       try {
-        upsertData('أرشيف_دورات_المصنع', ['معرف الدورة', 'تاريخ الترحيل', 'تم التسديد بالكامل', 'قيمة المحمل الخام', 'إجمالي المحمل', 'إجمالي المسدد', 'الرصيد الدائن', 'دين من دورة سابقة', 'مبلغ متنازل عنه', 'الحمولات (JSON)', 'الدفعات (JSON)', 'هاتف المندوب', 'اسم المندوب'], archiveRows, "#b4a7d6", deletedIds);
+        upsertData('أرشيف_دورات_المصنع', ['معرف الدورة', 'تاريخ الترحيل', 'تم التسديد بالكامل', 'قيمة المحمل الخام', 'إجمالي المحمل', 'إجمالي المسدد', 'الرصيد الدائن', 'دين من دورة سابقة', 'مبلغ متنازل عنه', 'الحمولات (JSON)', 'الدفعات (JSON)', 'هاتف المندوب', 'اسم المندوب', 'المبلغ المسدد عند التسويه', 'المبلغ المرحل للدورة القادمة', 'سبب الترحيل والتسويه'], archiveRows, "#b4a7d6");
       } catch(err) { Logger.log('Error upserting أرشيف_دورات_المصنع: ' + err); }
+
+      var returnRows = (data.returns || []).map(function(r) {
+        return [
+          r.id || '', r.date || '', r.invoiceId || '', r.invoiceNumber || '',
+          r.customerId || '', r.customerName || '',
+          formatPhone(r.delegatePhone), r.delegateName || '',
+          r.movementType || '', r.totalReturnValue || 0,
+          JSON.stringify(r.items || []), r.notes || '',
+          r.exchangeDifference || 0,
+          r.exchangeProduct ? JSON.stringify(r.exchangeProduct) : '',
+          r.exchangeSettlementMethod || '',
+          r.archivedAt || '', r.archived ? 'نعم' : 'لا', r.isArchived ? 'نعم' : 'لا'
+        ];
+      });
+      try {
+        upsertData('المرتجعات', ['المعرف', 'التاريخ', 'معرف الفاتورة', 'رقم الفاتورة', 'معرف العميل', 'اسم العميل', 'هاتف المندوب', 'اسم المندوب', 'نوع الحركة', 'إجمالي المرتجع', 'التفاصيل (JSON)', 'ملاحظات', 'فرق السعر', 'الصنف البديل (JSON)', 'طريقة تسويه الفرق', 'تاريخ الأرشفة', 'مؤرشف مالي', 'مؤرشف بالكامل'], returnRows, "#ea9999");
+      } catch(err) { Logger.log('Error upserting المرتجعات: ' + err); }
 
       var summarySheet = ss.getSheetByName('الملخص');
       if (!summarySheet) {
         summarySheet = ss.insertSheet('الملخص');
+        summarySheet.getRange(1, 1, 2, 4).setValues([
+          ['تاريخ المزامنة', 'إجمالي المبيعات', 'المنصرف والمصروفات', 'صافي الأرباح'],
+          [data.metadata ? data.metadata.syncedAt : nowEgyptISO(), data.metadata ? (Number(data.metadata.totalSales) || 0) : 0, data.metadata ? (Number(data.metadata.totalExpenses) || 0) : 0, data.metadata ? (Number(data.metadata.netProfit) || 0) : 0]
+        ]);
+      } else {
+        summarySheet.getRange(1, 1, 2, 4).setValues([
+          ['تاريخ المزامنة', 'إجمالي المبيعات', 'المنصرف والمصروفات', 'صافي الأرباح'],
+          [data.metadata ? data.metadata.syncedAt : nowEgyptISO(), data.metadata ? (Number(data.metadata.totalSales) || 0) : 0, data.metadata ? (Number(data.metadata.totalExpenses) || 0) : 0, data.metadata ? (Number(data.metadata.netProfit) || 0) : 0]
+        ]);
       }
-      summarySheet.clearContents();
-      summarySheet.getRange(1, 1, 2, 4).setValues([
-        ['تاريخ المزامنة', 'إجمالي المبيعات', 'المنصرف والمصروفات', 'صافي الأرباح'],
-        [data.metadata ? data.metadata.syncedAt : nowEgyptISO(), data.metadata ? (Number(data.metadata.totalSales) || 0) : 0, data.metadata ? (Number(data.metadata.totalExpenses) || 0) : 0, data.metadata ? (Number(data.metadata.netProfit) || 0) : 0]
-      ]);
       summarySheet.getRange(1, 1, 1, 4).setFontWeight("bold").setBackground("#d9ead3");
       
       try { CacheService.getScriptCache().remove("doGet_result_" + ss.getId()); } catch(ce) {}
@@ -600,18 +624,13 @@ function doPost(e) {
   }
 }
 
-// =============================================
-// دالة إصلاح التوقيت — تشغّل يدوياً من القائمة
-// تحويل جميع التواريخ من UTC إلى توقيت مصر
-// =============================================
 function fixAllTimezones() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var sheets = ss.getSheets();
   var totalFixed = 0;
 
-  // أنماط التواريخ التي نبحث عنها
-  var utcPattern = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{3})?Z$/;  // 2026-07-13T05:35:16.000Z
-  var utcPatternShort = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;        // 2026-07-13T05:35:16Z
+  var utcPattern = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{3})?Z$/;
+  var utcPatternShort = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
 
   for (var s = 0; s < sheets.length; s++) {
     var sheet = sheets[s];
@@ -627,7 +646,6 @@ function fixAllTimezones() {
         var cell = data[r][c];
         var val = '';
 
-        // تحويل Date object إلى نص
         if (cell instanceof Date) {
           val = Utilities.formatDate(cell, 'GMT', "yyyy-MM-dd'T'HH:mm:ss'Z'");
         } else if (typeof cell === 'string') {
@@ -636,10 +654,8 @@ function fixAllTimezones() {
           continue;
         }
 
-        // فحص: هل القيمة بصيغة UTC تنتهي بـ Z؟
         if (!utcPattern.test(val) && !utcPatternShort.test(val)) continue;
 
-        // تحويل من UTC إلى القاهرة
         try {
           var dateObj = new Date(val);
           if (isNaN(dateObj.getTime())) continue;
@@ -657,13 +673,10 @@ function fixAllTimezones() {
             hasChanges = true;
             totalFixed++;
           }
-        } catch(e) {
-          // تجاهل الأخطاء في قيم فردية
-        }
+        } catch(e) {}
       }
     }
 
-    // حفظ التغييرات إذا وجدت
     if (hasChanges) {
       sheet.getRange(1, 1, lastRow, lastCol).setValues(data);
       Logger.log('Sheet "' + sheet.getName() + '": fixed timezone entries');
@@ -678,9 +691,6 @@ function fixAllTimezones() {
   );
 }
 
-// =============================================
-// إضافة زر في شريط القوائم لتشغيل الإصلاح
-// =============================================
 function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu('🔧 إصلاح التوقيت')

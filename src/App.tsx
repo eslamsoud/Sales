@@ -7,7 +7,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { APIProvider } from '@vis.gl/react-google-maps';
 import PersonalSettingsTab from './components/PersonalSettingsTab';
-import { Product, Customer, Invoice, Expense, FactoryLoad, AppSettings, Trip, UserAuth, SyncLog, SoftDeletedItem, DeletedItemType, getProductWeightsFallback, getItemFactoryCost } from './types';
+import { Product, Customer, Invoice, Expense, FactoryLoad, AppSettings, Trip, UserAuth, SyncLog, SoftDeletedItem, DeletedItemType, getProductWeightsFallback, getItemFactoryCost, Return } from './types';
 import { AnimatePresence, motion } from 'motion/react';
 import { showToast, toastEvent } from './utils/toast';
 import {
@@ -112,7 +112,14 @@ export default function App() {
   const [lastSyncInfo, setLastSyncInfo] = useState<string>('');
   const [lastSyncFailed, setLastSyncFailed] = useState(false);
   const [hasPendingChanges, setHasPendingChanges] = useState(false);
+  const [hasUnconfirmedSave, setHasUnconfirmedSave] = useState(false);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const isSyncingRef = useRef(false);
+  useEffect(() => { isSyncingRef.current = isSyncing; }, [isSyncing]);
+  const [isInitialMergeComplete, setIsInitialMergeComplete] = useState(false);
+  const isInitialMergeCompleteRef = useRef(false);
+  useEffect(() => { isInitialMergeCompleteRef.current = isInitialMergeComplete; }, [isInitialMergeComplete]);
 
   const handleUnlockWithPassword = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
@@ -345,7 +352,11 @@ export default function App() {
   const [googleLeads, setGoogleLeads] = useState<any[]>([]);
   const [potentialLeads, setPotentialLeads] = useState<any[]>([]);
   const [archiveCycles, setArchiveCycles] = useState<any[]>([]);
+  const [returns, setReturns] = useState<Return[]>([]);
+  const [customerCredits, setCustomerCredits] = useState<Record<string, number>>(() => getStoredData<Record<string, number>>('customer_credits_sys', {}));
   const [softDeleted, setSoftDeleted] = useState<SoftDeletedItem[]>(() => getStoredData<SoftDeletedItem[]>('soft_deleted_items_sys', []));
+
+  useEffect(() => { setStoredData('customer_credits_sys', customerCredits); }, [customerCredits]);
 
   useEffect(() => {
     setStoredData('soft_deleted_items_sys', softDeleted);
@@ -436,40 +447,38 @@ export default function App() {
   }, [simulatedDelegate, factoryLoads, invoices, products, lastArchiveTimestamp]);
 
   // مرجع لتخزين أحدث حالة للبيانات لمنع مشكلة (Stale Closure) أثناء المزامنة التلقائية
-  const latestDataRef = useRef({ products, factoryLoads, customers, invoices, expenses, trips, usersList, googleLeads, potentialLeads, settings, dbVersion, currentUser });
+  const latestDataRef = useRef({ products, factoryLoads, customers, invoices, expenses, trips, usersList, googleLeads, potentialLeads, settings, dbVersion, currentUser, returns });
   useEffect(() => {
-    latestDataRef.current = { products, factoryLoads, customers, invoices, expenses, trips, usersList, googleLeads, potentialLeads, settings, dbVersion, currentUser, archiveCycles };
-  }, [products, factoryLoads, customers, invoices, expenses, trips, usersList, googleLeads, potentialLeads, settings, dbVersion, currentUser, archiveCycles]);
+    latestDataRef.current = { products, factoryLoads, customers, invoices, expenses, trips, usersList, googleLeads, potentialLeads, settings, dbVersion, currentUser, archiveCycles, returns };
+  }, [products, factoryLoads, customers, invoices, expenses, trips, usersList, googleLeads, potentialLeads, settings, dbVersion, currentUser, archiveCycles, returns]);
 
-  // ☁️ سحب تلقائي صامت عند بدء تشغيل التطبيق + رفع التغييرات المعلقة من الجلسة السابقة
+  // ☁️ الدمج الإجباري مع السحابة عند فتح التطبيق (Mandatory Fetch & Smart Merge)
+  // الشيت هو المصدر النهائي — نجلبه أولاً، ندمجه مع المحلي، ثم نرفع المحلي.
   useEffect(() => {
-    if (isDbLoaded && currentUser) {
-      const timer = setTimeout(async () => {
+    if (isDbLoaded && currentUser && !isInitialMergeComplete) {
+      (async () => {
         try {
-          await handleUpdateData(true); // سحب صامت لدمج البيانات الجديدة دون مسح البيانات الحالية
-          showToast("✅ تم تحديث البيانات والأسعار من السحابة بنجاح");
+          await handleUpdateData(true); // سحب ودمج — الشيت يحل محل المحلي عند التعارض
         } catch {
-          showToast("⚠️ تعمل الآن بالبيانات المحلية — تحقق من اتصال الإنترنت");
+          // في حالة عدم وجود اتصال، استخدم البيانات المحلية
         }
-        // ⬆️ رفع التغييرات المعلقة من جلسة سابقة (خروج إجباري أو فقد الاتصال)
+        // ⬆️ رفع التغييرات المعلقة من جلسة سابقة
         try {
           const pending = await idbGet('pending_sync_flag');
           if (pending) {
-            showToast("🔄 يوجد تغييرات معلقة من الجلسة السابقة — جاري رفعها...");
             const success = await syncAllDataToGoogle(true);
             if (success) {
               await idbSet('pending_sync_flag', false);
               setHasPendingChanges(false);
-              showToast("✅ تم رفع جميع التغييرات المعلقة بنجاح!");
             }
           }
         } catch (e) {
           console.error('Failed to sync pending changes from previous session:', e);
         }
-      }, 1500);
-      return () => clearTimeout(timer);
+        setIsInitialMergeComplete(true);
+      })();
     }
-  }, [isDbLoaded, currentUser?.phone]);
+  }, [isDbLoaded, currentUser?.phone, isInitialMergeComplete]);
 
   const [showScrollTop, setShowScrollTop] = useState(false);
 
@@ -522,10 +531,11 @@ export default function App() {
   useEffect(() => {
     async function loadData() {
       try {
-        const [ prod, fact, cust, inv, exp, tr, logs, set, archive ] = await Promise.all([
+        const [ prod, fact, cust, inv, exp, tr, logs, set, archive, retData ] = await Promise.all([
           idbGet('products_sys'), idbGet('factory_sys'), idbGet('customers_sys'),
           idbGet('invoices_sys'), idbGet('expenses_sys'), idbGet('trips_sys'),
-          idbGet('sync_logs_sys'), idbGet('settings_sys'), idbGet('factory_archive_cycles_sys')
+          idbGet('sync_logs_sys'), idbGet('settings_sys'), idbGet('factory_archive_cycles_sys'),
+          idbGet('returns_sys')
         ]);
 
         const migrate = (idbData: any, localKey: string, defaultData: any) => {
@@ -564,10 +574,12 @@ export default function App() {
         const rawInvoices = migrate(inv, 'invoices_sys', DEFAULT_INVOICES);
         const thirtyDaysAgo = new Date();
         thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+        const deletedInvoiceIds = JSON.parse(localStorage.getItem('deleted_records_sys') || '[]');
         const cleanedInvoices = rawInvoices.map((i: any) => ({
           ...i,
           isDelivered: i.isDelivered === undefined ? true : i.isDelivered
         })).filter((i: any) => {
+          if (deletedInvoiceIds.includes(i.id)) return false;
           const invDate = new Date(i.date);
           const isPaid = (i.paidAmount ?? i.totalAfterDiscount) >= i.totalAfterDiscount;
           return !(invDate < thirtyDaysAgo && isPaid);
@@ -659,10 +671,51 @@ export default function App() {
           });
         }
         setArchiveCycles(loadedArchive);
+
+        const loadedReturns = retData && Array.isArray(retData) ? retData : [];
+        setReturns(loadedReturns);
       } catch (e) { console.error("DB Load Error", e); } finally { setIsDbLoaded(true); }
     }
     loadData();
   }, []);
+
+  // إعادة حساب بيانات الدورات القديمة (collectedAmount, trips, revenues, expenses)
+  useEffect(() => {
+    if (!isDbLoaded) return;
+    if (!archiveCycles || archiveCycles.length === 0) return;
+    if (!invoices || invoices.length === 0) return;
+
+    const sorted = [...archiveCycles].sort((a: any, b: any) => Number(a.id) - Number(b.id));
+    const hasMissingData = sorted.some((c: any) => !(c.collectedAmount > 0 || c.extraRevenues > 0 || c.tripsCollected > 0));
+    if (!hasMissingData) return;
+
+    const updated = sorted.map((cycle: any, idx: number) => {
+      if ((cycle.collectedAmount || 0) > 0 || (cycle.extraRevenues || 0) > 0 || (cycle.tripsCollected || 0) > 0) return cycle;
+      const prevTs = idx === 0 ? 0 : Number(sorted[idx - 1].id);
+      const currTs = Number(cycle.id);
+      const invs = invoices.filter((inv: any) => {
+        if (inv.archived || inv.isArchived || inv.archivedAt) return false;
+        const t = new Date(inv.date).getTime();
+        return t > prevTs && t <= currTs;
+      });
+      const trs = trips.filter((t: any) => {
+        if (t.archived || t.isArchived) return false;
+        const tt = new Date(t.date).getTime();
+        return t.collected && tt > prevTs && tt <= currTs;
+      });
+      const exps = expenses.filter((e: any) => {
+        if (e.archived || e.isArchived || e.archivedAt) return false;
+        const et = e.date ? new Date(e.date).getTime() : 0;
+        return et > prevTs && et <= currTs;
+      });
+      const collected = invs.reduce((s: number, inv: any) => s + (inv.paidAmount !== undefined ? inv.paidAmount : (inv.totalAfterDiscount || 0)), 0);
+      const tripsC = trs.reduce((s: number, t: any) => s + (t.price || 0), 0);
+      const revs = exps.filter((e: any) => e.type === 'revenue').reduce((s: number, e: any) => s + (e.amount || 0), 0);
+      const expsOther = exps.filter((e: any) => e.type !== 'revenue' && e.category !== 'سداد للمصنع' && e.type !== 'factory_payment').reduce((s: number, e: any) => s + (e.amount || 0), 0);
+      return { ...cycle, collectedAmount: collected, tripsCollected: tripsC, extraRevenues: revs, cycleExpenses: expsOther };
+    });
+    setArchiveCycles(updated);
+  }, [isDbLoaded, archiveCycles, invoices, trips, expenses]);
 
   // Auto daily backup (Background System) — حفظ محلي فقط في IndexedDB بدون إرسال إلى Google Drive
   const hasAutoBackedUpToday = useRef(false);
@@ -694,9 +747,14 @@ export default function App() {
   // 💾 حفظ تلقائي عند محاولة إغلاق التبويب أو المتصفح + وضع علامة معلقة في IndexedDB
   useEffect(() => {
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-      // محاولة حفظ سريع للبيانات قبل إغلاق المتصفح
+      if (isSyncingRef.current) {
+        showToast("⚠️ تنبيه حرج: جاري حفظ وتأمين الفواتير في السيرفر السحابي الآن.. يُرجى عدم إغلاق التطبيق نهائياً حتى تكتمل العلامة الخضراء حمايةً لبياناتك من الفقدان");
+      }
+      // 🛡️ محاولة حفظ سريع فقط إذا اكتمل الدمج الأولي (يمنع مسح الشيت ببيانات فارغة)
       try {
-        syncAllDataToGoogle(true);
+        if (isInitialMergeCompleteRef.current) {
+          syncAllDataToGoogle(true);
+        }
       } catch (err) {}
       // وضع علامة معلقة لضمان رفع البيانات عند الفتح التالي في حال فشل الحفظ السريع
       try {
@@ -707,7 +765,7 @@ export default function App() {
     };
     window.addEventListener('beforeunload', handleBeforeUnload);
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
-  }, [syncAllDataToGoogle]);
+  }, [isSyncingRef, syncAllDataToGoogle]);
 
   // 📡 نظام Offline Queue — رفع البيانات المعلقة تلقائياً عند عودة الاتصال بالإنترنت
   useEffect(() => {
@@ -715,7 +773,7 @@ export default function App() {
       setIsOnline(true);
       try {
         const pending = await idbGet('pending_sync_flag');
-        if (pending && currentUser) {
+        if (pending && currentUser && isInitialMergeCompleteRef.current) {
           showToast("📡 عاد الاتصال! جاري رفع البيانات المعلقة...");
           const success = await syncAllDataToGoogle(true);
           if (success) {
@@ -761,7 +819,7 @@ export default function App() {
     const checkAndRetry = () => {
       try {
         const failTime = localStorage.getItem('last_sync_fail_time_sys');
-        if (failTime) {
+        if (failTime && isInitialMergeCompleteRef.current) {
           const elapsed = Date.now() - Number(failTime);
           if (elapsed > 30000 && elapsed < 120000) {
             syncAllDataToGoogle(true);
@@ -818,6 +876,7 @@ export default function App() {
   useEffect(() => { if (isDbLoaded) idbSet('trips_sys', trips); }, [trips, isDbLoaded]);
   useEffect(() => { if (isDbLoaded) idbSet('sync_logs_sys', syncLogs); }, [syncLogs, isDbLoaded]);
   useEffect(() => { if (isDbLoaded) idbSet('factory_archive_cycles_sys', archiveCycles); }, [archiveCycles, isDbLoaded]);
+  useEffect(() => { if (isDbLoaded) idbSet('returns_sys', returns); }, [returns, isDbLoaded]);
   useEffect(() => { 
     if (isDbLoaded) {
       idbSet('settings_sys', settings);
@@ -1061,21 +1120,29 @@ export default function App() {
     promptForSync('نقل حمولة إلى المحذوفات');
   };
 
+  const handleEditLoad = (id: string, updates: Partial<Omit<FactoryLoad, 'id'>>) => {
+    setFactoryLoads(prev => prev.map(load => load.id === id ? { ...load, ...updates } : load));
+    promptForSync('تعديل كمية الحمولة');
+  };
+
   const handleArchiveFactoryCycle = (delegatePhone: string, delegateName: string) => {
     const cleanName = (delegateName || '').replace(/\s*\(.*?\)/g, '').trim();
     
     const ref = latestDataRef.current;
 
-    // 1) Compute IDs to delete from CURRENT state (not from setState callback)
-    const toDeleteLoads = ref.factoryLoads
+    // 1) Find active loads of this delegate
+    const toArchiveLoads = ref.factoryLoads
       .filter(l => {
+        if (l.archived || l.isArchived || l.archivedAt) return false;
         const lPhone = (l.delegatePhone || '').trim();
         const lName = (l.delegateName || '').replace(/\s*\(.*?\)/g, '').trim();
         return (delegatePhone && lPhone === delegatePhone) || (cleanName && lName === cleanName);
       });
 
-    const toDeleteExpenses = ref.expenses
+    // 2) Find active expenses/payments of this delegate
+    const toArchiveExpenses = ref.expenses
       .filter(e => {
+        if (e.archived || e.isArchived || e.archivedAt) return false;
         if (e.category === 'سداد للمصنع' || e.type === 'factory_payment') {
           const ePhone = (e.delegatePhone || '').trim();
           const eName = (e.delegateName || '').replace(/\s*\(.*?\)/g, '').trim();
@@ -1089,18 +1156,39 @@ export default function App() {
         return false;
       });
 
-    const toDeleteLoadIds = toDeleteLoads.map(l => l.id);
-    const toDeleteExpenseIds = toDeleteExpenses.map(e => e.id);
+    // 3) Find active invoices of this delegate
+    const toArchiveInvoices = ref.invoices
+      .filter(inv => {
+        if (inv.archived || inv.isArchived || inv.archivedAt) return false;
+        const invPhone = (inv.delegatePhone || '').trim();
+        const invName = (inv.delegateName || '').replace(/\s*\(.*?\)/g, '').trim();
+        return (delegatePhone && invPhone === delegatePhone) || (cleanName && invName === cleanName);
+      });
 
-    // 2) Soft delete all matched items
-    toDeleteLoads.forEach(load => softDeleteItem(load.id, 'factoryLoad', load, `حمولة ${load.productName || 'غير معروفة'} - دورة ${delegateName}`));
-    toDeleteExpenses.forEach(exp => softDeleteItem(exp.id, 'expense', exp, `${exp.description || 'سداد'} - دورة ${delegateName}: ${exp.amount || 0} ج.م`));
+    const toArchiveLoadIds = toArchiveLoads.map(l => l.id);
+    const toArchiveExpenseIds = toArchiveExpenses.map(e => e.id);
+    const toArchiveInvoiceIds = toArchiveInvoices.map(inv => inv.id);
 
-    // 3) Now call setState (filter out the matched records)
-    setFactoryLoads(prev => prev.filter(l => !toDeleteLoadIds.includes(l.id)));
-    setExpenses(prev => prev.filter(e => !toDeleteExpenseIds.includes(e.id)));
+    // 4) Soft delete for expenses and invoices only (NOT loads — loads stay visible as reference for delegates)
+    toArchiveExpenses.forEach(exp => softDeleteItem(exp.id, 'expense', exp, `${exp.description || 'سداد'} - دورة ${delegateName}: ${exp.amount || 0} ج.م`));
+    toArchiveInvoices.forEach(inv => softDeleteItem(inv.id, 'invoice', inv, `فاتورة ${inv.invoiceNumber} للعميل ${inv.customerName || ''} - دورة ${delegateName}`));
 
-    promptForSync('أرشفة دورة حساب المصنع');
+    const archiveTimestamp = nowEgyptISO();
+
+    // 5) Mark expenses and invoices as archived (loads stay visible — لا نحذف بيان الحمولة لمرجع المناديب)
+    setExpenses(prev => prev.map(e => 
+      toArchiveExpenseIds.includes(e.id) 
+        ? { ...e, archived: true, isArchived: true, archivedAt: archiveTimestamp } 
+        : e
+    ));
+
+    setInvoices(prev => prev.map(inv => 
+      toArchiveInvoiceIds.includes(inv.id) 
+        ? { ...inv, archived: true, isArchived: true, archivedAt: archiveTimestamp } 
+        : inv
+    ));
+
+    promptForSync('أرشفة دورة حساب المصنع الكاملة');
   };
 
   const handleAddCustomer = (newCustomer: Omit<Customer, 'id'>) => {
@@ -1224,6 +1312,35 @@ export default function App() {
     }
     setInvoices(prev => prev.filter(inv => inv.id !== id));
     promptForSync('نقل فاتورة إلى المحذوفات');
+  };
+
+  const handleAddReturn = (newReturn: Omit<Return, 'id'>) => {
+    if (checkSimulationGuard()) return;
+    const id = `ret-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
+    const ret: Return = { ...newReturn, id };
+    setReturns(prev => [...prev, ret]);
+    // Handle credit balance
+    if (newReturn.movementType === 'credit_note') {
+      setCustomerCredits(prev => ({
+        ...prev,
+        [newReturn.customerId]: (prev[newReturn.customerId] || 0) + newReturn.totalReturnValue
+      }));
+    } else if (newReturn.movementType === 'exchange' && newReturn.exchangeSettlementMethod === 'credit' && (newReturn.exchangeDifference || 0) > 0) {
+      setCustomerCredits(prev => ({
+        ...prev,
+        [newReturn.customerId]: (prev[newReturn.customerId] || 0) + (newReturn.exchangeDifference || 0)
+      }));
+    }
+    promptForSync('تسجيل مرتجع/استبدال');
+  };
+
+  const handleUseCustomerCredit = (customerId: string, amount: number) => {
+    if (checkSimulationGuard()) return;
+    setCustomerCredits(prev => {
+      const current = prev[customerId] || 0;
+      const newBalance = Math.max(0, current - amount);
+      return { ...prev, [customerId]: newBalance };
+    });
   };
 
   const handleAddExpense = (newExpense: Omit<Expense, 'id'>) => {
@@ -1464,6 +1581,8 @@ export default function App() {
 
     try {
       setIsHeaderSyncing(true);
+      setIsSyncing(true);
+      setHasUnconfirmedSave(true);
       
       // استخدام المرجع لضمان الحصول على البيانات الجديدة التي تم إضافتها للتو
       const { 
@@ -1483,6 +1602,17 @@ export default function App() {
         || ref.currentUser?.phone === '01228466613'
         || (ref.currentUser?.customRoleName && (ref.currentUser.customRoleName.includes('نائب المدير') || ref.currentUser.customRoleName.includes('مشرف عام')));
 
+      // 🛡️ حماية شاملة: إذا جميع الجداول فارغة، لا تتم المزامنة (يمنع مسح الشيت بالبيانات الفارغة)
+      const totalPayloadRows = currentInvoices.length + currentLoads.length + currentExpenses.length + currentTrips.length + currentProducts.length + currentCustomers.length;
+      if (totalPayloadRows === 0) {
+        console.error('⛔ syncAllDataToGoogle BLOCKED: All data arrays are empty — refusing to overwrite sheets');
+        if (!silent) showToast('⚠️ لا توجد بيانات للرفع — تم إلغاء المزامنة حمايةً للبيانات السحابية');
+        setIsHeaderSyncing(false);
+        setIsSyncing(false);
+        setHasUnconfirmedSave(false);
+        return false;
+      }
+
       // حساب الصافي الحقيقي للتدفق النقدي لتصديره لشيت (الملخص)
       const totalCollected = currentInvoices.reduce((sum, inv) => sum + (inv.paidAmount !== undefined ? inv.paidAmount : (inv.totalAfterDiscount || 0)), 0);
       const totalSpent = currentExpenses.filter(e => e.type !== 'revenue').reduce((sum, exp) => sum + (exp.amount || 0), 0);
@@ -1495,13 +1625,6 @@ export default function App() {
       const totalPaidToFactoryInPeriod = currentAdvancesTotal + manualPaymentsSumTotal;
       
       const netProfit = totalCollected + extraRevenues + totalTripsCollectedProfit - totalPaidToFactoryInPeriod - totalSpent;
-
-      let deletedIds: string[] = [];
-      if (isSyncManager) {
-        try {
-          deletedIds = JSON.parse(localStorage.getItem('deleted_records_sys') || '[]');
-        } catch(e) {}
-      }
 
       const customersMap = new Map(currentCustomers.map(c => [String(c.id).trim(), c]));
       const productsMap = new Map(currentProducts.map(p => [String(p.id).trim(), p]));
@@ -1529,7 +1652,6 @@ export default function App() {
         customRoleName: ref.currentUser?.customRoleName || '',
         canEditPrices: ref.currentUser?.canEditPrices !== false,
         dbVersion: ref.dbVersion,
-        deletedIds: deletedIds,
         metadata: {
           syncedAt: new Date().toISOString(),
           app: 'نظام المبيعات والمخزون للسيارة',
@@ -1688,6 +1810,18 @@ export default function App() {
           dateAdded: l.dateAdded || ''
         })),
         factoryArchiveCycles: ref.archiveCycles || [],
+        returns: (ref.returns || []).map((r: any) => ({
+          id: r.id, date: r.date || '', invoiceId: r.invoiceId || '',
+          invoiceNumber: r.invoiceNumber || '', customerId: r.customerId || '',
+          customerName: r.customerName || '', delegatePhone: r.delegatePhone || '',
+          delegateName: r.delegateName || '', movementType: r.movementType || 'cash_refund',
+          totalReturnValue: r.totalReturnValue || 0, items: r.items || [],
+          notes: r.notes || '', exchangeDifference: r.exchangeDifference || 0,
+          exchangeProduct: r.exchangeProduct || null,
+          exchangeSettlementMethod: r.exchangeSettlementMethod || '',
+          archivedAt: r.archivedAt || '', archived: r.archived || false,
+          isArchived: r.isArchived || false
+        })),
         settings: {
           workAreas: ref.settings.workAreas || [],
           googleSheetsUrl: ref.settings.googleSheetsUrl || '',
@@ -1745,9 +1879,14 @@ export default function App() {
         localStorage.setItem('last_sync_duration_ms_sys', String(elapsed));
       } catch(e) {}
 
-      // 🚨 لا نُفرّغ deletedRecords_sys — المعرفات تبقى دائماً لمنع ظهور البيانات المحذوفة عند السحب من Google Sheets
+      // 🧹 تنظيف deletedRecords_sys بعد رفع ناجح — المعرفات رُفعت للشيت بنجاح ولا حاجة لاحتفاظها
+      try {
+        localStorage.removeItem('deleted_records_sys');
+      } catch(e) {}
 
       setIsHeaderSyncing(false);
+      setIsSyncing(false);
+      setHasUnconfirmedSave(false);
       return true;
     } catch (err: any) {
       console.error('Error syncing to Google Sheets from header:', err);
@@ -1773,6 +1912,8 @@ export default function App() {
       } catch(e) {}
 
       setIsHeaderSyncing(false);
+      setIsSyncing(false);
+      setHasUnconfirmedSave(false);
       return false;
     }
   }
@@ -1833,6 +1974,9 @@ export default function App() {
       </div>
     );
   }
+
+  // شاشة المزامنة الإجبارية مع السحابة قبل فتح التطبيق — صامتة (بدون حجب الواجهة)
+  // التطبيق يعمل فوراً والمزامنة تتم في الخلفية
 
   if (!currentUser) {
     return (
@@ -2036,14 +2180,6 @@ export default function App() {
         }
       }
 
-      let deletedIds: string[] = [];
-      const isUserAdmin = ref.currentUser?.role === 'owner' || ref.currentUser?.phone === '01228466613' || (ref.currentUser?.customRoleName && (ref.currentUser.customRoleName.includes('نائب المدير') || ref.currentUser.customRoleName.includes('مشرف عام')));
-      if (isUserAdmin) {
-        try {
-          deletedIds = JSON.parse(localStorage.getItem('deleted_records_sys') || '[]');
-        } catch(e) {}
-      }
-
       let finalProducts = ref.products;
       let finalCustomers = ref.customers;
       let finalInvoices = ref.invoices;
@@ -2179,7 +2315,7 @@ export default function App() {
             }
           });
           
-          const mappedProducts = Object.values(productGroups).filter((p: any) => !deletedIds.includes(p.id));
+          const mappedProducts = Object.values(productGroups);
           if (shouldReplace) {
             finalProducts = mappedProducts;
           } else {
@@ -2208,7 +2344,7 @@ export default function App() {
             count: Number(p.count || 0),
             category: p.category || 'عام',
             weights: Array.isArray(p.weights) && p.weights.length > 0 ? p.weights : [{ id: '1', size: 'كرتونة', cartonPriceFromFactory: Number(p.price || 0)*12, unitsPerCarton: 12, factoryPricePerUnit: Number(p.price || 0), profitMarginPercent: 0, retailPricePerUnit: Number(p.price || 0) }]
-          })).filter((p: any) => !deletedIds.includes(p.id));
+          })).filter((p: any) => p.price >= 0);
           if (shouldReplace) {
             finalProducts = mappedProducts;
           } else {
@@ -2244,7 +2380,7 @@ export default function App() {
             totalSpent: Number(c.totalSpent || 0),
             lastPurchaseDate: c.lastPurchaseDate || '',
             type: c.type || c.activity || c.businessActivity || ''
-          })).filter((c: any) => !deletedIds.includes(c.id));
+          }));
           if (shouldReplace) {
             finalCustomers = mappedCustomers;
           } else {
@@ -2315,10 +2451,15 @@ export default function App() {
               notes: inv.notes || '',
               delegateName: inv.delegateName || 'مجهول',
               delegatePhone: inv.delegatePhone || '',
-              isDelivered: (inv.isDelivered === '' || inv.isDelivered === undefined) ? true : (inv.isDelivered === 'true' || inv.isDelivered === true)
+              isDelivered: (inv.isDelivered === '' || inv.isDelivered === undefined) ? true : (inv.isDelivered === 'true' || inv.isDelivered === true),
+              archivedAt: inv.archivedAt || undefined,
+              archived: inv.archived === true || inv.archived === 'true' || inv.archived === 'نعم',
+              isArchived: inv.isArchived === true || inv.isArchived === 'true' || inv.isArchived === 'نعم'
             };
-          }).filter((inv: any) => !deletedIds.includes(inv.id));
+          });
           
+          const sheetDeletedIds: string[] = JSON.parse(localStorage.getItem('deleted_records_sys') || '[]');
+
           if (shouldReplace) {
             finalInvoices = mappedInvoices;
           } else {
@@ -2331,7 +2472,7 @@ export default function App() {
             });
             finalInvoices = merged;
           }
-          setInvoices(finalInvoices);
+          setInvoices(finalInvoices.filter((i: any) => !sheetDeletedIds.includes(i.id)));
         }
 
         if (data.discoveredLeads && Array.isArray(data.discoveredLeads)) {
@@ -2345,7 +2486,7 @@ export default function App() {
             locationLink: l.locationLink || '',
             type: l.type || '',
             dateAdded: l.dateAdded || ''
-          })).filter((l: any) => !deletedIds.includes(l.id));
+          }));
           setGoogleLeads(prev => {
             if (shouldReplace) {
               return mappedLeads;
@@ -2373,7 +2514,7 @@ export default function App() {
             locationLink: l.locationLink || '',
             type: l.type || '',
             dateAdded: l.dateAdded || ''
-          })).filter((l: any) => !deletedIds.includes(l.id));
+          }));
           setPotentialLeads(prev => {
             if (shouldReplace) {
               return mappedPotential;
@@ -2403,7 +2544,10 @@ export default function App() {
                 amount: Number(e.amount) || 0,
                 description: e.description || 'مصروف مسترد',
                 delegateName: e.delegateName || 'مجهول',
-                delegatePhone: e.delegatePhone || ''
+                delegatePhone: e.delegatePhone || '',
+                archivedAt: e.archivedAt || undefined,
+                archived: e.archived === true || e.archived === 'true' || e.archived === 'نعم',
+                isArchived: e.isArchived === true || e.isArchived === 'true' || e.isArchived === 'نعم'
               };
             }
             return {
@@ -2414,9 +2558,12 @@ export default function App() {
               type: e.type === 'revenue' ? 'revenue' : 'expense',
               description: e.description || '',
               delegateName: e.delegateName || 'مجهول',
-              delegatePhone: e.delegatePhone || ''
+              delegatePhone: e.delegatePhone || '',
+              archivedAt: e.archivedAt || undefined,
+              archived: e.archived === true || e.archived === 'true' || e.archived === 'نعم',
+              isArchived: e.isArchived === true || e.isArchived === 'true' || e.isArchived === 'نعم'
             };
-          }).filter((e: any) => e.amount > 0 && !deletedIds.includes(e.id));
+          }).filter((e: any) => e.amount > 0);
           if (shouldReplace) {
             finalExpenses = mappedExpenses;
           } else {
@@ -2444,7 +2591,7 @@ export default function App() {
             delegatePhone: t.delegatePhone || '',
             odometerStart: t.odometerStart ? Number(t.odometerStart) : undefined,
             odometerEnd: t.odometerEnd ? Number(t.odometerEnd) : undefined
-          })).filter((t: any) => !deletedIds.includes(t.id));
+          }));
           if (shouldReplace) {
             finalTrips = mappedTrips;
           } else {
@@ -2476,8 +2623,11 @@ export default function App() {
             delegateName: fl.delegateName || '',
             delegatePhone: fl.delegatePhone || '',
             cartonPrice: fl.cartonPrice !== undefined ? Number(fl.cartonPrice) : undefined,
-            unitPrice: fl.unitPrice !== undefined ? Number(fl.unitPrice) : undefined
-          })).filter((fl: any) => !deletedIds.includes(fl.id));
+            unitPrice: fl.unitPrice !== undefined ? Number(fl.unitPrice) : undefined,
+            archivedAt: fl.archivedAt || undefined,
+            archived: fl.archived === true || fl.archived === 'true' || fl.archived === 'نعم',
+            isArchived: fl.isArchived === true || fl.isArchived === 'true' || fl.isArchived === 'نعم'
+          }));
           if (shouldReplace) {
             finalLoads = mappedLoads;
           } else {
@@ -2514,7 +2664,10 @@ export default function App() {
             carriedOverDebtAtTime: Number(c.carriedOverDebtAtTime || 0),
             waivedAmount: Number(c.waivedAmount || 0),
             delegatePhone: c.delegatePhone || '',
-            delegateName: c.delegateName || ''
+            delegateName: c.delegateName || '',
+            amountPaidInSettlement: Number(c.amountPaidInSettlement || 0),
+            amountCarriedOver: Number(c.amountCarriedOver || 0),
+            settlementReason: c.settlementReason || ''
           }));
           if (shouldReplace) {
             setArchiveCycles(mappedArchive);
@@ -2530,6 +2683,43 @@ export default function App() {
           }
         }
 
+        if (data.returns && Array.isArray(data.returns)) {
+          const mappedReturns = data.returns
+            .filter((r: any) => r && r.id)
+            .map((r: any) => ({
+              id: r.id,
+              date: r.date || '',
+              invoiceId: r.invoiceId || '',
+              invoiceNumber: r.invoiceNumber || '',
+              customerId: r.customerId || '',
+              customerName: r.customerName || '',
+              delegatePhone: r.delegatePhone || '',
+              delegateName: r.delegateName || '',
+              movementType: r.movementType || 'cash_refund',
+              totalReturnValue: Number(r.totalReturnValue || 0),
+              items: r.items || [],
+              notes: r.notes || '',
+              exchangeDifference: Number(r.exchangeDifference || 0),
+              exchangeProduct: r.exchangeProduct || null,
+              exchangeSettlementMethod: r.exchangeSettlementMethod || '',
+              archivedAt: r.archivedAt || '',
+              archived: r.archived === true || r.archived === 'نعم',
+              isArchived: r.isArchived === true || r.isArchived === 'نعم'
+            }));
+          if (shouldReplace) {
+            setReturns(mappedReturns);
+          } else {
+            const retIds = new Set(mappedReturns.map((r: any) => String(r.id)));
+            const merged = [...ref.returns];
+            mappedReturns.forEach((nr: any) => {
+              const idx = merged.findIndex(r => r.id === nr.id);
+              if (idx > -1) merged[idx] = nr;
+              else merged.push(nr);
+            });
+            setReturns(merged.filter(r => retIds.has(String(r.id))));
+          }
+        }
+
         // Write explicitly to IndexedDB to guarantee persistence before reload
         await Promise.all([
           idbSet('products_sys', finalProducts),
@@ -2539,8 +2729,12 @@ export default function App() {
           idbSet('trips_sys', finalTrips),
           idbSet('factory_sys', finalLoads),
           idbSet('settings_sys', updatedSettings),
-          idbSet('factory_archive_cycles_sys', ref.archiveCycles)
+          idbSet('factory_archive_cycles_sys', ref.archiveCycles),
+          idbSet('returns_sys', ref.returns || [])
         ]);
+
+        // المعرفات المحذوفة تفضل في deleted_records_sys لمنع عودة البيانات المحذوفة من الشيت
+        // لا نقوم بأي تنظيف هنا — التنظيف يتم فقط عند التأكد من السحاب بنجاح
 
         if (!isSilent) {
           showToast("✓ تم التحديث بنجاح! جاري تنشيط الواجهة...");
@@ -2590,6 +2784,9 @@ export default function App() {
   const filteredExpenses = isManager ? expenses : expenses.filter(e => e.delegatePhone === effectiveUser?.phone || (e.delegateName && effectiveUser?.name && e.delegateName.includes(effectiveUser.name.replace(/\s*\(.*?\)/g, '').trim())));
   const filteredTrips = isManager ? trips : trips.filter(t => t.delegatePhone === effectiveUser?.phone || (t.delegateName && effectiveUser?.name && t.delegateName.includes(effectiveUser.name.replace(/\s*\(.*?\)/g, '').trim())));
 
+  // مفتاح التحديث — يتغير كلما تغيرت أطوال المصفوفات لفرض إعادة حساب التقارير
+  const reportsRefreshKey = invoices.length + expenses.length * 7 + factoryLoads.length * 31 + trips.length * 101 + returns.length * 1009 + archiveCycles.length * 10007 + customers.length * 3;
+
   const MAPS_LIBRARIES: any[] = ['places', 'geocoding', 'geometry'];
 
   // قراءة المفتاح بالأولوية الصحيحة:
@@ -2609,7 +2806,7 @@ export default function App() {
   return (
     <APIProvider key={activeKey || 'no-key'} apiKey={activeKey} version="beta" libraries={MAPS_LIBRARIES}>
       <div 
-        className="bg-[#F7FAFC] min-h-screen text-[#1A365D] transition-all font-sans antialiased flex flex-col justify-between animate-fade-in" 
+        className="bg-[#F7FAFC] min-h-screen text-[#1A365D] transition-all font-sans antialiased flex flex-col justify-between animate-fade-in touch-pan-y scroll-smooth" 
         id="app-root-wrapper"
         style={{
           ['--header-offset' as any]: simulatedDelegate ? '96px' : '56px'
@@ -2976,6 +3173,7 @@ export default function App() {
 
         {simulatedDelegate && delegateMonitorTab === 'loads' && (
           <FactoryTab
+            isSyncing={isSyncing}
             products={products}
             factoryLoads={filteredFactoryLoads}
             invoices={filteredInvoices}
@@ -2987,6 +3185,7 @@ export default function App() {
             onDeleteAllProducts={handleDeleteAllProducts}
             onAddLoad={handleAddLoad}
             onDeleteLoad={handleDeleteLoad}
+            onEditLoad={handleEditLoad}
             onAddTrip={handleAddTrip}
             onEditTrip={handleEditTrip}
             onToggleTripCollected={handleToggleCollected}
@@ -3000,6 +3199,7 @@ export default function App() {
             onEditExpense={handleEditExpense}
             currentUser={effectiveUser}
             onArchiveFactoryCycle={handleArchiveFactoryCycle}
+            returns={returns}
           />
         )}
 
@@ -3017,6 +3217,10 @@ export default function App() {
             currentUser={effectiveUser}
             usersList={usersList}
             initialSubTab="archive"
+            returns={returns}
+            onAddReturn={handleAddReturn}
+            customerCredits={customerCredits}
+            onUseCustomerCredit={handleUseCustomerCredit}
           />
         )}
 
@@ -3050,6 +3254,7 @@ export default function App() {
 
         {simulatedDelegate && delegateMonitorTab === 'trips' && (
           <FactoryTab
+            isSyncing={isSyncing}
             products={products}
             factoryLoads={filteredFactoryLoads}
             invoices={filteredInvoices}
@@ -3061,6 +3266,7 @@ export default function App() {
             onDeleteAllProducts={handleDeleteAllProducts}
             onAddLoad={handleAddLoad}
             onDeleteLoad={handleDeleteLoad}
+            onEditLoad={handleEditLoad}
             onAddTrip={handleAddTrip}
             onEditTrip={handleEditTrip}
             onToggleTripCollected={handleToggleCollected}
@@ -3074,6 +3280,7 @@ export default function App() {
             onEditExpense={handleEditExpense}
             currentUser={effectiveUser}
             onArchiveFactoryCycle={handleArchiveFactoryCycle}
+            returns={returns}
           />
         )}
 
@@ -3111,6 +3318,7 @@ export default function App() {
 
         {!simulatedDelegate && activeTab === 'factory' && effectiveUser && effectiveUser.permittedTabs.includes('factory') && (
           <FactoryTab
+            isSyncing={isSyncing}
             products={products}
             factoryLoads={filteredFactoryLoads}
             invoices={filteredInvoices}
@@ -3122,6 +3330,7 @@ export default function App() {
             onDeleteAllProducts={handleDeleteAllProducts}
             onAddLoad={handleAddLoad}
             onDeleteLoad={handleDeleteLoad}
+            onEditLoad={handleEditLoad}
             onAddTrip={handleAddTrip}
             onEditTrip={handleEditTrip}
             onToggleTripCollected={handleToggleCollected}
@@ -3142,6 +3351,7 @@ export default function App() {
             softDeleted={softDeleted}
             onRestoreItem={handleRestoreItem}
             onPermanentDelete={handlePermanentDelete}
+            returns={returns}
           />
         )}
 
@@ -3177,6 +3387,10 @@ export default function App() {
             currentUser={effectiveUser}
             usersList={usersList}
             lastArchiveTimestamp={lastArchiveTimestamp}
+            returns={returns}
+            onAddReturn={handleAddReturn}
+            customerCredits={customerCredits}
+            onUseCustomerCredit={handleUseCustomerCredit}
           />
         )}
 
@@ -3252,6 +3466,8 @@ export default function App() {
             currentUser={effectiveUser}
             permittedSubTabs={effectiveUser.permittedSubTabs}
             archiveCycles={archiveCycles}
+            returns={returns}
+            refreshKey={reportsRefreshKey}
           />
         )}
 
